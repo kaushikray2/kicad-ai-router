@@ -1,0 +1,12 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v2",
+  "name": "SiliconBrane AI Router (LAN)",
+  "maintainer": {
+    "name": "SiliconBrane Inc",
+    "contact": {
+      "email": "ray@siliconbrane.com"
+    }
+  },
+  "url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo",
+  "kicad_version": "10.0"
+}

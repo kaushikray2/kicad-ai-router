@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Router Backend</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:2em auto;max-width:760px;padding:0 1em;color:#1c2733}
+h1{font-size:1.3em} h2{font-size:1.05em;margin-top:1.6em;border-bottom:1px solid #ccd;padding-bottom:.2em}
+label{display:block;margin:.5em 0 .15em;font-size:.9em;color:#445}
+input[type=text],input[type=password],input[type=number],select{width:100%;padding:.45em;border:1px solid #aab;border-radius:6px;box-sizing:border-box}
+button{background:#0b6bcb;color:#fff;border:0;padding:.5em 1.1em;border-radius:6px;cursor:pointer;margin-top:.7em}
+button.secondary{background:#5a6b7d}
+.msg{font-size:.9em;margin-top:.5em;min-height:1.2em}
+.ok{color:#137333}.err{color:#b3261e}
+table{border-collapse:collapse;width:100%;font-size:.88em}
+td,th{border-bottom:1px solid #dde;padding:.35em .5em;text-align:left}
+code{background:#eef;padding:.1em .35em;border-radius:4px}
+.row{display:flex;gap:1em}.row>div{flex:1}
+</style></head><body>
+<h1>AI Router Backend</h1>
+<div id="login" style="display:none">
+  <p>This backend needs its access token (stored in the backend config file).</p>
+  <label>Access token</label><input type="password" id="tok">
+  <button onclick="doLogin()">Sign in</button><div class="msg" id="loginmsg"></div>
+</div>
+<div id="app" style="display:none">
+  <h2>Status</h2><div id="health" class="msg">…</div>
+  <h2>LLM</h2>
+  <label>Endpoint</label><input type="text" id="llm_endpoint">
+  <label>Model</label><input type="text" id="llm_model">
+  <label>API key <span id="keystate"></span></label><input type="password" id="llm_key" placeholder="leave empty to keep the saved key">
+  <label style="display:inline"><input type="checkbox" id="llm_clear" style="width:auto"> Clear the saved key</label>
+  <h2>Routing defaults</h2>
+  <div class="row"><div><label>Mode</label><select id="rt_mode"><option value="auto">AUTO</option><option value="llm">LLM</option></select></div>
+  <div><label>Max passes</label><input type="number" id="rt_passes" min="1" max="8"></div>
+  <div><label>Work budget</label><input type="number" id="rt_work" step="1000000"></div></div>
+  <label>Never route tracks on layers (comma list)</label><input type="text" id="rt_ban">
+  <label style="display:inline"><input type="checkbox" id="rt_strip" style="width:auto"> Strip existing routing first</label><br>
+  <button onclick="saveConfig()">Save settings</button><div class="msg" id="cfgmsg"></div>
+  <h2>TraceMaker</h2>
+  <div id="tm_list" class="msg">…</div>
+  <label>Release archive URL (download source for updates)</label><input type="text" id="tm_url">
+  <button onclick="tmUpdate()">Download / update from URL</button>
+  <button class="secondary" onclick="tmLoad()">Refresh list</button><div class="msg" id="tmmsg"></div>
+  <h2>Self-test (corpus baselines)</h2>
+  <div id="st_list" class="msg">…</div>
+  <button onclick="stRun()">Run self-test</button>
+  <button class="secondary" onclick="stRecord()">Record current results as baselines</button><div class="msg" id="stmsg"></div>
+  <h2>Jobs</h2><div id="jobs" class="msg">…</div>
+  <button class="secondary" onclick="jobsLoad()">Refresh jobs</button>
+</div>
+<script>
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({credentials:'same-origin'}, opts||{}));
+  if(r.status===401){ document.getElementById('login').style.display='block'; document.getElementById('app').style.display='none'; throw new Error('unauthorized'); }
+  return r;
+}
+async function doLogin(){
+  const t = document.getElementById('tok').value;
+  const r = await fetch('/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t})});
+  if(r.ok){ location.reload(); } else { document.getElementById('loginmsg').textContent='Bad token.'; document.getElementById('loginmsg').className='msg err'; }
+}
+function msg(id, text, ok){ const e=document.getElementById(id); e.textContent=text; e.className='msg '+(ok?'ok':'err'); }
+async function loadAll(){
+  try{
+    const h = await (await api('/health')).json();
+    document.getElementById('health').innerHTML = 'Backend <code>'+h.backend_version+'</code> · KiCad <code>'+h.kicad_cli+'</code> · TraceMaker selected <code>'+(h.tracemaker_selected||'none')+'</code> · queue '+h.queue_depth+' · running '+h.jobs_running;
+    const c = await (await api('/api/config')).json();
+    document.getElementById('app').style.display='block'; document.getElementById('login').style.display='none';
+    document.getElementById('llm_endpoint').value=c.llm.endpoint||'';
+    document.getElementById('llm_model').value=c.llm.model||'';
+    document.getElementById('keystate').textContent = c.llm.api_key_set ? '(a key is saved)' : '(no key saved)';
+    document.getElementById('rt_mode').value=c.routing.mode||'auto';
+    document.getElementById('rt_passes').value=c.routing.max_passes||4;
+    document.getElementById('rt_work').value=c.routing.work||20000000;
+    document.getElementById('rt_ban').value=c.routing.no_tracks_on||'';
+    document.getElementById('rt_strip').checked=!!c.routing.strip_existing;
+    tmLoad(); stLoad(); jobsLoad();
+  }catch(e){}
+}
+async function saveConfig(){
+  const body={llm:{endpoint:document.getElementById('llm_endpoint').value, model:document.getElementById('llm_model').value,
+    api_key:document.getElementById('llm_key').value, clear_api_key:document.getElementById('llm_clear').checked},
+    routing:{mode:document.getElementById('rt_mode').value, max_passes:parseInt(document.getElementById('rt_passes').value),
+    work:parseInt(document.getElementById('rt_work').value), no_tracks_on:document.getElementById('rt_ban').value,
+    strip_existing:document.getElementById('rt_strip').checked}};
+  const r = await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){ msg('cfgmsg','Saved.',true); document.getElementById('llm_key').value=''; document.getElementById('llm_clear').checked=false; loadAll(); }
+  else msg('cfgmsg','Save failed.',false);
+}
+async function tmLoad(){
+  const t = await (await api('/api/tracemaker')).json();
+  document.getElementById('tm_url').value = t.url||'';
+  if(!t.installed.length){ document.getElementById('tm_list').textContent='No TraceMaker versions installed yet.'; return; }
+  let html='<table><tr><th></th><th>Version</th><th>sha256 (TOFU)</th></tr>';
+  for(const v of t.installed){ html+='<tr><td><input type="radio" name="tmv" value="'+v.version+'" '+(v.selected?'checked':'')+' onchange="tmSelect(this.value)"></td><td><code>'+v.version+'</code>'+(v.selected?' (active)':'')+'</td><td><code>'+(v.sha256?v.sha256.slice(0,16)+'…':'—')+'</code></td></tr>'; }
+  document.getElementById('tm_list').innerHTML=html+'</table>';
+}
+async function tmSelect(v){
+  const r = await api('/api/tracemaker/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:v})});
+  msg('tmmsg', r.ok?('Active version: '+v):'Select failed', r.ok); tmLoad(); loadHealthOnly();
+}
+async function tmUpdate(){
+  msg('tmmsg','Downloading and smoke-testing… (can take a minute)',true);
+  const r = await api('/api/tracemaker/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:document.getElementById('tm_url').value})});
+  const j = await r.json().catch(()=>({}));
+  if(r.ok){ msg('tmmsg','Installed TraceMaker '+j.version+' · sha256 '+j.sha256.slice(0,16)+'…',true); tmLoad(); }
+  else msg('tmmsg','Update failed: '+(j.error||r.status),false);
+}
+async function loadHealthOnly(){ try{ const h=await (await api('/health')).json(); document.getElementById('health').innerHTML='Backend <code>'+h.backend_version+'</code> · KiCad <code>'+h.kicad_cli+'</code> · TraceMaker selected <code>'+(h.tracemaker_selected||'none')+'</code> · queue '+h.queue_depth+' · running '+h.jobs_running; }catch(e){} }
+async function stLoad(){
+  const rows = await (await api('/api/selftest')).json();
+  if(!rows.length){ document.getElementById('st_list').textContent='No self-test boards baked into this image.'; return; }
+  let html='<table><tr><th>Board</th><th>Baseline</th><th>Last run</th><th>Verdict</th></tr>';
+  for(const r of rows){ const f=x=>x?x.unconnected_total+' unc / '+x.split_nets+' split':'—'; html+='<tr><td>'+r.board+'</td><td>'+f(r.baseline)+'</td><td>'+f(r.last)+'</td><td><b>'+r.verdict+'</b></td></tr>'; }
+  document.getElementById('st_list').innerHTML=html+'</table>';
+}
+async function stRun(){ const r=await api('/api/selftest/run',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); msg('stmsg', r.ok?'Self-test queued — refresh in a bit.':'Failed to queue', r.ok); }
+async function stRecord(){ const r=await api('/api/selftest/record',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); msg('stmsg', r.ok?'Baselines recorded from the latest results.':'Record failed', r.ok); stLoad(); }
+async function jobsLoad(){
+  const rows = await (await api('/api/runs')).json();
+  if(!rows.length){ document.getElementById('jobs').textContent='No jobs yet.'; return; }
+  let html='<table><tr><th>Board</th><th>Kind</th><th>Status</th><th>Gate</th><th></th></tr>';
+  for(const r of rows.slice(0,12)){ const g=r.gate?r.gate.unconnected_total+' unc':'—';
+    html+='<tr><td>'+r.board_name+'</td><td>'+r.kind+'</td><td>'+r.status+'</td><td>'+g+'</td><td>'+(r.status==='done'?'<a href="/api/runs/'+r.id+'/result">result</a> ':'')+((r.status==='queued'||r.status==='running')?'<a href="#" onclick="jobCancel(\''+r.id+'\');return false">cancel</a>':'')+'</td></tr>'; }
+  document.getElementById('jobs').innerHTML=html+'</table>';
+}
+async function jobCancel(id){ await api('/api/runs/'+id+'/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); jobsLoad(); }
+loadAll();
+</script></body></html>

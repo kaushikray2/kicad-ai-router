@@ -1,0 +1,37 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v2",
+  "packages": [
+    {
+      "$schema": "https://go.kicad.org/pcm/schemas/v2",
+      "name": "AI Router",
+      "description": "LLM-orchestrated PCB routing for KiCad: deterministic TraceMaker passes, DRC gating, finishing and stitching. Local or Docker backend.",
+      "identifier": "ca.siliconbrane.ai-router",
+      "type": "plugin",
+      "author": {
+        "name": "SiliconBrane Inc",
+        "contact": {
+          "email": "ray@siliconbrane.com"
+        }
+      },
+      "maintainer": {
+        "name": "SiliconBrane Inc",
+        "contact": {
+          "email": "ray@siliconbrane.com"
+        }
+      },
+      "license": "MIT",
+      "url": "https://www.siliconbrane.com",
+      "versions": [
+        {
+          "version": "1.7.0",
+          "status": "stable",
+          "kicad_version": "10.0",
+          "download_sha256": "42b235de038636c216a3ada25911642fb2a63ec1266d595f1e685529cb69e10d",
+          "download_size": 50264,
+          "download_url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/ai-router-1.7.0.zip",
+          "install_size": 172966
+        }
+      ]
+    }
+  ]
+}

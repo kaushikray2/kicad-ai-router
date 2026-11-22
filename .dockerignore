@@ -1,0 +1,10 @@
+data/
+bench/
+bench-*
+test1/
+test2/
+test3/
+expA/
+*.log
+__pycache__/
+*.jsonl

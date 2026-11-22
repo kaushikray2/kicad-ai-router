@@ -1,0 +1,1358 @@
+{
+ "qrp73_Radioberry-2.x__0": {
+  "input_unconnected": 0,
+  "input_copper": 24,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "kingyoPiyo_RasPico_SHIBAKI_Board__0": {
+  "input_unconnected": 0,
+  "input_copper": 35,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "RWeick_G0-022M6-Pelican-Monster-Brain-for-GBC__0": {
+  "input_unconnected": 0,
+  "input_copper": 44,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "DarwinInnovation_bedberry__0": {
+  "input_unconnected": 0,
+  "input_copper": 24,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "sghodgaonkar-botcrew_moteus__2": {
+  "input_unconnected": 0,
+  "input_copper": 1143,
+  "input_shorts": 6,
+  "input_tracks_crossing": 0
+ },
+ "mechistanbul_piantor__0": {
+  "input_unconnected": 0,
+  "input_copper": 6,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ConnectBox_Circuit-Design__1": {
+  "input_unconnected": 0,
+  "input_copper": 732,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "jamesturton_bose-qc35-usb-c__0": {
+  "input_unconnected": 0,
+  "input_copper": 158,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "rabs664_Amstrad-CPC-CTC-DART__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "LinuxJedi_RAMesses__0": {
+  "input_unconnected": 0,
+  "input_copper": 409,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "vives-projectwerk-2021_Microcontroller_pcb__2": {
+  "input_unconnected": 0,
+  "input_copper": 7,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "espena_ultimate-invitation-card__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "UofTPhyEssSW_Student-Workshop-Course-L1__1": {
+  "input_unconnected": 6,
+  "input_copper": 684,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Manawyrm_IrDA_RS232__0": {
+  "input_unconnected": 0,
+  "input_copper": 333,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "xtreme8000_picoAVE__1": {
+  "input_unconnected": 0,
+  "input_copper": 338,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "dlawle_kicad-designs__0": {
+  "input_unconnected": 0,
+  "input_copper": 3,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Himanshukohale22_Controller-Drone__0": {
+  "input_unconnected": 1,
+  "input_copper": 11,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "MatthijsRog_STMSOT-5V-Shifter__0": {
+  "input_unconnected": 0,
+  "input_copper": 119,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "mymakercorner_Leyden_Jar__0": {
+  "input_unconnected": 0,
+  "input_copper": 654,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ematkkona_zdbrg__0": {
+  "input_unconnected": 0,
+  "input_copper": 33,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "mathias_swept-crkbd__0": {
+  "input_unconnected": 0,
+  "input_copper": 30,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "jmX86_TempSync-hardware__0": {
+  "input_unconnected": 0,
+  "input_copper": 52,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "m1geo_Pi5_PCIe__0": {
+  "input_unconnected": 0,
+  "input_copper": 509,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Aecert-Robotics_Arduino-RC-Transmitter__0": {
+  "input_unconnected": 4,
+  "input_copper": 1,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "sghodgaonkar-botcrew_moteus__4": {
+  "input_unconnected": 0,
+  "input_copper": 1144,
+  "input_shorts": 7,
+  "input_tracks_crossing": 0
+ },
+ "blueskull_PicoGate__0": {
+  "input_unconnected": 6,
+  "input_copper": 1143,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "daglem_reDIP-RIOT__0": {
+  "input_unconnected": 0,
+  "input_copper": 744,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "imihajlow_ethernet-to-spi__0": {
+  "input_unconnected": 1,
+  "input_copper": 316,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Kelvin-Ziqi-Zhao_drone-current-sensor-board__0": {
+  "input_unconnected": 1,
+  "input_copper": 21,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "znuh_co2mon__0": {
+  "input_unconnected": 0,
+  "input_copper": 13,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "2twToddWilson_kicad__4": {
+  "input_unconnected": null,
+  "input_copper": null,
+  "input_shorts": null,
+  "input_tracks_crossing": null
+ },
+ "wdouglass_pocket-reform__9": {
+  "input_unconnected": 1,
+  "input_copper": 302,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Dowan35_Projet-elec-wifi-marauder-esp32-wroom-32-custom__0": {
+  "input_unconnected": 4,
+  "input_copper": 425,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "rvbcrs_DMX-ArtNet-Gateway__0": {
+  "input_unconnected": 0,
+  "input_copper": 88,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "irudoy_cansult__0": {
+  "input_unconnected": 0,
+  "input_copper": 118,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "JQIamo_Eurocard_DDS__0": {
+  "input_unconnected": 0,
+  "input_copper": 99,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "tjclement_bolt__0": {
+  "input_unconnected": 0,
+  "input_copper": 2,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "olvint_CM4-NAS-MiniPCIE__0": {
+  "input_unconnected": 0,
+  "input_copper": 420,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Beaupre-Circuit-Design_23xx-Adapter__0": {
+  "input_unconnected": 1,
+  "input_copper": 242,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "myriadrf_lc-clock__0": {
+  "input_unconnected": 0,
+  "input_copper": 25,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "bublinak_eiot-hw__0": {
+  "input_unconnected": 3,
+  "input_copper": 16,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "greatscottgadgets_amalthea-hardware__0": {
+  "input_unconnected": 1,
+  "input_copper": 564,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "rhinocerose_eurorack-musicthing-RawWaves__0": {
+  "input_unconnected": 1,
+  "input_copper": 8,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "harmalkar_satellite-prototype__2": {
+  "input_unconnected": 0,
+  "input_copper": 296,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "haudiiii_classroom-exo__0": {
+  "input_unconnected": 0,
+  "input_copper": 44,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "SlimeVR_SlimeVR-Tracker-nRF-PCB__0": {
+  "input_unconnected": 1,
+  "input_copper": 202,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "TadAtThayer_MazeController__1": {
+  "input_unconnected": 0,
+  "input_copper": 446,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "zainahm3d_saleae-current-sensor__0": {
+  "input_unconnected": 0,
+  "input_copper": 294,
+  "input_shorts": 5,
+  "input_tracks_crossing": 0
+ },
+ "gb-archive_gb-hardware__10": {
+  "input_unconnected": 0,
+  "input_copper": 7,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "myriadrf_lc-clock__1": {
+  "input_unconnected": 0,
+  "input_copper": 9,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "M-Scholli_BugWiper2_0__0": {
+  "input_unconnected": 0,
+  "input_copper": 57,
+  "input_shorts": 5,
+  "input_tracks_crossing": 0
+ },
+ "homerow-ca_Contra__0": {
+  "input_unconnected": 0,
+  "input_copper": 155,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "vives-projectwerk-2021_Microcontroller_pcb__0": {
+  "input_unconnected": 8,
+  "input_copper": 8,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "SvenHaedrich_kicad_dali_usb_lpc__0": {
+  "input_unconnected": 0,
+  "input_copper": 9,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "sciguy16_dcc-controller-rs__0": {
+  "input_unconnected": 0,
+  "input_copper": 6,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "issaimaru_CANFD_HUB__0": {
+  "input_unconnected": 0,
+  "input_copper": 116,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "jaromir-sukuba_rsyn__1": {
+  "input_unconnected": 0,
+  "input_copper": 10,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Tympan_Tympan_Rev_E_Hardware__0": {
+  "input_unconnected": 0,
+  "input_copper": 326,
+  "input_shorts": 96,
+  "input_tracks_crossing": 0
+ },
+ "kusamakura_Vision-Alt__0": {
+  "input_unconnected": 0,
+  "input_copper": 131,
+  "input_shorts": 10,
+  "input_tracks_crossing": 0
+ },
+ "team-mountaineers-urc-2023_electronics__2": {
+  "input_unconnected": 0,
+  "input_copper": 1,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "brandonbraun653_OrbitESC__0": {
+  "input_unconnected": 0,
+  "input_copper": 617,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ANYB0DYTH3R3_OnBoard__1": {
+  "input_unconnected": 4,
+  "input_copper": 129,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "solhuebner_LEDBrickHome__0": {
+  "input_unconnected": 0,
+  "input_copper": 9,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "gundy_aa_pihat__1": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "HSBallina_roland-mram-card__1": {
+  "input_unconnected": 5,
+  "input_copper": 8,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "LulaUAV_Laika-Flight-Computer__1": {
+  "input_unconnected": 4,
+  "input_copper": 54,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "jaromir-sukuba_rsyn__0": {
+  "input_unconnected": 0,
+  "input_copper": 8,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "sfast_ovc__6": {
+  "input_unconnected": 0,
+  "input_copper": 88,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "nfproc_SawareruSys__1": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "JustAGlitchFL_OnBoard__9": {
+  "input_unconnected": 2,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "AvalonSemiconductors_AS2650-bring-up__2": {
+  "input_unconnected": null,
+  "input_copper": null,
+  "input_shorts": null,
+  "input_tracks_crossing": null
+ },
+ "LulaUAV_Laika-Flight-Computer__0": {
+  "input_unconnected": 0,
+  "input_copper": 200,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "paradise-fi_RoFI__1": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ZachWWalden_FundamentalsRobot__0": {
+  "input_unconnected": 0,
+  "input_copper": 520,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "charvotj_AquaControl__0": {
+  "input_unconnected": 1,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "2twToddWilson_kicad__3": {
+  "input_unconnected": 499,
+  "input_copper": 124,
+  "input_shorts": 19,
+  "input_tracks_crossing": 0
+ },
+ "peterkrull_quad__1": {
+  "input_unconnected": 9,
+  "input_copper": 29,
+  "input_shorts": 2,
+  "input_tracks_crossing": 0
+ },
+ "MuddSub_crush-power-board__0": {
+  "input_unconnected": 1,
+  "input_copper": 57,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "shimo8810_spectrum-analyzer__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ThePurpleOne_volumer__1": {
+  "input_unconnected": 0,
+  "input_copper": 43,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ElectronicCats_PicoWAN__0": {
+  "input_unconnected": 0,
+  "input_copper": 389,
+  "input_shorts": 0,
+  "input_tracks_crossing": 1
+ },
+ "Skrooter_SmallLedPlatform__0": {
+  "input_unconnected": 0,
+  "input_copper": 374,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "sctanf_slimevr-anftracker__0": {
+  "input_unconnected": 3,
+  "input_copper": 1001,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "McflyWZX_BujiUAV2__0": {
+  "input_unconnected": 499,
+  "input_copper": 1495,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Jana-Marie_MiniBee__0": {
+  "input_unconnected": 1,
+  "input_copper": 386,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "IEEE-Robotics-Club_MSU-NASA-Minds-2023__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "TechCraft0_rp2040-motor-controller__2": {
+  "input_unconnected": 0,
+  "input_copper": 56,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "bablokb_pcb-pico-pi-base__0": {
+  "input_unconnected": 1,
+  "input_copper": 8,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "manpreet-singh_Atlas__1": {
+  "input_unconnected": 44,
+  "input_copper": 26,
+  "input_shorts": 5,
+  "input_tracks_crossing": 1
+ },
+ "openinput-fw_big-sammy__0": {
+  "input_unconnected": 0,
+  "input_copper": 235,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "mechistanbul_mikoto__1": {
+  "input_unconnected": 0,
+  "input_copper": 450,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "dbeinder_han-mosquito__1": {
+  "input_unconnected": 0,
+  "input_copper": 508,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "EricYufengWu_ME-0193__1": {
+  "input_unconnected": 0,
+  "input_copper": 932,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "sparkfun_SparkFun_Stepper_Motor_Breakout_TC78H670FTG__0": {
+  "input_unconnected": 1,
+  "input_copper": 21,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "mathias_swept-crkbd__1": {
+  "input_unconnected": 0,
+  "input_copper": 30,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "katbinaris_nanofoc_devkit__2": {
+  "input_unconnected": 3,
+  "input_copper": 329,
+  "input_shorts": 5,
+  "input_tracks_crossing": 0
+ },
+ "cmumford_cap-touch-starter__0": {
+  "input_unconnected": 6,
+  "input_copper": 110,
+  "input_shorts": 7,
+  "input_tracks_crossing": 0
+ },
+ "RobotPatient_Manikin_Color_Hub__4": {
+  "input_unconnected": 0,
+  "input_copper": 254,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "cardonabits_haxo-hw__0": {
+  "input_unconnected": 0,
+  "input_copper": 9,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Aecert-Robotics_Hexapod__0": {
+  "input_unconnected": 2,
+  "input_copper": 2,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "JordanAceto_fv1_breakout_board__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "microchip-pic-avr-examples_pic16f56q71-audio-light-show-mplab-mcc__0": {
+  "input_unconnected": 0,
+  "input_copper": 231,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Breadstick-Innovations_Raspberry-Breadstick__0": {
+  "input_unconnected": 3,
+  "input_copper": 516,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "TurboMarian_hellen-one__2": {
+  "input_unconnected": 4,
+  "input_copper": 157,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Jegeva_BruCON_2021__0": {
+  "input_unconnected": 3,
+  "input_copper": 542,
+  "input_shorts": 6,
+  "input_tracks_crossing": 0
+ },
+ "n8tlarsen_oxikey__0": {
+  "input_unconnected": 0,
+  "input_copper": 191,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "chl33_Garage133__0": {
+  "input_unconnected": 0,
+  "input_copper": 12,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "cristi-zz_ha-pcb__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "SpaceTeam_EDU_RASPI_HATS__0": {
+  "input_unconnected": 0,
+  "input_copper": 106,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ezod_rc2014-cv-megacart-ram__0": {
+  "input_unconnected": 0,
+  "input_copper": 15,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "wyager_vumeter__0": {
+  "input_unconnected": 0,
+  "input_copper": 37,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "e3w2q_Kasumigasane-keypad__0": {
+  "input_unconnected": 0,
+  "input_copper": 354,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "leoheck_developower-v2.0__0": {
+  "input_unconnected": 0,
+  "input_copper": 10,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "rmingon_drone-vision__0": {
+  "input_unconnected": 1,
+  "input_copper": 208,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Seborah_FF1__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "openwch_ch32x035__0": {
+  "input_unconnected": 1,
+  "input_copper": 37,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "mengxyz_esp32_S2_breadboard__0": {
+  "input_unconnected": 0,
+  "input_copper": 116,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "dominicmason555_lightweatherv3__0": {
+  "input_unconnected": 0,
+  "input_copper": 218,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "jedp_STM32F030-breakout__0": {
+  "input_unconnected": 0,
+  "input_copper": 8,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "MaxKiv_kibo__0": {
+  "input_unconnected": 0,
+  "input_copper": 3,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "cillian64_limelight__0": {
+  "input_unconnected": 1,
+  "input_copper": 16,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "sfast_ovc__7": {
+  "input_unconnected": 0,
+  "input_copper": 170,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "dpapavas_orb-trackball__0": {
+  "input_unconnected": 0,
+  "input_copper": 45,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "reljamar_singlePhaseInverter__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "uinika_UINIO-MCU-ESP32S3__0": {
+  "input_unconnected": 1,
+  "input_copper": 562,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "256byteram_6530-Replacement__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "kruglovvs_strange_game__1": {
+  "input_unconnected": 5,
+  "input_copper": 57,
+  "input_shorts": 2,
+  "input_tracks_crossing": 0
+ },
+ "SBC-Collaboration_SBC-RTD-Boards__0": {
+  "input_unconnected": 0,
+  "input_copper": 14,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "gmh5225_gbinterceptor__0": {
+  "input_unconnected": 0,
+  "input_copper": 712,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "screwbreaker_ScartPCB__0": {
+  "input_unconnected": 0,
+  "input_copper": 1,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ANYB0DYTH3R3_OnBoard__4": {
+  "input_unconnected": 0,
+  "input_copper": 3,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "open-ephys_onix-headstage-neuropix1e__0": {
+  "input_unconnected": 9,
+  "input_copper": 1567,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "msx-solis_msx-fdc-cdx2-clone__0": {
+  "input_unconnected": 0,
+  "input_copper": 149,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "rland93_ollyfc__0": {
+  "input_unconnected": 3,
+  "input_copper": 21,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Owen-Patrick_SoftSynthetics-DSP__0": {
+  "input_unconnected": 13,
+  "input_copper": 96,
+  "input_shorts": 29,
+  "input_tracks_crossing": 0
+ },
+ "the-flame-trench_Singularity__3": {
+  "input_unconnected": 0,
+  "input_copper": 942,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "m1geo_Pi5_PCIe__1": {
+  "input_unconnected": 0,
+  "input_copper": 457,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "owntech-foundation_SPIN__0": {
+  "input_unconnected": 0,
+  "input_copper": 838,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "alexose_synthwave__0": {
+  "input_unconnected": 0,
+  "input_copper": 5,
+  "input_shorts": 2,
+  "input_tracks_crossing": 0
+ },
+ "olvint_CM4-NAS-MiniPCIE__1": {
+  "input_unconnected": 0,
+  "input_copper": 420,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "pratapkaronde_ESP32Board__0": {
+  "input_unconnected": 0,
+  "input_copper": 466,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ieb_N2KEngine__0": {
+  "input_unconnected": 0,
+  "input_copper": 3,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "TurboMarian_hellen-one__0": {
+  "input_unconnected": 5,
+  "input_copper": 303,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "GLGPrograms_tinyDiskII__0": {
+  "input_unconnected": 0,
+  "input_copper": 241,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "capitaneanu_bitaxe__0": {
+  "input_unconnected": 0,
+  "input_copper": 237,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "GeneralSyb_Sagittarius-Headtracker__0": {
+  "input_unconnected": 9,
+  "input_copper": 73,
+  "input_shorts": 3,
+  "input_tracks_crossing": 0
+ },
+ "ieb_N2KEngine__1": {
+  "input_unconnected": 1,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "sunnyhaibin_raccoon__0": {
+  "input_unconnected": 0,
+  "input_copper": 3,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "suzan-works_XIAO_CH32X035__1": {
+  "input_unconnected": 0,
+  "input_copper": 36,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "mike42_65816-computer__0": {
+  "input_unconnected": 0,
+  "input_copper": 14,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "upsidedownlabs_DIY-Muscle-BioAmp-Shield__0": {
+  "input_unconnected": 0,
+  "input_copper": 4,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "pierre-girbon_BigFoot__1": {
+  "input_unconnected": 0,
+  "input_copper": 6,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "SK21_TemperatureMonitor__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "eric-wood_kicad_lib__0": {
+  "input_unconnected": 0,
+  "input_copper": 65,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Salty-Fanta_PandaPad_OLD_ARDUINO__0": {
+  "input_unconnected": 0,
+  "input_copper": 64,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "davedarko_LEDodecahedron__0": {
+  "input_unconnected": 1,
+  "input_copper": 879,
+  "input_shorts": 7,
+  "input_tracks_crossing": 0
+ },
+ "linuxplayground_6502-retro__0": {
+  "input_unconnected": 0,
+  "input_copper": 270,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "uid-serendipity_smartknob__0": {
+  "input_unconnected": 0,
+  "input_copper": 351,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ryanshappell_12AU7-Amplifier__0": {
+  "input_unconnected": 0,
+  "input_copper": 24,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Zorahmella_Cantaloupe__0": {
+  "input_unconnected": 0,
+  "input_copper": 352,
+  "input_shorts": 0,
+  "input_tracks_crossing": 1
+ },
+ "mickabrig7_raccoon__0": {
+  "input_unconnected": 0,
+  "input_copper": 2,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Omarfayed412_STM32-RF__0": {
+  "input_unconnected": 0,
+  "input_copper": 4,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "MS71_RTK1010Board__0": {
+  "input_unconnected": 0,
+  "input_copper": 16,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Freimor_HRDW-Automaton_v3__7": {
+  "input_unconnected": 20,
+  "input_copper": 131,
+  "input_shorts": 12,
+  "input_tracks_crossing": 0
+ },
+ "theBrutzler_IndiaNavi_PCB__0": {
+  "input_unconnected": 0,
+  "input_copper": 168,
+  "input_shorts": 4,
+  "input_tracks_crossing": 0
+ },
+ "Jegeva_BruCON_2021__2": {
+  "input_unconnected": null,
+  "input_copper": null,
+  "input_shorts": null,
+  "input_tracks_crossing": null
+ },
+ "Kennystflr_Lightning-speaker__2": {
+  "input_unconnected": 38,
+  "input_copper": 107,
+  "input_shorts": 23,
+  "input_tracks_crossing": 0
+ },
+ "ConnectBox_Circuit-Design__2": {
+  "input_unconnected": 0,
+  "input_copper": 738,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "seanboltjes_ECE_477__0": {
+  "input_unconnected": 1,
+  "input_copper": 87,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "IsaacHo072_STM32-USB-Microphone-Interface__1": {
+  "input_unconnected": null,
+  "input_copper": null,
+  "input_shorts": null,
+  "input_tracks_crossing": null
+ },
+ "lufixSch_sound-laser__0": {
+  "input_unconnected": 0,
+  "input_copper": 1,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "juniper-garden_twig_temp_humidity_sensor__1": {
+  "input_unconnected": 0,
+  "input_copper": 74,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "kevinjuszczyk_ice2040__0": {
+  "input_unconnected": 0,
+  "input_copper": 857,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "wdouglass_pocket-reform__11": {
+  "input_unconnected": 0,
+  "input_copper": 14,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "brhestir_vna__9": {
+  "input_unconnected": 0,
+  "input_copper": 706,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Freimor_HRDW-Automaton_v3__3": {
+  "input_unconnected": 12,
+  "input_copper": 96,
+  "input_shorts": 8,
+  "input_tracks_crossing": 0
+ },
+ "Erhannis_KilnController__0": {
+  "input_unconnected": 5,
+  "input_copper": 8,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "microchip-pic-avr-examples_pic16f56q71-audio-light-show-mplab-mcc__2": {
+  "input_unconnected": 0,
+  "input_copper": 130,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "evyd13_plain60-flex-edition__0": {
+  "input_unconnected": 2,
+  "input_copper": 141,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "gabrielpgagne_imu-geolocator-hw__0": {
+  "input_unconnected": 0,
+  "input_copper": 32,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "linuxplayground_6502-retro__1": {
+  "input_unconnected": 0,
+  "input_copper": 100,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "jkominek_piano-conversion__2": {
+  "input_unconnected": 0,
+  "input_copper": 1,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "3DES_WatchdogBoard__0": {
+  "input_unconnected": 0,
+  "input_copper": 54,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "hnz1102_sdcdmux-emmc__0": {
+  "input_unconnected": 0,
+  "input_copper": 319,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "Kennystflr_Lightning-speaker__1": {
+  "input_unconnected": 0,
+  "input_copper": 38,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "plants-tech_PhloraGCC__0": {
+  "input_unconnected": 80,
+  "input_copper": 725,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "spectrumero_filestick__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "KabukiFlux_JAMMA_2player_xbox360__0": {
+  "input_unconnected": 0,
+  "input_copper": 199,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "k0swe_mountaineer__0": {
+  "input_unconnected": 0,
+  "input_copper": 26,
+  "input_shorts": 2,
+  "input_tracks_crossing": 0
+ },
+ "ThePurpleOne_volumer__0": {
+  "input_unconnected": 0,
+  "input_copper": 197,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "dimitrivlachos_Galaxy-Light-Projector-Mod__0": {
+  "input_unconnected": 0,
+  "input_copper": 76,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "tacocatCLAUS_Hackpad__1": {
+  "input_unconnected": 1,
+  "input_copper": 1557,
+  "input_shorts": 4,
+  "input_tracks_crossing": 0
+ },
+ "dotcypress_klaptik-fx__0": {
+  "input_unconnected": 0,
+  "input_copper": 275,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "zl2brg_ZLPLL__0": {
+  "input_unconnected": 0,
+  "input_copper": 160,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "charvotj_AquaControl__1": {
+  "input_unconnected": 1,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "walclu_smartReflow__0": {
+  "input_unconnected": 0,
+  "input_copper": 196,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "mayermakes_00Keyboard__0": {
+  "input_unconnected": 0,
+  "input_copper": 245,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "piit79_rev57lp__0": {
+  "input_unconnected": 0,
+  "input_copper": 4,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "ondras12345_CNC__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "solhuebner_LEDBrickHome__1": {
+  "input_unconnected": 3,
+  "input_copper": 17,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "RobotPatient_Manikin_Color_Hub__5": {
+  "input_unconnected": 3,
+  "input_copper": 53,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "yukizeng258_ThunderScope__0": {
+  "input_unconnected": 79,
+  "input_copper": 1462,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "peterkrull_quad__0": {
+  "input_unconnected": 12,
+  "input_copper": 26,
+  "input_shorts": 3,
+  "input_tracks_crossing": 0
+ },
+ "MaxKiv_kibo__2": {
+  "input_unconnected": 0,
+  "input_copper": 5,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "doegox_FuzzyDuck__5": {
+  "input_unconnected": 5,
+  "input_copper": 922,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "hnz1102_sdcdmux-emmc__1": {
+  "input_unconnected": 0,
+  "input_copper": 277,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "MSTRocketDesignTeam_Avionics-Telemetry-PCB__0": {
+  "input_unconnected": 5,
+  "input_copper": 715,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "jrtaylor71_smart-thermostat__1": {
+  "input_unconnected": 0,
+  "input_copper": 37,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "tangzero_colibri__0": {
+  "input_unconnected": 0,
+  "input_copper": 585,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "JaraGuillen_OnBoard-pcbMAINWROnotapi__15": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "open-ephys_onix-headstage-neuropix1e__1": {
+  "input_unconnected": 8,
+  "input_copper": 1488,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "leoheck_kicad-blind-burried-vias__0": {
+  "input_unconnected": 0,
+  "input_copper": 1,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "will127534_RPI5-CFE-Hat__0": {
+  "input_unconnected": 0,
+  "input_copper": 311,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "kruglovvs_strange_game__0": {
+  "input_unconnected": 19,
+  "input_copper": 24,
+  "input_shorts": 3,
+  "input_tracks_crossing": 0
+ },
+ "3DES_WatchdogBoard__1": {
+  "input_unconnected": 8,
+  "input_copper": 74,
+  "input_shorts": 8,
+  "input_tracks_crossing": 0
+ },
+ "AllThisAndThat_Beacon__1": {
+  "input_unconnected": 2,
+  "input_copper": 65,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "JordanAceto_stm32l0_mod_source__0": {
+  "input_unconnected": 0,
+  "input_copper": 3,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "UofTPhyEssSW_Student-Workshop-Course-L1__0": {
+  "input_unconnected": 0,
+  "input_copper": 20,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "o7-machinehum_F-MOMM__0": {
+  "input_unconnected": 345,
+  "input_copper": 836,
+  "input_shorts": 22,
+  "input_tracks_crossing": 0
+ },
+ "tjko_brickpico__0": {
+  "input_unconnected": 0,
+  "input_copper": 0,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "WELL-XX_EC-Pro-2__0": {
+  "input_unconnected": 1,
+  "input_copper": 8,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "LStranc_WeatherStation__0": {
+  "input_unconnected": 0,
+  "input_copper": 125,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "mlab-modules_PROGLOG01__0": {
+  "input_unconnected": 0,
+  "input_copper": 117,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "JWehle_polaroid-trigger__0": {
+  "input_unconnected": 0,
+  "input_copper": 4,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "SlimeVR_SlimeVR-Tracker-nRF-PCB__2": {
+  "input_unconnected": 58,
+  "input_copper": 3,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ },
+ "upb-lea_LCB-CPB-01_Pin_Board__0": {
+  "input_unconnected": 0,
+  "input_copper": 898,
+  "input_shorts": 0,
+  "input_tracks_crossing": 0
+ }
+}

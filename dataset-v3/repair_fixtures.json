@@ -1,0 +1,372 @@
+[
+ {
+  "board": "TadAtThayer_MazeController__1",
+  "stratum": "A",
+  "best_config": "B-auto-p4",
+  "job_id": "520f97d0b3f44eac80695e34b5016977",
+  "unconnected": 1,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/TadAtThayer_MazeController__1__B-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/TadAtThayer_MazeController__1.kicad_pcb"
+ },
+ {
+  "board": "eric-wood_kicad_lib__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "4629da7882dd4b98943b8a61c5dededc",
+  "unconnected": 1,
+  "copper_violations": 49,
+  "archived_board": "fixtures-v3/eric-wood_kicad_lib__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/eric-wood_kicad_lib__0.kicad_pcb"
+ },
+ {
+  "board": "irudoy_cansult__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "08233a7b0c8f4dc59a3ed4183d7d9b3a",
+  "unconnected": 1,
+  "copper_violations": 2,
+  "archived_board": "fixtures-v3/irudoy_cansult__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/irudoy_cansult__0.kicad_pcb"
+ },
+ {
+  "board": "jrtaylor71_smart-thermostat__1",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "e4fb79c76c8d483b9e03d958de089792",
+  "unconnected": 1,
+  "copper_violations": 22,
+  "archived_board": "fixtures-v3/jrtaylor71_smart-thermostat__1__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/jrtaylor71_smart-thermostat__1.kicad_pcb"
+ },
+ {
+  "board": "juniper-garden_twig_temp_humidity_sensor__1",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "a2d731cdf6b64c03a47e771f5044850f",
+  "unconnected": 1,
+  "copper_violations": 27,
+  "archived_board": "fixtures-v3/juniper-garden_twig_temp_humidity_sensor__1__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/juniper-garden_twig_temp_humidity_sensor__1.kicad_pcb"
+ },
+ {
+  "board": "microchip-pic-avr-examples_pic16f56q71-audio-light-show-mplab-mcc__2",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "7d56d7fc1abe43a2b07c404449cef57d",
+  "unconnected": 1,
+  "copper_violations": 2,
+  "archived_board": "fixtures-v3/microchip-pic-avr-examples_pic16f56q71-audio-light-show-mplab-mcc__2__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/microchip-pic-avr-examples_pic16f56q71-audio-light-show-mplab-mcc__2.kicad_pcb"
+ },
+ {
+  "board": "myriadrf_lc-clock__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "7317938b0cff415cbd60e12e11403439",
+  "unconnected": 1,
+  "copper_violations": 14,
+  "archived_board": "fixtures-v3/myriadrf_lc-clock__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/myriadrf_lc-clock__0.kicad_pcb"
+ },
+ {
+  "board": "pratapkaronde_ESP32Board__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "7bbd4295be16479b86cf5e0ed896380d",
+  "unconnected": 1,
+  "copper_violations": 46,
+  "archived_board": "fixtures-v3/pratapkaronde_ESP32Board__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/pratapkaronde_ESP32Board__0.kicad_pcb"
+ },
+ {
+  "board": "zl2brg_ZLPLL__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "c544097621ec45cfbab78948d1047751",
+  "unconnected": 1,
+  "copper_violations": 64,
+  "archived_board": "fixtures-v3/zl2brg_ZLPLL__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/zl2brg_ZLPLL__0.kicad_pcb"
+ },
+ {
+  "board": "Skrooter_SmallLedPlatform__0",
+  "stratum": "A",
+  "best_config": "B-auto-p4",
+  "job_id": "c58e06ff5d204776b2f0d71e41bdc8de",
+  "unconnected": 2,
+  "copper_violations": 21,
+  "archived_board": "fixtures-v3/Skrooter_SmallLedPlatform__0__B-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/Skrooter_SmallLedPlatform__0.kicad_pcb"
+ },
+ {
+  "board": "cristi-zz_ha-pcb__0",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "62d00cf24ec34d33ba59a55540d8fb72",
+  "unconnected": 2,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/cristi-zz_ha-pcb__0__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/cristi-zz_ha-pcb__0.kicad_pcb"
+ },
+ {
+  "board": "harmalkar_satellite-prototype__2",
+  "stratum": "A",
+  "best_config": "B-auto-p4",
+  "job_id": "d259d48e39854fe59a02f55ea4838f69",
+  "unconnected": 2,
+  "copper_violations": 14,
+  "archived_board": "fixtures-v3/harmalkar_satellite-prototype__2__B-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/harmalkar_satellite-prototype__2.kicad_pcb"
+ },
+ {
+  "board": "mlab-modules_PROGLOG01__0",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "924fd8f3435e4a9382aed0c56922b641",
+  "unconnected": 2,
+  "copper_violations": 117,
+  "archived_board": "fixtures-v3/mlab-modules_PROGLOG01__0__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/mlab-modules_PROGLOG01__0.kicad_pcb"
+ },
+ {
+  "board": "mymakercorner_Leyden_Jar__0",
+  "stratum": "A",
+  "best_config": "B-auto-p4",
+  "job_id": "3f167b6fa8e846cdaee3a94ce224ee8d",
+  "unconnected": 2,
+  "copper_violations": 8,
+  "archived_board": "fixtures-v3/mymakercorner_Leyden_Jar__0__B-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/mymakercorner_Leyden_Jar__0.kicad_pcb"
+ },
+ {
+  "board": "vives-projectwerk-2021_Microcontroller_pcb__2",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "60b9bc5ae0bb44c4b3afbb4459a1c6fd",
+  "unconnected": 2,
+  "copper_violations": 7,
+  "archived_board": "fixtures-v3/vives-projectwerk-2021_Microcontroller_pcb__2__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/vives-projectwerk-2021_Microcontroller_pcb__2.kicad_pcb"
+ },
+ {
+  "board": "wdouglass_pocket-reform__11",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "dc7e8c2e4c714f109767b56eaf992422",
+  "unconnected": 2,
+  "copper_violations": 18,
+  "archived_board": "fixtures-v3/wdouglass_pocket-reform__11__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/wdouglass_pocket-reform__11.kicad_pcb"
+ },
+ {
+  "board": "will127534_RPI5-CFE-Hat__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "799bb5df9133489daa6deafd5a33772e",
+  "unconnected": 2,
+  "copper_violations": 12,
+  "archived_board": "fixtures-v3/will127534_RPI5-CFE-Hat__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/will127534_RPI5-CFE-Hat__0.kicad_pcb"
+ },
+ {
+  "board": "MaxKiv_kibo__0",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "db13daafaae14f4aaef1e5699b02548b",
+  "unconnected": 3,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/MaxKiv_kibo__0__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/MaxKiv_kibo__0.kicad_pcb"
+ },
+ {
+  "board": "MaxKiv_kibo__2",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "206c09bc5a7f4007a1b0aab64fda7183",
+  "unconnected": 3,
+  "copper_violations": 6,
+  "archived_board": "fixtures-v3/MaxKiv_kibo__2__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/MaxKiv_kibo__2.kicad_pcb"
+ },
+ {
+  "board": "jaromir-sukuba_rsyn__1",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "fef86214c99046de849a4fbe14846940",
+  "unconnected": 3,
+  "copper_violations": 4,
+  "archived_board": "fixtures-v3/jaromir-sukuba_rsyn__1__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/jaromir-sukuba_rsyn__1.kicad_pcb"
+ },
+ {
+  "board": "m1geo_Pi5_PCIe__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "d563eb5ebada46f39c1d68c80b1821fc",
+  "unconnected": 3,
+  "copper_violations": 54,
+  "archived_board": "fixtures-v3/m1geo_Pi5_PCIe__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/m1geo_Pi5_PCIe__0.kicad_pcb"
+ },
+ {
+  "board": "walclu_smartReflow__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "5740dcfba678445799b1ba48bc272833",
+  "unconnected": 3,
+  "copper_violations": 3,
+  "archived_board": "fixtures-v3/walclu_smartReflow__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/walclu_smartReflow__0.kicad_pcb"
+ },
+ {
+  "board": "jamesturton_bose-qc35-usb-c__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "25929042101a403ebac022b540eb3924",
+  "unconnected": 4,
+  "copper_violations": 18,
+  "archived_board": "fixtures-v3/jamesturton_bose-qc35-usb-c__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/jamesturton_bose-qc35-usb-c__0.kicad_pcb"
+ },
+ {
+  "board": "owntech-foundation_SPIN__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "13294619611947a89d9a4436447a9901",
+  "unconnected": 4,
+  "copper_violations": 93,
+  "archived_board": "fixtures-v3/owntech-foundation_SPIN__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/owntech-foundation_SPIN__0.kicad_pcb"
+ },
+ {
+  "board": "LStranc_WeatherStation__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "9dee6713da1644f094e192f7c42697ce",
+  "unconnected": 5,
+  "copper_violations": 22,
+  "archived_board": "fixtures-v3/LStranc_WeatherStation__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/LStranc_WeatherStation__0.kicad_pcb"
+ },
+ {
+  "board": "SpaceTeam_EDU_RASPI_HATS__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "933b8d80f9ed4638a6808781964c3fd9",
+  "unconnected": 5,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/SpaceTeam_EDU_RASPI_HATS__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/SpaceTeam_EDU_RASPI_HATS__0.kicad_pcb"
+ },
+ {
+  "board": "rabs664_Amstrad-CPC-CTC-DART__0",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "a7cc326d248645edb2661fba7b1a2015",
+  "unconnected": 5,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/rabs664_Amstrad-CPC-CTC-DART__0__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/rabs664_Amstrad-CPC-CTC-DART__0.kicad_pcb"
+ },
+ {
+  "board": "reljamar_singlePhaseInverter__0",
+  "stratum": "A",
+  "best_config": "B-auto-p4",
+  "job_id": "d9060d03c3284afbb6df48ca4abc0004",
+  "unconnected": 5,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/reljamar_singlePhaseInverter__0__B-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/reljamar_singlePhaseInverter__0.kicad_pcb"
+ },
+ {
+  "board": "team-mountaineers-urc-2023_electronics__2",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "014526f1d8664a119611d42398f5492a",
+  "unconnected": 5,
+  "copper_violations": 1,
+  "archived_board": "fixtures-v3/team-mountaineers-urc-2023_electronics__2__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/team-mountaineers-urc-2023_electronics__2.kicad_pcb"
+ },
+ {
+  "board": "olvint_CM4-NAS-MiniPCIE__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "01773837215c4c598ad057055bce6fd0",
+  "unconnected": 6,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/olvint_CM4-NAS-MiniPCIE__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/olvint_CM4-NAS-MiniPCIE__0.kicad_pcb"
+ },
+ {
+  "board": "olvint_CM4-NAS-MiniPCIE__1",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "b6e1cbf906d94d65ba71af8af7b0b9b9",
+  "unconnected": 6,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/olvint_CM4-NAS-MiniPCIE__1__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/olvint_CM4-NAS-MiniPCIE__1.kicad_pcb"
+ },
+ {
+  "board": "xtreme8000_picoAVE__1",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "c78817f118f84534bb4ccaaf22bcf0cc",
+  "unconnected": 6,
+  "copper_violations": 0,
+  "archived_board": "fixtures-v3/xtreme8000_picoAVE__1__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/xtreme8000_picoAVE__1.kicad_pcb"
+ },
+ {
+  "board": "mengxyz_esp32_S2_breadboard__0",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "9041fe2c929843ca9d924d864fda6ff2",
+  "unconnected": 10,
+  "copper_violations": 20,
+  "archived_board": "fixtures-v3/mengxyz_esp32_S2_breadboard__0__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/mengxyz_esp32_S2_breadboard__0.kicad_pcb"
+ },
+ {
+  "board": "ThePurpleOne_volumer__1",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "59ad901570ba4129aa3a1edd3cac72a6",
+  "unconnected": 13,
+  "copper_violations": 4,
+  "archived_board": "fixtures-v3/ThePurpleOne_volumer__1__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/ThePurpleOne_volumer__1.kicad_pcb"
+ },
+ {
+  "board": "capitaneanu_bitaxe__0",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "dd8382d89d76473d98e7f765e8bf7445",
+  "unconnected": 15,
+  "copper_violations": 120,
+  "archived_board": "fixtures-v3/capitaneanu_bitaxe__0__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/capitaneanu_bitaxe__0.kicad_pcb"
+ },
+ {
+  "board": "ezod_rc2014-cv-megacart-ram__0",
+  "stratum": "C",
+  "best_config": "auto-p4",
+  "job_id": "54226785488b43e89723bbda0dfb5193",
+  "unconnected": 16,
+  "copper_violations": 9,
+  "archived_board": "fixtures-v3/ezod_rc2014-cv-megacart-ram__0__auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/C/ezod_rc2014-cv-megacart-ram__0.kicad_pcb"
+ },
+ {
+  "board": "RobotPatient_Manikin_Color_Hub__4",
+  "stratum": "A",
+  "best_config": "A-auto-p4",
+  "job_id": "8a88bc16d4644d4d83fb370db28e383b",
+  "unconnected": 22,
+  "copper_violations": 3,
+  "archived_board": "fixtures-v3/RobotPatient_Manikin_Color_Hub__4__A-auto-p4.kicad_pcb",
+  "human_board": "dataset-v3-boards/A/RobotPatient_Manikin_Color_Hub__4.kicad_pcb"
+ }
+]

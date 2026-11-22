@@ -1,0 +1,684 @@
+[
+ {
+  "board": "0001_rufs_simple_kicad_schema_and_pcb_v1",
+  "variant": "A-in2-allowed",
+  "job_id": "9d910b9999434d9cab092997ca71f0ba",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "3006bfd455934955909cf210a74c3d09"
+ },
+ {
+  "board": "0002_OpenVNAVI_motor unit",
+  "variant": "A-in2-allowed",
+  "job_id": "5074019a00204d2b969e3fea540d4317",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "deea84d7bea347be9021968d34e8d580"
+ },
+ {
+  "board": "0003_hardware-designs_si7021-board",
+  "variant": "A-in2-allowed",
+  "job_id": "56929502f352446a8b04a0da17640e7b",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "24c7577e9d364501856f1f98a9938d08"
+ },
+ {
+  "board": "0004_kitspace_Potentiometer_mount_4LED",
+  "variant": "A-in2-allowed",
+  "job_id": "ff35c8e8dbfb4fee845bb8c5f02e63a0",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "ac7e87fac50b45b8a83801f5f9cbf073"
+ },
+ {
+  "board": "0005_retroreflectors_TANGOFLOCK",
+  "variant": "A-in2-allowed",
+  "job_id": "510677998fde4f8c864268fdbe6b0c99",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "e4e1a39a8c4243ed929e1066a6bd9908"
+ },
+ {
+  "board": "0006_mechkeys_lfk78-jtag",
+  "variant": "A-in2-allowed",
+  "job_id": "d73c3290423f4b998fca9f8d798aeb82",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "b40d08bd9bef4a19a903ab83e7da77bb"
+ },
+ {
+  "board": "0007_DiscoDanceFloorV1_BusTerminator",
+  "variant": "A-in2-allowed",
+  "job_id": "3c25a178a6e54e4e83e65911c7311757",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "8327247bfb874f369cf7fff6fa41cb60"
+ },
+ {
+  "board": "0008_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm",
+  "variant": "A-in2-allowed",
+  "job_id": "0f6806049c214d09bf431e1f3294ec43",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "88cca01030a54fa1a058c28b7cdceb4b"
+ },
+ {
+  "board": "0009_RPi-ATtiny85-Programmer_rpi_attiny85_programmer",
+  "variant": "A-in2-allowed",
+  "job_id": "29766ab6265747b3b838a76c04f443fd",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "8cb3fc09408d46f8a1b5c2a650f189c3"
+ },
+ {
+  "board": "0010_everled_everled",
+  "variant": "A-in2-allowed",
+  "job_id": "d03ad2d119c642c0ad9d0090bd44ba01",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "8f0e7cde85784972b774a96b3ac373a6"
+ },
+ {
+  "board": "0011_PsuFanController_FanController",
+  "variant": "A-in2-allowed",
+  "job_id": "68a9c31f371040ee8935a51099d5221e",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "f347f2c5b5734ce9bb381ff31afe1749"
+ },
+ {
+  "board": "0012_BB-PWR-3608_BB-PWR-3608_revA",
+  "variant": "A-in2-allowed",
+  "job_id": "0cb0d0d4fdff4cd398ebf344242ff265",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "62557895cc0c4e36a89f18dafeabba47"
+ },
+ {
+  "board": "0013_kitspace_CH330",
+  "variant": "A-in2-allowed",
+  "job_id": "9eb193f340474a39a58de3bb656f2080",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "d967d4e1976b46b2b5f2f4e24c640f38"
+ },
+ {
+  "board": "0014_4N35-TTL-Serial-Optoisolator_4N35-TTL-Serial-Optoisolator",
+  "variant": "A-in2-allowed",
+  "job_id": "7c2caef766424e2abe52d5bdde3273c1",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "04f30c0e8a6b4a48b4efef6cd1cfed94"
+ },
+ {
+  "board": "0015_hardware-designs_solar-harvester",
+  "variant": "A-in2-allowed",
+  "job_id": "284c05285f6548bda30a10de5eee0368",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "31861885757e4cf58d98f923ece3cb57"
+ },
+ {
+  "board": "0016_uext-esp32_UEXT_ESP32",
+  "variant": "A-in2-allowed",
+  "job_id": "9e6e678425de41fcaa03e3febe42078a",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "ee5a1367f5114d52933378ead4fa679a"
+ },
+ {
+  "board": "0017_pi_plant_MCP3002",
+  "variant": "A-in2-allowed",
+  "job_id": "ddade4eb986a4bacb254d0ecd9aa1afe",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "c057bf09255141b7aff320d0b0e437b1"
+ },
+ {
+  "board": "0018_kitspace_solenoid_driver",
+  "variant": "A-in2-allowed",
+  "job_id": "afa5008a47dc480092d2fb0945e42619",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "29aa3425a8a14839807060800cc7ce89"
+ },
+ {
+  "board": "0019_LED_port-status_LED_port-status-CA",
+  "variant": "A-in2-allowed",
+  "job_id": "e9b2f55914b847aca5455d4f1a2007ae",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "6ee6c2c23cad4c3396c2ac07354ee541"
+ },
+ {
+  "board": "0020_AS5043-Encoder_sensor-board",
+  "variant": "A-in2-allowed",
+  "job_id": "041269936d2c490ea41c1a6d9584ac23",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "d382d5d3c4bb47a2a1b9d3a5caa310b3"
+ },
+ {
+  "board": "0021_hardware-designs_nixie-power",
+  "variant": "A-in2-allowed",
+  "job_id": "88a422238fa545bcb82fcc89000f5a9d",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "88a89ddf9023478db405e817901b5d4a"
+ },
+ {
+  "board": "0022_kitspace_filaSens",
+  "variant": "A-in2-allowed",
+  "job_id": "df08efea64ca46b3946e040e5f0ed273",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "4bea1bf46af14545b2df69c583a3e5ca"
+ },
+ {
+  "board": "0023_rgb-strip-controller__autosave-rgb-strip",
+  "variant": "A-in2-allowed",
+  "job_id": "cdd53814099a44c1bfe6d46cbd04eddc",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "0f726f4341a640f3b0c64cb199f57ffd"
+ },
+ {
+  "board": "0024_ATtiny461Breakout_ATTiny461DevBoard",
+  "variant": "A-in2-allowed",
+  "job_id": "60e12aaee5874c5d99617358e08f22db",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "d6b1ac68c6134219815d49f02b65e609"
+ },
+ {
+  "board": "0025_LongPixel_AnalogDriverMini",
+  "variant": "A-in2-allowed",
+  "job_id": "fc7dd101a359424fbb23b575d1b45811",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "370e73726dec48aaa3c1e078a36a1a94"
+ },
+ {
+  "board": "0026_PGA2311_pga2311",
+  "variant": "A-in2-allowed",
+  "job_id": "2fba01db663743468589a38b6b94fac5",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "a5d9b21905df46d299b3afc0c3178ff9"
+ },
+ {
+  "board": "0027_JLink-SWD_JLink-SWD",
+  "variant": "A-in2-allowed",
+  "job_id": "b0012e4194a946c0984cc5c5ab518461",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "c859959a3a90449099798acefafca372"
+ },
+ {
+  "board": "0028_kitspace_Potentiometer_mount_16LED",
+  "variant": "A-in2-allowed",
+  "job_id": "3d81ace8d0fb4131a37a372a47aac07a",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "35c1de62edf345c3834860a00483a92c"
+ },
+ {
+  "board": "0029_NiMH-Charger_NiMH Charger",
+  "variant": "A-in2-allowed",
+  "job_id": "1d1ce69c25b44dadb2fc6764704d54b3",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "acd91e3f8eee46ffbf817b0b31d14ab2"
+ },
+ {
+  "board": "0030_supply-ldo-adj-single_supply-ldo-adj-single",
+  "variant": "A-in2-allowed",
+  "job_id": "e68e58b85900462ea7268089eeb5975e",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "29210b64f4b7430296f6b418dad502e1"
+ },
+ {
+  "board": "0031_ESP-Breakout_ESP-Breakout",
+  "variant": "A-in2-allowed",
+  "job_id": "aa7d827b16c047bb929dce8b895f407c",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "b18d31f9913c402f96b91d4c1c4048f8"
+ },
+ {
+  "board": "0032_raspican_raspican",
+  "variant": "A-in2-allowed",
+  "job_id": "3e82addb5da44cfd928978a667a5988f",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ],
+  "job_id_prev_pruned": "fa4545d0b9d64dc8b0314cd530d21ea0"
+ },
+ {
+  "board": "0033_kitspace_hbridge_driver",
+  "variant": "A-in2-allowed",
+  "job_id": "d286b83582244583af2801b220ba7ee2",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0034_SMDBreakouts_smd_breakout_quad",
+  "variant": "A-in2-allowed",
+  "job_id": "6a139035c9be415b8cc866e5967fcc98",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0035_TTNEnschedeMote_ArduinoNanoRN2483",
+  "variant": "A-in2-allowed",
+  "job_id": "cbaedc0a927441878bca502401599701",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0036_RC2014_RC2014 IDE",
+  "variant": "A-in2-allowed",
+  "job_id": "98fc4d36b3704df694a1d2147f2dd417",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0037_DasBlinkinput_Das Blinkinput",
+  "variant": "A-in2-allowed",
+  "job_id": "0002aeef878f4e818720d053f50960f5",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu",
+   "GND.Cu",
+   "In1.Cu",
+   "In2.Cu",
+   "PWR.Cu"
+  ]
+ },
+ {
+  "board": "0037_DasBlinkinput_Das Blinkinput",
+  "variant": "B-in2-banned",
+  "job_id": "298546e6f6274513ab8a8dc08c01dd52",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu",
+   "GND.Cu",
+   "In1.Cu",
+   "In2.Cu",
+   "PWR.Cu"
+  ]
+ },
+ {
+  "board": "0038_ISO-port_ch340-usb-serial-isolated",
+  "variant": "A-in2-allowed",
+  "job_id": "9b2fbaf107ba4cd5851df867c1e1b046",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0039_LoRaCatTrack_GPSLoRa",
+  "variant": "A-in2-allowed",
+  "job_id": "372dfb547c774213a5c7fe832378c905",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0040_linklayer_contact",
+  "variant": "A-in2-allowed",
+  "job_id": "590d14f216a74108b08f4e84a372e41d",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0041_Open-Source-Power-Supply_PowerSupply_PCB_backup",
+  "variant": "A-in2-allowed",
+  "job_id": "246dd4be2c824d5392d9239d4509a491",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0042_R1007_R1007",
+  "variant": "A-in2-allowed",
+  "job_id": "4216a388014447bda6baedda2d76c0d9",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu",
+   "In1.Cu",
+   "In2.Cu"
+  ]
+ },
+ {
+  "board": "0042_R1007_R1007",
+  "variant": "B-in2-banned",
+  "job_id": "f14ae4f577e64084823e9ee0fb4dfe26",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu",
+   "In1.Cu",
+   "In2.Cu"
+  ]
+ },
+ {
+  "board": "0043_MAPone_MAP_append",
+  "variant": "A-in2-allowed",
+  "job_id": "6007412526704576b5dca8d3b6d01ab5",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0044_Amiga-A1012-PCB_Amiga-A1012",
+  "variant": "A-in2-allowed",
+  "job_id": "993f80bb54f04fcbbab2e74d147623ee",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0045_smt-zvs-driver_IH10",
+  "variant": "A-in2-allowed",
+  "job_id": "7f3e9c97c1e84d438f79650d18a1c58e",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0046_RX5808_diversityModule",
+  "variant": "A-in2-allowed",
+  "job_id": "9bae3410c40b454399dd5be8178ec43b",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0047_mosavr_pcie1x_backplane",
+  "variant": "A-in2-allowed",
+  "job_id": "e4ab4b231bd2444da4b34367a98690b1",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0048_wavegen_wavegen",
+  "variant": "A-in2-allowed",
+  "job_id": "218b1a047ad84fea83e8efefd29370d9",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0049_Biscay_Blueeye_sipm-fpga",
+  "variant": "A-in2-allowed",
+  "job_id": "5b5c2afbd42a4000a282ad6d3850e68e",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0050_srambo_1_srambo_1",
+  "variant": "A-in2-allowed",
+  "job_id": "763d5bf6746a444491812125ada1dc82",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0051_Sensory_Adaptation_Bot_sa_bot",
+  "variant": "A-in2-allowed",
+  "job_id": "0de67d1e4d0d420a8714bc21eafd4e30",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0052_DSKY-alarm-panel-replica_DSKY_alarm",
+  "variant": "A-in2-allowed",
+  "job_id": "311354e96a13406a8a9dccba2ef762b0",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0053_PoEPi-hardware_pizero-poe",
+  "variant": "A-in2-allowed",
+  "job_id": "3a41726ec5104390bab1f9fdcfb78733",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0054_elec_power_dispatch",
+  "variant": "A-in2-allowed",
+  "job_id": "33b06843006243d2bafdbf1f323ebf68",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0055_avr_ledprojector_avr_ledprojection",
+  "variant": "A-in2-allowed",
+  "job_id": "2056b77d69314f92adc40cc6c08c82ac",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0056_memsarray_mems_array",
+  "variant": "A-in2-allowed",
+  "job_id": "52c14d31edd94cbc9d962df0f5f7a5a7",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu",
+   "In1.Cu",
+   "In2.Cu"
+  ]
+ },
+ {
+  "board": "0056_memsarray_mems_array",
+  "variant": "B-in2-banned",
+  "job_id": "7acaf4973a474218b67e787fb052dc57",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu",
+   "In1.Cu",
+   "In2.Cu"
+  ]
+ },
+ {
+  "board": "0057_divergence_meter_dm_control",
+  "variant": "A-in2-allowed",
+  "job_id": "a6ac8b2cd6c0407fbab6612372142f31",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0058_kitspace_mppt-1210-hus",
+  "variant": "A-in2-allowed",
+  "job_id": "be3b1d04440a49819d21bbc834b010ae",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu"
+  ]
+ },
+ {
+  "board": "0059_kitspace_tri_panel_4up_r0.1",
+  "variant": "A-in2-allowed",
+  "job_id": "3a2e52e5913d4a069152ac66b4fd2406",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu",
+   "In1.Cu",
+   "In2.Cu"
+  ]
+ },
+ {
+  "board": "0059_kitspace_tri_panel_4up_r0.1",
+  "variant": "B-in2-banned",
+  "job_id": "6123326a8adc480aa03c59d578088f76",
+  "duplicate": false,
+  "copper_layers": [
+   "B.Cu",
+   "F.Cu",
+   "In1.Cu",
+   "In2.Cu"
+  ]
+ }
+]

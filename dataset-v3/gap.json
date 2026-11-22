@@ -1,0 +1,210 @@
+{
+ "jobs_total": 432,
+ "jobs_done": 432,
+ "partial": false,
+ "clean_definition": "unconnected == 0 AND copper_delta <= 0 (output copper violations vs the human board input count, same COPPER_CLASSES, both kicad-cli DRC with refill)",
+ "groups": {
+  "stratum_A": {
+   "label": "stratum_A",
+   "complete_boards": 51,
+   "per_config_totals": {
+    "A-auto-p4": 218,
+    "A-most_pads-p4": 218,
+    "A-none-p4": 217,
+    "B-auto-p4": 240,
+    "B-most_pads-p4": 240,
+    "B-none-p4": 240
+   },
+   "sbs_config": "A-none-p4",
+   "sbs_total": 217,
+   "vbs_total": 189,
+   "gap": 28,
+   "clean_rate_per_config": {
+    "A-auto-p4": 0.353,
+    "A-most_pads-p4": 0.353,
+    "A-none-p4": 0.353,
+    "B-auto-p4": 0.392,
+    "B-most_pads-p4": 0.392,
+    "B-none-p4": 0.392
+   },
+   "gap_mean_per_board": 0.549,
+   "gap_mean_ci95": [
+    0.216,
+    0.98
+   ]
+  },
+  "stratum_B": {
+   "label": "stratum_B",
+   "complete_boards": 3,
+   "per_config_totals": {
+    "A-auto-p4": 116,
+    "A-most_pads-p4": 116,
+    "A-none-p4": 116,
+    "B-auto-p4": 100,
+    "B-most_pads-p4": 100,
+    "B-none-p4": 100
+   },
+   "sbs_config": "B-auto-p4",
+   "sbs_total": 100,
+   "vbs_total": 100,
+   "gap": 0,
+   "clean_rate_per_config": {
+    "A-auto-p4": 0.333,
+    "A-most_pads-p4": 0.333,
+    "A-none-p4": 0.333,
+    "B-auto-p4": 0.333,
+    "B-most_pads-p4": 0.333,
+    "B-none-p4": 0.333
+   }
+  },
+  "stratum_C": {
+   "label": "stratum_C",
+   "complete_boards": 36,
+   "per_config_totals": {
+    "auto-p4": 118,
+    "most_pads-p4": 118,
+    "none-p4": 118
+   },
+   "sbs_config": "auto-p4",
+   "sbs_total": 118,
+   "vbs_total": 118,
+   "gap": 0,
+   "clean_rate_per_config": {
+    "auto-p4": 0.556,
+    "most_pads-p4": 0.556,
+    "none-p4": 0.556
+   },
+   "gap_mean_per_board": 0.0,
+   "gap_mean_ci95": [
+    0.0,
+    0.0
+   ]
+  },
+  "multilayer_ge4": {
+   "label": "multilayer_ge4",
+   "complete_boards": 54,
+   "per_config_totals": {
+    "A-auto-p4": 334,
+    "A-most_pads-p4": 334,
+    "A-none-p4": 333,
+    "B-auto-p4": 340,
+    "B-most_pads-p4": 340,
+    "B-none-p4": 340
+   },
+   "sbs_config": "A-none-p4",
+   "sbs_total": 333,
+   "vbs_total": 289,
+   "gap": 44,
+   "clean_rate_per_config": {
+    "A-auto-p4": 0.352,
+    "A-most_pads-p4": 0.352,
+    "A-none-p4": 0.352,
+    "B-auto-p4": 0.389,
+    "B-most_pads-p4": 0.389,
+    "B-none-p4": 0.389
+   },
+   "gap_mean_per_board": 0.815,
+   "gap_mean_ci95": [
+    0.315,
+    1.463
+   ]
+  },
+  "two_layer": {
+   "label": "two_layer",
+   "complete_boards": 36,
+   "per_config_totals": {
+    "auto-p4": 118,
+    "most_pads-p4": 118,
+    "none-p4": 118
+   },
+   "sbs_config": "auto-p4",
+   "sbs_total": 118,
+   "vbs_total": 118,
+   "gap": 0,
+   "clean_rate_per_config": {
+    "auto-p4": 0.556,
+    "most_pads-p4": 0.556,
+    "none-p4": 0.556
+   },
+   "gap_mean_per_board": 0.0,
+   "gap_mean_ci95": [
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "qor_median_per_config": {
+  "A-auto-p4": {
+   "n_done": 54,
+   "n_clean": 19,
+   "vias_over_human_median_clean": 1.104,
+   "wirelength_over_human_median_clean": 0.832,
+   "vias_over_human_median_all": 0.715,
+   "wirelength_over_human_median_all": 0.821
+  },
+  "A-most_pads-p4": {
+   "n_done": 54,
+   "n_clean": 19,
+   "vias_over_human_median_clean": 1.104,
+   "wirelength_over_human_median_clean": 0.832,
+   "vias_over_human_median_all": 0.715,
+   "wirelength_over_human_median_all": 0.821
+  },
+  "A-none-p4": {
+   "n_done": 54,
+   "n_clean": 19,
+   "vias_over_human_median_clean": 1.104,
+   "wirelength_over_human_median_clean": 0.832,
+   "vias_over_human_median_all": 0.715,
+   "wirelength_over_human_median_all": 0.821
+  },
+  "B-auto-p4": {
+   "n_done": 54,
+   "n_clean": 21,
+   "vias_over_human_median_clean": 1.007,
+   "wirelength_over_human_median_clean": 0.831,
+   "vias_over_human_median_all": 0.74,
+   "wirelength_over_human_median_all": 0.827
+  },
+  "B-most_pads-p4": {
+   "n_done": 54,
+   "n_clean": 21,
+   "vias_over_human_median_clean": 1.007,
+   "wirelength_over_human_median_clean": 0.831,
+   "vias_over_human_median_all": 0.74,
+   "wirelength_over_human_median_all": 0.827
+  },
+  "B-none-p4": {
+   "n_done": 54,
+   "n_clean": 21,
+   "vias_over_human_median_clean": 1.007,
+   "wirelength_over_human_median_clean": 0.831,
+   "vias_over_human_median_all": 0.74,
+   "wirelength_over_human_median_all": 0.827
+  },
+  "auto-p4": {
+   "n_done": 36,
+   "n_clean": 20,
+   "vias_over_human_median_clean": 0.794,
+   "wirelength_over_human_median_clean": 0.908,
+   "vias_over_human_median_all": 0.821,
+   "wirelength_over_human_median_all": 0.907
+  },
+  "most_pads-p4": {
+   "n_done": 36,
+   "n_clean": 20,
+   "vias_over_human_median_clean": 0.794,
+   "wirelength_over_human_median_clean": 0.908,
+   "vias_over_human_median_all": 0.821,
+   "wirelength_over_human_median_all": 0.907
+  },
+  "none-p4": {
+   "n_done": 36,
+   "n_clean": 20,
+   "vias_over_human_median_clean": 0.794,
+   "wirelength_over_human_median_clean": 0.908,
+   "vias_over_human_median_all": 0.821,
+   "wirelength_over_human_median_all": 0.907
+  }
+ }
+}

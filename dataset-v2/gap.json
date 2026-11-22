@@ -1,0 +1,13 @@
+{
+ "sbs": {
+  "auto-p2": 9,
+  "auto-p4": 9,
+  "most_pads-p2": 22,
+  "most_pads-p4": 8,
+  "none-p2": 9,
+  "none-p4": 9
+ },
+ "best_sbs": "most_pads-p4",
+ "vbs": 8,
+ "gap": 0
+}

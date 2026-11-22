@@ -1,0 +1,14 @@
+{
+ "dataset": "dataset-v3",
+ "source": "bshada/open-schematics (Hugging Face, CC-BY-4.0), streaming harvest",
+ "accept_rule": "ADJUSTED (owner ruling 2026-11-22): input_unconnected == 0 AND shorting_items == 0 AND tracks_crossing == 0. Deviation from the mission text (copper_violations == 0): boards arrive without .kicad_pro, so netclass/thermal context is lost and clearance/thermal/mask counts measure context loss, not routability; shorts and crossings are version-invariant.",
+ "accepted": 139,
+ "per_stratum": {
+  "C": 56,
+  "A": 79,
+  "B": 4
+ },
+ "train": 90,
+ "held_out": 49,
+ "split": "repo-grouped stratified 65/35, seed 20261122, zero repo overlap"
+}

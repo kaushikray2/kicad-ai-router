@@ -1,0 +1,41 @@
+"""Configuration for the AI Router plugin. Persisted as JSON in ~/.config/ai_router/config.json"""
+import json, os
+
+CONFIG_PATH = os.path.expanduser('~/.config/ai_router/config.json')
+
+DEFAULTS = {
+    'endpoint': 'http://127.0.0.1:8080/v1',
+    'model': 'qwen3-coder-30b',
+    'api_key': '',
+    'tracemaker_path': os.path.expanduser('~/Documents/workspace/tracemaker-test-2026-11-12/tracemaker/tracemaker-0.12.1-linux-x86_64/bin/tracemaker'),
+    'kicad_cli': 'kicad-cli',
+    'mode': 'llm',               # 'llm' or 'auto' (deterministic policy)
+    'max_passes': 4,
+    'finish_signal_cap': 8,   # AUTO: max signal finish_leg attempts per run (v1.2.3; was hard-coded 4)
+    'finish_pour_cap': 4,
+    'long_finish_cap': 6,
+    'attempt_select': False,  # v1.7: bridge-aware attempt selection in finish_leg -- DEFAULT OFF: measured 2026-11-22 head-to-head vs v1.6.0 on srambo (6 nets) + Manikin (4 nets): outcomes identical on all 10, 0 closures, probes cost +14-39s where they engage; enable for the attempts_probed diagnostics
+    'ilp_repair_cap': 0,      # AUTO: joint ILP repair per run (v1.5, phase (c) Stage B) -- DEFAULT OFF: measured 2026-11-22, the ILP closes nothing yet (execution/re-bridge binds, not selection); enable per-run to experiment     # AUTO: max large-window hard-A* long_finish attempts per run (v1.4, phase (c) Stage B-0)     # AUTO: max pour-net finish_leg attempts per run (was hard-coded 2)
+    'work': 20000000,
+    'no_tracks_on': 'In1.Cu',
+    'strip_existing': True,
+    'max_tool_calls': 48,
+    'request_timeout_s': 600,
+    'use_backend': False,
+    'backend_url': 'http://127.0.0.1:8731',
+    'backend_token': '',
+}
+
+def load():
+    cfg = dict(DEFAULTS)
+    try:
+        with open(CONFIG_PATH) as f:
+            cfg.update(json.load(f))
+    except Exception:
+        pass
+    return cfg
+
+def save(cfg):
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, 'w') as f:
+        json.dump(cfg, f, indent=2)
