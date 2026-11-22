@@ -1,5 +1,7 @@
 # KiCad AI Router
 
+Developed by [SiliconBrane Inc](https://www.siliconbrane.com).
+
 A KiCad 10 plugin + routing backend that finishes PCB layouts with
 deterministic tools under an exact-geometry gate -- and, optionally, an LLM
 that makes **strategy decisions only, never geometry**.
