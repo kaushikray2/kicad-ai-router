@@ -284,9 +284,12 @@ class Grid:
                     self.vias.append((t.GetNetname(), mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetWidth(pcbnew.F_Cu)) / 2))
             else:
                 li = self.lidx.get(t.GetLayer())
-                if li is not None and (_near(mm(t.GetStart().x), mm(t.GetStart().y)) or _near(mm(t.GetEnd().x), mm(t.GetEnd().y))):
-                    self.segs.append((t.GetNetname(), li, mm(t.GetStart().x), mm(t.GetStart().y),
-                                      mm(t.GetEnd().x), mm(t.GetEnd().y), mm(t.GetWidth()) / 2))
+                sx, sy, ex, ey = mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y)
+                # v1.7.1 (issue #1): bbox intersection, not endpoint-only --
+                # a segment crossing the window with both endpoints outside
+                # the +-2 mm box was silently dropped from every planner.
+                if li is not None and not (max(sx, ex) < _wx0 or min(sx, ex) > _wx1 or max(sy, ey) < _wy0 or min(sy, ey) > _wy1):
+                    self.segs.append((t.GetNetname(), li, sx, sy, ex, ey, mm(t.GetWidth()) / 2))
         # Rule areas (keepouts): the finisher was blind to them and
         # routed legs through the GNSS RF keepout (26 items_not_allowed
         # in one run). Stamp them as hard obstacles in build().
@@ -462,14 +465,15 @@ class Grid:
         simp.append(pts[-1])
         return simp, dist[found]
 
-    def build_owners(self, ignore_nets):
+    def build_owners(self, ignore_nets, target):
         # v1.3.1 phase (b): like build(), but foreign TRACK/VIA copper
-        # is SOFT. Returns (blocked, via_block, owner, via_owner): the
-        # first two are the HARD masks (foreign pads, keepouts, cells
-        # shared by >= 2 foreign nets, and GND -- never a finish
-        # victim); owner[(li, j, i)] / via_owner[(j, i)] name the single
-        # foreign net whose copper alone blocks the cell. Ripping that
-        # net frees the cell -- the basis of the cut-set search.
+        # is SOFT. Returns (blocked, via_block, owner, via_owner, nets):
+        # the first two are the HARD masks (foreign pads -- the target's
+        # own pads exempt, victims' pads included since v1.7.1 --
+        # keepouts, and GND, never a finish victim); owner[(li, j, i)] /
+        # via_owner[(j, i)] are BITMASKS over `nets` naming every foreign
+        # net whose clearance halo touches the cell (v1.7.1, issue #2:
+        # halo-overlap cells are priced per touched net, not hard).
         NX, NY, X0, Y0 = self.NX, self.NY, self.X0, self.Y0
         gx, gy = self.gx, self.gy
         NL = self.nl
@@ -535,14 +539,25 @@ class Grid:
                     if d < INF:
                         for li in layers: hard[li, j, i] = True
                     if d < self.via_r + self.clr_plan: vhard[j, i] = True
+        # v1.7.1 (issue #2): pads stamped with Grid.build semantics --
+        # every net except the target, victims included (a victim's pad
+        # can never be ripped, so a cut-set path through it is a lie).
         for net, layers, cx, cy, kind, a, bb, rot, cr in self.pads:
-            if net not in ignore_nets: stamp_pad(layers, cx, cy, kind, a, bb, rot, cr)
-        tcount = np.zeros((NL, NY, NX), dtype=np.int16)
-        vcount = np.zeros((NY, NX), dtype=np.int16)
+            if net != target: stamp_pad(layers, cx, cy, kind, a, bb, rot, cr)
         owner = {}; via_owner = {}
         nets_here = {r[0] for r in self.segs} | {r[0] for r in self.vias}
-        for n in sorted(nets_here):
-            if n in ignore_nets: continue
+        # v1.7.1 (issue #2): per-cell owner BITMASKS over `nets`. The old
+        # rule (first net owns; cells stamped by >= 2 nets turn HARD)
+        # made every minimum-spaced parallel pair an unpayable wall --
+        # two 0.2 mm tracks at 0.20 gap have overlapping 0.33 mm halos
+        # along the whole corridor, yet ripping ONE of them frees it.
+        # Now every touching net is in the cell's mask and cutset_astar
+        # charges phi for each newly touched net.
+        nets = sorted(n for n in nets_here if n not in ignore_nets and n != 'GND')
+        bit_of = {n: 1 << k for k, n in enumerate(nets)}
+        order = list(nets)
+        if 'GND' in nets_here and 'GND' not in ignore_nets: order.append('GND')
+        for n in order:
             tm = np.zeros((NL, NY, NX), dtype=bool)
             vm = np.zeros((NY, NX), dtype=bool)
             for net, li, x1, y1, x2, y2, hr in self.segs:
@@ -551,15 +566,15 @@ class Grid:
                 if net == n: stamp_disc(tm, vm, range(NL), cx, cy, r)
             if n == 'GND':
                 hard |= tm; vhard |= vm
-                tcount += tm; vcount += vm
                 continue
-            for li, j, i in zip(*np.nonzero(tm & (tcount == 0))): owner[(int(li), int(j), int(i))] = n
-            for j, i in zip(*np.nonzero(vm & (vcount == 0))): via_owner[(int(j), int(i))] = n
-            tcount += tm; vcount += vm
-        hard |= tcount >= 2; vhard |= vcount >= 2
-        return hard, vhard, owner, via_owner
+            bn = bit_of[n]
+            for li, j, i in zip(*np.nonzero(tm)):
+                key = (int(li), int(j), int(i)); owner[key] = owner.get(key, 0) | bn
+            for j, i in zip(*np.nonzero(vm)):
+                key = (int(j), int(i)); via_owner[key] = via_owner.get(key, 0) | bn
+        return hard, vhard, owner, via_owner, nets
 
-    def cutset_astar(self, blocked, via_block, owner, via_owner, start_xy, goal_xy, start_layers, goal_layers, phi, extra_layers=()):
+    def cutset_astar(self, blocked, via_block, owner, via_owner, start_xy, goal_xy, start_layers, goal_layers, phi, *, nets, extra_layers=()):
         # v1.3.1 phase (b), v3 Stage A: ONE A* over the soft grid.
         # Entering a cell owned by foreign net v is allowed at a
         # one-time rip penalty phi[v] (label = (cell, victim bitmask),
@@ -567,8 +582,14 @@ class Grid:
         # the minimum-penalty cut-set -- including jointly-blocking
         # sets of size >= 2 that per-victim probing can never find.
         si = self.cell(*start_xy); gi = self.cell(*goal_xy)
-        nets = sorted({*owner.values(), *via_owner.values()}, key=lambda v: phi.get(v, 100.0))
+        nets = list(nets)
         bit = {v: 1 << k for k, v in enumerate(nets)}
+        def _charge(cb, mask):
+            # phi for every net in cell mask cb not already in the label
+            add = 0.0; new = cb & ~mask
+            while new:
+                lb = new & -new; add += phi.get(nets[lb.bit_length() - 1], 100.0); new ^= lb
+            return add, mask | cb
         def _h(j, i):
             dx, dy = abs(i - gi[0]), abs(j - gi[1])
             return max(dx, dy) + 0.41421356 * min(dx, dy)
@@ -603,21 +624,13 @@ class Grid:
                 nj, ni = j + dj, i + di
                 if not (0 <= nj < self.NY and 0 <= ni < self.NX) or blocked[li, nj, ni]: continue
                 if dj and di and (blocked[li, j + dj, i] or blocked[li, j, i + di]): continue
-                own = owner.get((li, nj, ni))
-                nmask, add = mask, 0.0
-                if own is not None and not (mask & bit[own]):
-                    nmask = mask | bit[own]; add = phi.get(own, 100.0)
+                add, nmask = _charge(owner.get((li, nj, ni), 0), mask)
                 push(dcur + (1.41421356 if dj and di else 1.0) + add, li, nj, ni, nmask, this)
             if not via_block[j, i]:
-                vo = via_owner.get((j, i))
+                vo = via_owner.get((j, i), 0)
                 for ol in allowed:
                     if ol == li or blocked[ol, j, i]: continue
-                    nmask, add = mask, 0.0
-                    if vo is not None and not (mask & bit[vo]):
-                        nmask = mask | bit[vo]; add = phi.get(vo, 100.0)
-                    own = owner.get((ol, j, i))
-                    if own is not None and not (nmask & bit[own]):
-                        nmask = nmask | bit[own]; add += phi.get(own, 100.0)
+                    add, nmask = _charge(vo | owner.get((ol, j, i), 0), mask)
                     push(dcur + 25.0 + add, ol, j, i, nmask, this)
         if found is None: return None, None
         chain = []
@@ -1032,6 +1045,9 @@ def _plan_attempts(board_path, net):
     grid0 = Grid(b0, window, track_w=net_class_width(b0, net, W_TRACK), via_r=net_class_via(b0, net)[0] / 2)
     def route_plan(ignore):
         blocked, via_block = grid0.build(ignore, target=net)
+        _tw = net_class_width(b0, net, W_TRACK)
+        _stamp_edge_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[0] / 2)
+        _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net)
         grid0.free_disc(blocked, via_block, *start_xy, layers=tuple(A[3]))
         grid0.free_disc(blocked, via_block, *goal_xy, layers=tuple(Bp[3]))
         # Stamp inner-track via blocks AFTER freeing the pad discs: a
@@ -1084,10 +1100,10 @@ def _plan_attempts(board_path, net):
     # (measured on srambo: /~{CI} has no single victim; the cut-set
     # found {/~{BE}, /AUX6}; legs with singles never needed it).
     if not singles:
-        hb, hvb, owner, via_owner = grid0.build_owners({net})
+        hb, hvb, owner, via_owner, cs_nets = grid0.build_owners({net}, target=net)
         grid0.free_disc(hb, hvb, *start_xy, layers=tuple(A[3]))
         grid0.free_disc(hb, hvb, *goal_xy, layers=tuple(Bp[3]))
-        _cs_simp, cs_victims = grid0.cutset_astar(hb, hvb, owner, via_owner, start_xy, goal_xy, tuple(A[3]), tuple(Bp[3]), {v: phi_of(v) for v in {*owner.values(), *via_owner.values()}})
+        _cs_simp, cs_victims = grid0.cutset_astar(hb, hvb, owner, via_owner, start_xy, goal_xy, tuple(A[3]), tuple(Bp[3]), {v: phi_of(v) for v in cs_nets}, nets=cs_nets)
         if cs_victims and 1 <= len(cs_victims) <= 4 and tuple(cs_victims) not in attempts:
             attempts.append(tuple(cs_victims))
     attempts += [(c,) for _, c in singles[:3]]
@@ -1208,6 +1224,9 @@ def _plan_path(board_path, net, victims, bump=0.0):
         grid0.inf = net_class_width(b0, net, W_TRACK) / 2 + grid0.clr_plan
     ignore = {net} | set(victims)
     blocked, via_block = grid0.build(ignore, target=net)
+    _tw = net_class_width(b0, net, W_TRACK)
+    _stamp_edge_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[0] / 2)
+    _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net)
     grid0.free_disc(blocked, via_block, *start_xy, layers=tuple(A[3]))
     grid0.free_disc(blocked, via_block, *goal_xy, layers=tuple(Bp[3]))
     _stamp_inner_via_blocks(b0, via_block, grid0, ignore)
