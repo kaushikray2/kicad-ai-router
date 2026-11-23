@@ -2363,7 +2363,10 @@ def cmd_ilp_repair(board_path, out_path, nets):
         for i in sorted(sel, key=lambda k: all_cands[k]['cost']):
             cand = all_cands[i]
             fd, rpath = tempfile.mkstemp(suffix='.json'); os.close(fd)
-            tmp_out = out_path + '.leg.kicad_pcb'
+            # v1.8.2 (#14): unique leg output -- reusing one path made
+            # each leg read AND write the same file, so a failed save
+            # corrupted the accumulated state.
+            tmp_out = '%s.leg-%d-%d.kicad_pcb' % (out_path, rounds, i)
             cmdline = [sys.executable, os.path.abspath(__file__), 'finish_attempt',
                        '--board', cur, '--out', tmp_out, '--net', cand['net'],
                        '--victims', ','.join(cand['victims']), '--result', rpath]

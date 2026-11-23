@@ -3,7 +3,7 @@
 Every tool works on FILES in a work directory; the user's open board is
 never modified. The gate is kicad-cli DRC after a zone refill — the same
 gate used to validate the method by hand."""
-import json, os, re, shutil, subprocess, sys, time
+import hashlib, json, os, re, shutil, subprocess, sys, time
 from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +24,16 @@ FAULT_CLASSES = ('shorting_items', 'clearance', 'items_not_allowed',
 # Copper-layer DRC classes for reporting (excludes silk/text/library
 # noise and unconnected_items, which is tracked separately).
 COPPER_CLASSES = FAULT_CLASSES + ('copper_sliver',)
+
+def _accept_key(g):
+    # v1.8.2 (#16): step acceptance is lexicographic -- a step is kept
+    # only if it is no worse in (copper faults, unconnected items,
+    # split nets), in that order. fault_count alone (pre-v1.8.2) kept
+    # steps that left the board LESS connected (e.g. a refill that
+    # isolates another net's pour fragment), and prune was not gated
+    # at all.
+    return (fault_count(g), int((g or {}).get('unconnected_total') or 0),
+            len((g or {}).get('split_nets') or []))
 
 def fault_count(g):
     c = (g or {}).get('classes') or {}
@@ -50,6 +60,11 @@ class Pipeline:
         pro = os.path.splitext(self.board_path)[0] + '.kicad_pro'
         if os.path.exists(pro):
             shutil.copy(pro, os.path.join(self.workdir, 'input.kicad_pro'))
+        dru = os.path.splitext(self.board_path)[0] + '.kicad_dru'
+        if os.path.exists(dru):
+            shutil.copy(dru, os.path.join(self.workdir, 'input.kicad_dru'))
+        self._gseq = 0   # v1.8.2 (#15): unique gate report names
+        self._oseq = 0   # v1.8.2 (#14): unique step output names
         if cfg.get('strip_existing', True):
             self.base = os.path.join(self.workdir, 'base.kicad_pcb')
             r = self._worker('strip', '--board', src_copy, '--out', self.base)
@@ -66,10 +81,36 @@ class Pipeline:
         with open(os.path.join(self.workdir, 'ledger.json'), 'w') as f:
             json.dump(self.ledger, f, indent=1)
 
+    def _sidecars(self, board_path):
+        # v1.8.2 (#17): the project file and the custom-rules file
+        # travel with every board explicitly. TraceMaker and the
+        # workers' SaveBoard happen to chain the .kicad_pro today,
+        # but the gate and the workers resolve rules from the board's
+        # own basename -- guarantee them instead of relying on the
+        # side effect, and propagate .kicad_dru (never copied before).
+        base = os.path.splitext(board_path)[0]
+        for ext in ('.kicad_pro', '.kicad_dru'):
+            src = os.path.join(self.workdir, 'input' + ext)
+            if os.path.exists(src):
+                dst = base + ext
+                if os.path.abspath(dst) != os.path.abspath(src):
+                    shutil.copy(src, dst)
+
+    def _out(self, name):
+        # v1.8.2 (#14): every step writes a UNIQUE output file, so a
+        # step's input and output paths never coincide and a revert
+        # restores a file that still holds the pre-step board.
+        self._oseq += 1
+        return os.path.join(self.workdir, '%s-%d.kicad_pcb' % (name, self._oseq))
+
     def _worker(self, cmd, *args):
         py = shutil.which('python3') or sys.executable
         self._wseq = getattr(self, '_wseq', 0) + 1
         result_path = os.path.join(self.workdir, 'worker-%s-%d.json' % (cmd, self._wseq))
+        for _i, _a in enumerate(args):
+            if _a == '--board' and _i + 1 < len(args):
+                try: self._sidecars(args[_i + 1])
+                except Exception: pass
         cmdline = [py, WORKER, cmd] + list(args) + ['--result', result_path]
         p = subprocess.run(cmdline, capture_output=True, text=True, timeout=1800)
         if os.path.exists(result_path):
@@ -132,6 +173,7 @@ class Pipeline:
             self._worker('refill', '--board', outp, '--out', outp)  # zone fills must track the new layout before this board is saved/used
         except Exception as e:
             self.log('WARNING: post-route refill failed (%s) — continuing; the gate refills before measuring' % e)
+        self._sidecars(outp)
         text = open(log_path).read()
         unrouted = []
         for m in re.finditer(r'unrouted:\s+(\S+):\s+(\S+)\s+->\s+(\S+)\s+\(([^)]*)\)', text):
@@ -144,10 +186,19 @@ class Pipeline:
         self.log('Pass %d: routed %s/%s connections; %d unrouted' % (self.pass_no, routed[0], routed[1], len(unrouted)))
         return self.last_route
 
-    def tool_gate(self):
-        drc_path = os.path.join(self.workdir, 'gate%d.drc.txt' % (self.pass_no or 0))
-        subprocess.run([self.cfg.get('kicad_cli', 'kicad-cli'), 'pcb', 'drc', '--refill-zones',
-                        '--output', drc_path, self.current], capture_output=True, text=True, timeout=900)
+    def tool_gate(self, board=None):
+        board = board or self.current
+        self._sidecars(board)
+        # v1.8.2 (#15): a UNIQUE report per gate + the return code is
+        # checked. Before, every post-pass gate reused gate<pass>.drc.txt
+        # and a failed kicad-cli silently left the PREVIOUS board's
+        # report to be parsed as this board's gate.
+        self._gseq += 1
+        drc_path = os.path.join(self.workdir, 'gate-%03d.drc.txt' % self._gseq)
+        p = subprocess.run([self.cfg.get('kicad_cli', 'kicad-cli'), 'pcb', 'drc', '--refill-zones',
+                        '--output', drc_path, board], capture_output=True, text=True, timeout=900)
+        if p.returncode != 0 or not os.path.exists(drc_path):
+            raise PipelineError('kicad-cli DRC failed (rc=%s) on %s: %s' % (p.returncode, os.path.basename(board), (p.stderr or '')[-300:]))
         d = open(drc_path).read()
         total = int(re.search(r'Found (\d+) DRC violations', d).group(1))
         unc = int(re.search(r'Found (\d+) unconnected', d).group(1))
@@ -160,7 +211,7 @@ class Pipeline:
                 pour += 1
             else:
                 signal.append({'nets': sorted(set(n for _k, n in items)), 'text': ' '.join(block.split())[:200]})
-        summ = self._worker('summary', '--board', self.current)
+        summ = self._worker('summary', '--board', board)
         # v1.3.2 layer census: any track on a cfg-banned layer is a
         # layer-law fault, counted into fault_count via the gate dict.
         _tbl = summ.get('tracks_by_layer') or {}
@@ -188,36 +239,37 @@ class Pipeline:
         # silently never healed a via-carrying GND fragment.
         split_pour_nets = [n['net'] for n in summ['nets'] if n['components'] > 1 and n['net'] in pour_nets]
         self.last_gate = {'violations_total': total, 'unconnected_total': unc,
-                          'violations_excl_unconnected': total - classes.get('unconnected_items', 0),
+                          'violations_excl_unconnected': total,  # v1.8.2 (#18): the KiCad header total ALREADY excludes unconnected items (proven on a live report); subtracting them again undercounted
+                          'board_sha256': hashlib.sha256(open(board, 'rb').read()).hexdigest(),
                           'copper_violations': sum(classes.get(k, 0) for k in COPPER_CLASSES),
                           'vias': summ.get('vias'), 'wirelength_mm': summ.get('wirelength_mm'),
                           'classes': classes, 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
                           'signal_items': signal, 'split_nets': split_nets,
-                          'pour_nets': pour_nets, 'tracks_by_layer': _tbl, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': self.current}
+                          'pour_nets': pour_nets, 'tracks_by_layer': _tbl, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
         self._record('gate', self.last_gate)
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
         return self.last_gate
 
     def tool_finish_leg(self, net):
-        outp = os.path.join(self.workdir, 'finish-%s.kicad_pcb' % re.sub(r'[^A-Za-z0-9_+-]', '_', net))
+        outp = self._out('finish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
         # The finisher self-verifies connectivity only; its grid planner
         # can still introduce copper faults (a via 0.18 mm from a track
         # it displaced around, a leg through a keepout). Gate-verify:
         # a finish that adds shorts/clearance/keepout faults is worse
         # than the split net it fixed, so revert it.
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
-        fb = fault_count(before)
+        kb = _accept_key(before)
         extra = ['--attempt-select'] if self.cfg.get('attempt_select') else []
         r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *extra)
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
             after = self.tool_gate()
-            if fault_count(after) > fb:
+            if _accept_key(after) > kb:
                 self.current = prev
                 self.last_gate = before
                 r = dict(r); r['status'] = 'reverted_faults'
-                self.log('finish_leg %s reverted: copper/keepout faults %d -> %d' % (net, fb, fault_count(after)))
+                self.log('finish_leg %s reverted: accept key %s -> %s' % (net, kb, _accept_key(after)))
         self._record('finish_leg', r)
         self.log('finish_leg %s: %s' % (net, r.get('status')))
         return r
@@ -227,19 +279,19 @@ class Pipeline:
         # far-apart split signal nets. Same gate-verify discipline as
         # tool_finish_leg: a long leg that adds copper faults is
         # reverted, however good its connectivity looks.
-        outp = os.path.join(self.workdir, 'longfinish-%s.kicad_pcb' % re.sub(r'[^A-Za-z0-9_+-]', '_', net))
+        outp = self._out('longfinish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
-        fb = fault_count(before)
+        kb = _accept_key(before)
         r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
             after = self.tool_gate()
-            if fault_count(after) > fb:
+            if _accept_key(after) > kb:
                 self.current = prev
                 self.last_gate = before
                 r = dict(r); r['status'] = 'reverted_faults'
-                self.log('long_finish %s reverted: copper/keepout faults %d -> %d' % (net, fb, fault_count(after)))
+                self.log('long_finish %s reverted: accept key %s -> %s' % (net, kb, _accept_key(after)))
         self._record('long_finish', r)
         self.log('long_finish %s: %s' % (net, r.get('status')))
         return r
@@ -253,19 +305,19 @@ class Pipeline:
         # whole stage reverts.
         nets = [n for n in (nets or []) if n]
         if not nets: return {'status': 'no_nets'}
-        outp = os.path.join(self.workdir, 'ilprepair.kicad_pcb')
+        outp = self._out('ilprepair')
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
-        fb = fault_count(before)
+        kb = _accept_key(before)
         r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
         if r.get('routed') and os.path.exists(outp):
             prev = self.current
             self.current = outp
             after = self.tool_gate()
-            if fault_count(after) > fb:
+            if _accept_key(after) > kb:
                 self.current = prev
                 self.last_gate = before
                 r = dict(r); r['status'] = 'reverted_faults'
-                self.log('ilp_repair reverted: copper/keepout faults %d -> %d' % (fb, fault_count(after)))
+                self.log('ilp_repair reverted: accept key %s -> %s' % (kb, _accept_key(after)))
         self._record('ilp_repair', r)
         self.log('ilp_repair %s: routed %s (solver %s)' % (','.join(nets), r.get('routed'), r.get('solver')))
         return r
@@ -281,8 +333,8 @@ class Pipeline:
         agg = {'status': 'ok', 'bridges': 0, 'healed': [], 'failed': [], 'per_net': {}}
         cur_gate = before
         for net in cands:
-            outp = os.path.join(self.workdir, 'healed.kicad_pcb')
-            fb = fault_count(cur_gate)
+            outp = self._out('healed')
+            kb = _accept_key(cur_gate)
             args = ['--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu'))]
             if net: args += ['--nets', net]
             r = self._worker('heal', *args)
@@ -291,12 +343,12 @@ class Pipeline:
                 prev = self.current
                 self.current = outp
                 after = self.tool_gate()
-                if fault_count(after) > fb:
+                if _accept_key(after) > kb:
                     self.current = prev
                     self.last_gate = cur_gate
                     r = dict(r); r['status'] = 'reverted_faults'
                     agg['per_net'][net or '*'] = 'reverted_faults'
-                    self.log('heal[%s] reverted: copper/keepout faults %d -> %d' % (net, fb, fault_count(after)))
+                    self.log('heal[%s] reverted: accept key %s -> %s' % (net, kb, _accept_key(after)))
                 else:
                     cur_gate = after
                     agg['bridges'] += r.get('bridges', 0)
@@ -311,27 +363,39 @@ class Pipeline:
         # v1.3.2: gate-verified like finish/heal -- stitch used to
         # accept its output board unconditionally.
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
-        fb = fault_count(before)
-        outp = os.path.join(self.workdir, 'stitched.kicad_pcb')
+        kb = _accept_key(before)
+        outp = self._out('stitched')
         r = self._worker('stitch', '--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
         if os.path.exists(outp):
             prev = self.current
             self.current = outp
             after = self.tool_gate()
-            if fault_count(after) > fb:
+            if _accept_key(after) > kb:
                 self.current = prev
                 self.last_gate = before
                 r = dict(r); r['status'] = 'reverted_faults'
-                self.log('stitch reverted: copper/keepout faults %d -> %d' % (fb, fault_count(after)))
+                self.log('stitch reverted: accept key %s -> %s' % (kb, _accept_key(after)))
         self._record('stitch', r)
         self.log('stitch: %d clusters stitched, %d failed' % (len(r.get('stitched', [])), len(r.get('failed', []))))
         return r
 
     def tool_prune(self):
-        outp = os.path.join(self.workdir, 'pruned.kicad_pcb')
+        # v1.8.2 (#16): prune is gated like every other step -- before
+        # it accepted its output unconditionally, so a prune that
+        # disconnected live copper was invisible to the run.
+        before = self.last_gate if self.last_gate is not None else self.tool_gate()
+        kb = _accept_key(before)
+        outp = self._out('pruned')
         r = self._worker('prune', '--board', self.current, '--out', outp)
         if r.get('pruned') and os.path.exists(outp):
+            prev = self.current
             self.current = outp
+            after = self.tool_gate()
+            if _accept_key(after) > kb:
+                self.current = prev
+                self.last_gate = before
+                r = dict(r); r['status'] = 'reverted_worse'
+                self.log('prune reverted: accept key %s -> %s' % (kb, _accept_key(after)))
         self._record('prune', r)
         self.log('prune: %s dead copper items removed' % r.get('pruned'))
         return r
@@ -342,5 +406,6 @@ class Pipeline:
         pro = os.path.join(self.workdir, 'input.kicad_pro')
         if os.path.exists(pro):
             shutil.copy(pro, os.path.join(self.workdir, 'final.kicad_pro'))
+        self._sidecars(final)  # v1.8.2 (#17): also final.kicad_dru when present
         self._record('finalize', {'final': final})
         return final

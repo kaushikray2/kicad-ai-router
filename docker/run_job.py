@@ -55,6 +55,20 @@ def main():
                'first_nets_policy': rt.get('first_nets_policy', 'auto')}
         sys.path.insert(0, find_plugin())
         sys.path.insert(0, os.path.join(find_plugin(), 'ai_router'))
+        # v1.8.2 (#20): forward any other key the plugin's config
+        # schema knows -- the hardcoded cfg list above silently
+        # dropped first_nets_policy/layer_law_policy for the whole
+        # dataset-v2/v3 era (issue #8's root cause). Server-owned
+        # keys never come from config/job data. The effective merged
+        # config is recorded in the job status for audit.
+        try:
+            import config as _cfgmod
+            _owned = {'endpoint', 'model', 'api_key', 'tracemaker_path', 'kicad_cli'}
+            for _k in _cfgmod.DEFAULTS:
+                if _k not in cfg and _k not in _owned and _k in rt: cfg[_k] = rt[_k]
+        except Exception:
+            pass
+        write_status(cfg_effective={k: v for k, v in cfg.items() if k != 'api_key'})
         from pipeline import Pipeline
         import orchestrator
         def log(m): print('[job] ' + str(m), flush=True)
@@ -63,6 +77,10 @@ def main():
         final = res.get('final_board')
         if final and os.path.exists(final):
             import shutil; shutil.copy(final, os.path.join(jd, 'result.kicad_pcb'))
+            # v1.8.2 (#17): the result's project sidecars travel with it
+            for _ext in ('.kicad_pro', '.kicad_dru'):
+                _sc = os.path.splitext(final)[0] + _ext
+                if os.path.isfile(_sc): shutil.copy(_sc, os.path.join(jd, 'result' + _ext))
             # v1.8.1 (#8): serve the WINNING pipeline's ledger -- after a
             # layer-law escalation two workdirs exist and the later one
             # is not necessarily the variant that was kept.

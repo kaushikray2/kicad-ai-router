@@ -78,8 +78,19 @@ class RouterDialog(wx.Dialog):
         self.page_btn.Bind(wx.EVT_BUTTON, self.on_page)
 
     def log(self, msg):
+        # Worker-thread logging: raising Cancelled here IS the
+        # cooperative cancellation mechanism (pipeline/orchestrator
+        # call this from the worker thread at step boundaries).
         if self.cancel_event.is_set():
             raise Cancelled()
+        wx.CallAfter(self.log_ctrl.AppendText, str(msg) + '\n')
+
+    def _log_ui(self, msg):
+        # v1.8.2 (#18): UI-thread / exception-handler logging that
+        # never raises. Before, on_cancel set the event and then
+        # called log() -- which raised Cancelled inside the wx
+        # handler -- and the worker's except-Cancelled handler called
+        # log() again and died on the second raise.
         wx.CallAfter(self.log_ctrl.AppendText, str(msg) + '\n')
 
     def collect_cfg(self):
@@ -121,9 +132,9 @@ class RouterDialog(wx.Dialog):
                     g.get('unconnected_total'), g.get('pour_items'), g.get('split_nets'), g.get('violations_total')))
                 wx.CallAfter(self.open_btn.Enable)
             except Cancelled:
-                self.log('Cancelled by user (takes effect at step boundaries).')
+                self._log_ui('Cancelled by user (takes effect at step boundaries).')
             except Exception as e:
-                self.log('ERROR: %s' % e)
+                self._log_ui('ERROR: %s' % e)
             finally:
                 wx.CallAfter(self.run_btn.Enable)
                 wx.CallAfter(self.cancel_btn.Disable)
@@ -132,7 +143,7 @@ class RouterDialog(wx.Dialog):
 
     def on_cancel(self, _evt):
         self.cancel_event.set()
-        self.log('Cancel requested...')
+        self._log_ui('Cancel requested...')
 
     def on_open(self, _evt):
         final = (self.result or {}).get('final_board')
@@ -174,6 +185,14 @@ class RouterDialog(wx.Dialog):
                 dest = os.path.join(os.path.dirname(os.path.abspath(board)),
                                     os.path.splitext(os.path.basename(board))[0] + '-backend.kicad_pcb')
                 backend_client.download_result(url, tok, jid, dest)
+                # v1.8.2 (#17): fetch the project sidecars next to the
+                # result board, so opening it keeps the design rules.
+                for kind, ext in (('result.pro', '.kicad_pro'), ('result.dru', '.kicad_dru')):
+                    try:
+                        if backend_client.download_sidecar(url, tok, jid, kind, os.path.splitext(dest)[0] + ext):
+                            self.log('Result sidecar downloaded: %s' % (os.path.splitext(dest)[0] + ext))
+                    except Exception:
+                        pass
                 self.log('Result downloaded to %s' % dest)
                 return {'final_board': dest, 'gate': job.get('gate') or {}}
             if st in ('error', 'cancelled', 'interrupted'):

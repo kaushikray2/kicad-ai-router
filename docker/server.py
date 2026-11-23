@@ -8,7 +8,7 @@ import tarfile, threading, time, urllib.request, uuid, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-BACKEND_VERSION = '1.8.1'
+BACKEND_VERSION = '1.8.2'
 SCHEMA_VERSION = 1
 DATA = os.environ.get('AIR_DATA_DIR', '/data')
 PORT = int(os.environ.get('AIR_PORT', '8731'))
@@ -92,7 +92,7 @@ def tm_install_from_archive(archive_path, sha):
         if zipfile.is_zipfile(archive_path):
             with zipfile.ZipFile(archive_path) as z: z.extractall(staging)
         else:
-            with tarfile.open(archive_path) as t: t.extractall(staging)
+            with tarfile.open(archive_path) as t: t.extractall(staging, filter='data')  # v1.8.2 (#19): no ../ or link escapes
         exe = None
         for dirpath, _dirs, files in os.walk(staging):
             if 'tracemaker' in files and os.path.basename(dirpath) == 'bin':
@@ -108,6 +108,22 @@ def tm_install_from_archive(archive_path, sha):
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
+def tm_archive_version(archive_path):
+    # v1.8.2 (#19): the version from the archive LAYOUT (the release
+    # tarballs unpack to tracemaker-<x.y.z>-<platform>/bin/tracemaker),
+    # readable WITHOUT executing anything in the archive.
+    try:
+        if zipfile.is_zipfile(archive_path):
+            with zipfile.ZipFile(archive_path) as z: names = z.namelist()
+        else:
+            with tarfile.open(archive_path) as t: names = t.getnames()
+    except Exception:
+        return None
+    for n in names:
+        m = re.search(r'(\d+\.\d+\.\d+)', n)
+        if m and 'tracemaker' in n: return m.group(1)
+    return None
+
 def tm_update(url):
     if not url: raise RuntimeError('no TraceMaker URL configured')
     tmp = os.path.join(tm_root(), '.download-%s' % uuid.uuid4().hex[:8])
@@ -121,6 +137,17 @@ def tm_update(url):
             shutil.copyfileobj(r, f)
     try:
         sha = hashlib.sha256(open(tmp, 'rb').read()).hexdigest()
+        # v1.8.2 (#19): the TOFU comparison happens BEFORE the archive
+        # is extracted, executed or installed. Before, tm_install ran
+        # the downloaded binary (version smoke) and replaced the
+        # trusted install first, and the mismatch error came after --
+        # with no rollback. First use of a NEW version remains TOFU
+        # by definition; a KNOWN version with a different hash is
+        # refused here, untouched.
+        ver_hint = tm_archive_version(tmp)
+        known0 = (load_config().get('tracemaker') or {}).get('sha256') or {}
+        if ver_hint and ver_hint in known0 and known0[ver_hint] != sha:
+            raise RuntimeError('TOFU mismatch for %s: recorded %s, downloaded %s -- refused before install' % (ver_hint, known0[ver_hint][:12], sha[:12]))
         version = tm_install_from_archive(tmp, sha)
         with _lock:
             cfg = load_config()
@@ -195,7 +222,7 @@ def _worker_loop():
         _prune_retention()
         _job_queue.task_done()
 
-def submit_job(board_bytes, pro_bytes, board_name, overrides, kind='route'):
+def submit_job(board_bytes, pro_bytes, board_name, overrides, kind='route', dru_bytes=None):
     digest = hashlib.sha256(board_bytes + json.dumps(overrides or {}, sort_keys=True).encode()).hexdigest()
     for rec in _jobs.values():
         if rec.get('digest') == digest and rec.get('status') in ('queued', 'running') and rec.get('kind') == kind:
@@ -205,6 +232,8 @@ def submit_job(board_bytes, pro_bytes, board_name, overrides, kind='route'):
     with open(os.path.join(jd, 'input.kicad_pcb'), 'wb') as f: f.write(board_bytes)
     if pro_bytes:
         with open(os.path.join(jd, 'input.kicad_pro'), 'wb') as f: f.write(pro_bytes)
+    if dru_bytes:
+        with open(os.path.join(jd, 'input.kicad_dru'), 'wb') as f: f.write(dru_bytes)
     rec = {'id': jid, 'kind': kind, 'status': 'queued', 'board_name': board_name,
            'created': time.strftime('%Y-%m-%d %H:%M:%S'), 'digest': digest,
            'overrides': overrides or {}}
@@ -335,6 +364,10 @@ class Handler(BaseHTTPRequestHandler):
                     rp = os.path.join(job_dir(jid), 'result.kicad_pcb')
                     if not os.path.exists(rp): self._send(404, {'error': 'no result'}); return
                     self._send(200, open(rp, 'rb').read(), 'application/octet-stream'); return
+                if len(parts) > 4 and parts[4] in ('result.pro', 'result.dru'):
+                    rp = os.path.join(job_dir(jid), 'result.kicad_pro' if parts[4] == 'result.pro' else 'result.kicad_dru')
+                    if not os.path.exists(rp): self._send(404, {'error': 'no result sidecar'}); return
+                    self._send(200, open(rp, 'rb').read(), 'application/octet-stream'); return
                 out = dict(rec)
                 led = os.path.join(job_dir(jid))
                 _root_led = os.path.join(led, 'ledger.json')
@@ -397,7 +430,8 @@ class Handler(BaseHTTPRequestHandler):
                 board = base64.b64decode(req.get('board_b64') or '')
                 if not board: self._send(400, {'error': 'board_b64 required'}); return
                 pro = base64.b64decode(req['pro_b64']) if req.get('pro_b64') else None
-                jid, dup = submit_job(board, pro, req.get('board_name', 'board.kicad_pcb'), req.get('overrides') or {})
+                dru = base64.b64decode(req['dru_b64']) if req.get('dru_b64') else None
+                jid, dup = submit_job(board, pro, req.get('board_name', 'board.kicad_pcb'), req.get('overrides') or {}, dru_bytes=dru)
                 self._send(200, {'job_id': jid, 'duplicate': dup}); return
             if path.startswith('/api/runs/') and path.endswith('/cancel'):
                 jid = path.split('/')[3]; rec = _jobs.get(jid)

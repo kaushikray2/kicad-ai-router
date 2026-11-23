@@ -116,12 +116,13 @@ async function stLoad(){
 }
 async function stRun(){ const r=await api('/api/selftest/run',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); msg('stmsg', r.ok?'Self-test queued — refresh in a bit.':'Failed to queue', r.ok); }
 async function stRecord(){ const r=await api('/api/selftest/record',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); msg('stmsg', r.ok?'Baselines recorded from the latest results.':'Record failed', r.ok); stLoad(); }
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 async function jobsLoad(){
   const rows = await (await api('/api/runs')).json();
   if(!rows.length){ document.getElementById('jobs').textContent='No jobs yet.'; return; }
   let html='<table><tr><th>Board</th><th>Kind</th><th>Status</th><th>Gate</th><th></th></tr>';
   for(const r of rows.slice(0,12)){ const g=r.gate?r.gate.unconnected_total+' unc':'—';
-    html+='<tr><td>'+r.board_name+'</td><td>'+r.kind+'</td><td>'+r.status+'</td><td>'+g+'</td><td>'+(r.status==='done'?'<a href="/api/runs/'+r.id+'/result">result</a> ':'')+((r.status==='queued'||r.status==='running')?'<a href="#" onclick="jobCancel(\''+r.id+'\');return false">cancel</a>':'')+'</td></tr>'; }
+    html+='<tr><td>'+esc(r.board_name)+'</td><td>'+esc(r.kind)+'</td><td>'+esc(r.status)+'</td><td>'+g+'</td><td>'+(r.status==='done'?'<a href="/api/runs/'+r.id+'/result">result</a> ':'')+((r.status==='queued'||r.status==='running')?'<a href="#" onclick="jobCancel(\''+r.id+'\');return false">cancel</a>':'')+'</td></tr>'; }
   document.getElementById('jobs').innerHTML=html+'</table>';
 }
 async function jobCancel(id){ await api('/api/runs/'+id+'/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); jobsLoad(); }

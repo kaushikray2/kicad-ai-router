@@ -126,7 +126,7 @@ def run_llm(cfg, pipe, log):
             messages.append({'role': 'tool', 'tool_call_id': call['id'] or 'x', 'content': payload})
         if finished: break
     final = pipe.finalize()
-    gate = pipe.tool_gate()
+    gate = pipe.tool_gate(final)  # v1.8.2 (#18): report the gate of the DELIVERED file
     return {'final_board': final, 'gate': gate}
 
 def default_first_nets(pipe):
@@ -146,8 +146,16 @@ def default_first_nets(pipe):
             seen.add(p); out.append(p)
     return out[:6]
 
+def _unc_key(g):
+    # v1.8.2 (#13): None-safe -- 'unconnected_total or 9999' mapped a
+    # fully connected board (0) to 9999, the WORST key, so the pass
+    # loop restored worse passes over perfect ones and a layer-law
+    # escalation that connected everything lost to the split variant.
+    u = (g or {}).get('unconnected_total')
+    return 10 ** 9 if u is None else u
+
 def _final_key(g):
-    return (g.get('unconnected_total') or 9999, len(g.get('split_nets') or []), fault_count(g))
+    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g))
 
 def run_auto(cfg, pipe, log):
     # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54
@@ -212,7 +220,7 @@ def _run_auto_once(cfg, pipe, log):
             break
         gate = pipe.tool_gate()
         failing = list(gate.get('split_nets') or [])
-        key = (gate.get('unconnected_total') or 9999, len(failing), fault_count(gate))
+        key = (_unc_key(gate), len(failing), fault_count(gate))
         if best is None or key < best[0]: best = (key, pipe.current)
         if not failing:
             log('All signal nets connected after pass %d' % pno)
@@ -306,5 +314,6 @@ def _run_auto_once(cfg, pipe, log):
         gate = pipe.tool_gate()
         log('post-prune pour pass done (key after: %s)' % (_final_key(gate),))
     final = pipe.finalize()
+    gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))
     return {'final_board': final, 'gate': gate}
