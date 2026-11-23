@@ -9,6 +9,10 @@ try:
     from .llm_client import LLMClient, LLMError
 except ImportError:
     from llm_client import LLMClient, LLMError
+try:
+    from .pipeline import Pipeline, fault_count
+except ImportError:
+    from pipeline import Pipeline, fault_count
 
 PLAYBOOK = """You are the strategy layer of a PCB routing pipeline. Read the
 board's actual stackup from board_summary (copper_layers, pour_nets): on the
@@ -142,7 +146,43 @@ def default_first_nets(pipe):
             seen.add(p); out.append(p)
     return out[:6]
 
+def _final_key(g):
+    return (g.get('unconnected_total') or 9999, len(g.get('split_nets') or []), fault_count(g))
+
 def run_auto(cfg, pipe, log):
+    # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54
+    # multilayer boards -- the 44-connection gap is layer-law-driven).
+    # On a >=4-layer board with an In2.Cu pour, run Variant B (In2
+    # banned) first: B keeps the plane solid and wins or ties on most
+    # boards. Escalate to Variant A only when B leaves split SIGNAL
+    # nets, and keep the better final by the run key. Simulated on the
+    # grid: policy total 309 vs A-fixed 334 / B-fixed 340 (oracle 290),
+    # escalating on 21 of 54 boards. An explicit non-default law or
+    # layer_law_policy='off' disables it.
+    if cfg.get('layer_law_policy', 'auto') == 'auto' and (cfg.get('no_tracks_on') or 'In1.Cu') == 'In1.Cu':
+        summ = pipe.tool_board_summary()
+        layers = summ.get('copper_layers') or []
+        pour_layers = summ.get('pour_layers') or {}
+        if len(layers) >= 4 and any('In2.Cu' in (ls or []) for ls in pour_layers.values()):
+            orig = cfg.get('no_tracks_on')
+            cfg['no_tracks_on'] = 'In1.Cu,In2.Cu'
+            log('Layer-law policy: Variant B (In2 banned) first on this %d-layer pour board' % len(layers))
+            res_b = _run_auto_once(cfg, pipe, log)
+            if orig is None: cfg.pop('no_tracks_on', None)
+            else: cfg['no_tracks_on'] = orig
+            if not (res_b['gate'].get('split_signal_nets') or []):
+                log('Layer-law policy: B left no split signal nets -- keeping B')
+                return res_b
+            log('Layer-law policy: B left split signal nets %s -- escalating to Variant A' % res_b['gate'].get('split_signal_nets'))
+            import time as _time; _time.sleep(1.1)  # pipe2 needs a distinct workdir stamp
+            cfg2 = dict(cfg); cfg2['no_tracks_on'] = 'In1.Cu'
+            res_a = _run_auto_once(cfg2, Pipeline(cfg2, pipe.board_path, log), log)
+            ka, kb = _final_key(res_a['gate']), _final_key(res_b['gate'])
+            log('Layer-law policy: A key %s vs B key %s -- keeping %s' % (ka, kb, 'A' if ka < kb else 'B'))
+            return res_a if ka < kb else res_b
+    return _run_auto_once(cfg, pipe, log)
+
+def _run_auto_once(cfg, pipe, log):
     log('AUTO policy: base gate + summary + scorecard')
     pipe.tool_gate()  # base gate: input-board DRC, so later gates read as deltas
     pipe.tool_board_summary()
@@ -172,7 +212,7 @@ def run_auto(cfg, pipe, log):
             break
         gate = pipe.tool_gate()
         failing = list(gate.get('split_nets') or [])
-        key = (gate.get('unconnected_total') or 9999, len(failing))
+        key = (gate.get('unconnected_total') or 9999, len(failing), fault_count(gate))
         if best is None or key < best[0]: best = (key, pipe.current)
         if not failing:
             log('All signal nets connected after pass %d' % pno)
@@ -249,6 +289,22 @@ def run_auto(cfg, pipe, log):
     try: pipe.tool_prune()
     except Exception as e: log('prune failed: %s' % e)
     gate = pipe.tool_gate()
+    # v1.8 (#2): one more stitch+heal pass AFTER prune. Measured on the
+    # 22 dataset-v3 pour-only finals: a fresh pour pass on the finished
+    # board closes boards the mid-sequence pass cannot -- prune removes
+    # dead copper that blocked bridges, and the finish stages change
+    # the board after the first heal ran. Across the 22 boards the
+    # upgraded heal alone took unconnected items 83 -> 58 (three full
+    # closures even with the stock heal). Both tools are internally
+    # gate-verified, like every other stage here.
+    if (gate.get('pour_items') or 0) > 0 or (gate.get('split_pour_nets') or []):
+        log('post-prune pour pass (key before: %s)' % (_final_key(gate),))
+        try: pipe.tool_stitch()
+        except Exception as e: log('post-prune stitch failed: %s' % e)
+        try: pipe.tool_heal()
+        except Exception as e: log('post-prune heal failed: %s' % e)
+        gate = pipe.tool_gate()
+        log('post-prune pour pass done (key after: %s)' % (_final_key(gate),))
     final = pipe.finalize()
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))
     return {'final_board': final, 'gate': gate}

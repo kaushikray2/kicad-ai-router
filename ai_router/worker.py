@@ -763,6 +763,42 @@ def _stamp_inner_via_blocks(b, via_block, grid, ignore):
             for i in range(i0, i1 + 1):
                 if seg_pt(grid.gx[i], grid.gy[j], x1, y1, x2, y2) < rad: via_block[j, i] = True
 
+def _bridge_candidates(b, conn, net):
+    # v1.8 (#1): bridge endpoints from _comp_points -- pads + vias +
+    # surviving track endpoints per fragment -- not pads alone. A
+    # ripped victim's severed track ends are usually its closest
+    # cross-fragment copper; pad-only pairs forced the search to
+    # start from the farthest points on the board. Returns up to 6
+    # closest cross-cluster point pairs plus the largest-cluster
+    # pair, as (S, Gp) tuples shaped like pad tuples (name, x, y,
+    # layers) with name=None. Shared by _bridge_plan and
+    # _finish_attempt so the probe and production stay in step.
+    _pads, _cof, pts = _comp_points(b, conn, net)
+    ends = []
+    for ci, plist in pts.items():
+        for (x, y, layers) in plist:
+            ends.append((ci, (None, x, y, layers)))
+    ranked = []
+    for (ci1, sp) in ends:
+        for (ci2, gp) in ends:
+            if ci1 == ci2: continue
+            ranked.append((math.hypot(sp[1] - gp[1], sp[2] - gp[2]), sp, gp))
+    ranked.sort(key=lambda t: t[0])
+    cand = []; seenp = set()
+    for (d, sp, gp) in ranked:
+        key = (round(sp[1], 2), round(sp[2], 2), round(gp[1], 2), round(gp[2], 2))
+        if key in seenp: continue
+        seenp.add(key); cand.append((sp, gp))
+        if len(cand) >= 6: break
+    sizes = {ci: len(plist) for ci, plist in pts.items()}
+    big = sorted(sizes, key=lambda k: -sizes[k])[:2]
+    if len(big) == 2:
+        sp = (None, pts[big[0]][0][0], pts[big[0]][0][1], pts[big[0]][0][2])
+        gp = (None, pts[big[1]][0][0], pts[big[1]][0][1], pts[big[1]][0][2])
+        key = (round(sp[1], 2), round(sp[2], 2), round(gp[1], 2), round(gp[2], 2))
+        if key not in seenp: cand.append((sp, gp))
+    return cand
+
 def _bridge_plan(b, net, before, margins=(12, 20)):
     # Plan-only twin of the v1.6 bridge loop inside _finish_attempt:
     # same candidate pairs, window escalation, bump ladder and
@@ -772,28 +808,8 @@ def _bridge_plan(b, net, before, margins=(12, 20)):
     conn = b.GetConnectivity(); conn.Build(b)
     pads, clusters = _pad_clusters(b, conn, net)
     if len(clusters) <= before: return ([], [])
-    cof = _comp_of(pads, clusters)
-    ranked = []
-    for a in pads:
-        for c in pads:
-            if cof.get(a[0]) == cof.get(c[0]): continue
-            ranked.append((math.hypot(a[1] - c[1], a[2] - c[2]), a, c))
-    if not ranked: return None
-    ranked.sort(key=lambda t: t[0])
-    cand = []; seenp = set()
-    for (d, a, c) in ranked:
-        key = tuple(sorted((a[0], c[0])))
-        if key in seenp: continue
-        seenp.add(key); cand.append((a, c))
-        if len(cand) >= 6: break
-    sizes = {}
-    for nm, ci in cof.items(): sizes[ci] = sizes.get(ci, 0) + 1
-    big = sorted(sizes, key=lambda k: -sizes[k])[:2]
-    if len(big) == 2:
-        pa = next(p for p in pads if cof.get(p[0]) == big[0])
-        pc = next(p for p in pads if cof.get(p[0]) == big[1])
-        if tuple(sorted((pa[0], pc[0]))) not in seenp:
-            cand.append((pa, pc))
+    cand = _bridge_candidates(b, conn, net)
+    if not cand: return None
     bw = net_class_width(b, net, W_TRACK); vd, vdr = net_class_via(b, net)
     for (S, Gp) in cand:
         for margin in margins:
@@ -964,27 +980,7 @@ def _finish_attempt(board_path, out_path, net, A, Bp, simp, victims, window):
             conn.Build(b)
             vpads, vclusters = _pad_clusters(b, conn, v)
             if len(vclusters) <= victim_before[v]: break
-            cof = _comp_of(vpads, vclusters)
-            ranked = []
-            for a in vpads:
-                for c in vpads:
-                    if cof.get(a[0]) == cof.get(c[0]): continue
-                    ranked.append((math.hypot(a[1] - c[1], a[2] - c[2]), a, c))
-            ranked.sort(key=lambda t: t[0])
-            cand = []; seenp = set()
-            for (d, a, c) in ranked:
-                key = tuple(sorted((a[0], c[0])))
-                if key in seenp: continue
-                seenp.add(key); cand.append((a, c))
-                if len(cand) >= 6: break
-            sizes = {}
-            for nm, ci in cof.items(): sizes[ci] = sizes.get(ci, 0) + 1
-            big = sorted(sizes, key=lambda k: -sizes[k])[:2]
-            if len(big) == 2:
-                pa = next(p for p in vpads if cof.get(p[0]) == big[0])
-                pc = next(p for p in vpads if cof.get(p[0]) == big[1])
-                if tuple(sorted((pa[0], pc[0]))) not in seenp:
-                    cand.append((pa, pc))
+            cand = _bridge_candidates(b, conn, v)
             if not cand: break
             bridged = False
             for (S, Gp) in cand:
@@ -1577,15 +1573,34 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
     if n_before <= 1: return {'status': 'already_connected', 'net': net}
     bw = max(HEAL_W, net_class_width(b, net, HEAL_W))
     window = (min(fx, dx) - 6, max(fx, dx) + 6, min(fy, dy) - 6, max(fy, dy) + 6)
-    grid = Grid(b, window, track_w=bw, via_r=net_class_via(b, net)[0] / 2)
-    blocked, via_block = grid.build({net}, target=net)
-    grid.free_disc(blocked, via_block, fx, fy, layers=fl)
-    grid.free_disc(blocked, via_block, dx, dy, layers=dl)
-    _stamp_inner_via_blocks(b, via_block, grid, {net})
-    # v1.3.2: this net's own plane layers are legal travel for its
-    # bridge; every other banned layer stays banned.
-    extra = {grid.lidx[lay] for z in b.Zones() if z.GetNetname() == net for lay in z.GetLayerSet().Seq() if lay in grid.lidx and lay not in (pcbnew.F_Cu, pcbnew.B_Cu)}
-    simp, _c = grid.astar(blocked, via_block, (fx, fy), (dx, dy), fl, dl, extra_layers=extra)
+    _vd0, _vdr0 = net_class_via(b, net)
+    simp = None; grid = None; extra = set()
+    for bump in (0.0, 0.05, 0.10):
+        # v1.8 (#2b): clearance-bump ladder + edge/hole keepbacks,
+        # ported from the finish planner -- heal was the last planner
+        # still on one fixed clearance with no keepbacks, so bridges
+        # that only exist in the graze band, and plans the gate would
+        # reject at an edge or hole, were invisible to it. A bump's
+        # plan is accepted only if the exact checker passes it.
+        g = Grid(b, window, track_w=bw, via_r=_vd0 / 2)
+        if bump:
+            g.clr_plan = board_clearance(b) + 0.03 + bump
+            g.inf = bw / 2 + g.clr_plan
+        blocked, via_block = g.build({net}, target=net)
+        g.free_disc(blocked, via_block, fx, fy, layers=fl)
+        g.free_disc(blocked, via_block, dx, dy, layers=dl)
+        _stamp_inner_via_blocks(b, via_block, g, {net})
+        _stamp_edge_keepback(b, g, blocked, via_block, bw, _vd0 / 2)
+        _stamp_hole_keepback(b, g, blocked, via_block, bw, _vdr0 / 2, net=net)
+        # v1.3.2: this net's own plane layers are legal travel for
+        # its bridge; every other banned layer stays banned.
+        extra = {g.lidx[lay] for z in b.Zones() if z.GetNetname() == net for lay in z.GetLayerSet().Seq() if lay in g.lidx and lay not in (pcbnew.F_Cu, pcbnew.B_Cu)}
+        s2, _c = g.astar(blocked, via_block, (fx, fy), (dx, dy), fl, dl, extra_layers=extra)
+        if s2 is None: continue
+        segs2, vias2 = path_segs_vias(s2)
+        if not _new_items_clean(b, net, segs2, vias2, g.keepouts, w=bw): continue
+        simp, grid = s2, g
+        break
     hunt_via = None
     if simp is None:
         # Via hunt: the fragment's pads can sit in a copper pocket on
@@ -1604,6 +1619,8 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
         grid.free_disc(blocked, via_block, fx, fy, layers=fl)
         grid.free_disc(blocked, via_block, dx, dy, layers=dl)
         _stamp_inner_via_blocks(b, via_block, grid, {net})
+        _stamp_edge_keepback(b, grid, blocked, via_block, bw, _vd0 / 2)
+        _stamp_hole_keepback(b, grid, blocked, via_block, bw, _vdr0 / 2, net=net)
         hunt_via, simp = _via_hunt(b, net, (fx, fy), grid, blocked, via_block, (dx, dy), dl, extra_layers=extra)
         if simp is None: return {'status': 'no_path', 'net': net}
     segs, vias = path_segs_vias(simp)
@@ -1863,18 +1880,25 @@ def _bridge_island(b, conn, netname, pad):
     if simp is None: return False
     segs, vias = path_segs_vias(simp)
     length = sum(math.hypot(x2 - x1, y2 - y1) for (_l, x1, y1, x2, y2) in segs)
-    if length > 8.0 or vias: return False
+    if length > 8.0 or len(vias) > 2: return False  # v1.8 (#2): <=2 vias may hop a trace ring
     # v1.3 Y3: exact-check the bridge before committing it -- the old
     # code verified only connectivity after the fact, so a bridge that
     # connected AND clipped foreign copper stayed in the board.
     if not _new_items_clean(b, netname, segs, vias, grid.keepouts, w=draw_w): return False
     nets = b.GetNetsByName()
     added = []
+    stack = copper_stack(b)
     for (_l, x1, y1, x2, y2) in segs:
         t = pcbnew.PCB_TRACK(b)
         t.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1))); t.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
-        t.SetWidth(nm(draw_w)); t.SetLayer(layer); t.SetNetCode(nets[netname].GetNetCode())
+        t.SetWidth(nm(draw_w)); t.SetLayer(stack[_l]); t.SetNetCode(nets[netname].GetNetCode())
         b.Add(t); added.append(t)
+    _vd, _vdr = net_class_via(b, netname)
+    for (x, y) in vias:
+        v = pcbnew.PCB_VIA(b)
+        v.SetPosition(pcbnew.VECTOR2I(nm(x), nm(y)))
+        v.SetWidth(nm(_vd)); v.SetDrill(nm(_vdr))
+        v.SetNetCode(nets[netname].GetNetCode()); b.Add(v); added.append(v)
     refill(b); conn.Build(b)
     if len(padset()) > len(before): return True
     for t in added: b.Remove(t)

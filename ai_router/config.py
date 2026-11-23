@@ -18,6 +18,7 @@ DEFAULTS = {
     'ilp_repair_cap': 0,      # AUTO: joint ILP repair per run (v1.5, phase (c) Stage B) -- DEFAULT OFF: measured 2026-11-22, the ILP closes nothing yet (execution/re-bridge binds, not selection); enable per-run to experiment     # AUTO: max large-window hard-A* long_finish attempts per run (v1.4, phase (c) Stage B-0)     # AUTO: max pour-net finish_leg attempts per run (was hard-coded 2)
     'work': 20000000,
     'no_tracks_on': 'In1.Cu',
+    'layer_law_policy': 'auto',  # v1.8: B-first + escalate on >=4L In2-pour boards (dataset-v3 gap)
     'strip_existing': True,
     'max_tool_calls': 48,
     'request_timeout_s': 600,
