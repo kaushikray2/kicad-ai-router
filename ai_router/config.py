@@ -9,11 +9,16 @@ DEFAULTS = {
     'api_key': '',
     'tracemaker_path': os.path.expanduser('~/Documents/workspace/tracemaker-test-2026-11-12/tracemaker/tracemaker-0.12.1-linux-x86_64/bin/tracemaker'),
     'kicad_cli': 'kicad-cli',
-    'mode': 'llm',               # 'llm' or 'auto' (deterministic policy)
+    'mode': 'auto',              # v1.9 (M16): 'auto' is the measured, published path -- every dataset and self-test number comes from it; 'llm' stays available as an explicit choice
     'max_passes': 4,
     'finish_signal_cap': 8,   # AUTO: max signal finish_leg attempts per run (v1.2.3; was hard-coded 4)
     'finish_pour_cap': 4,
     'long_finish_cap': 6,
+    'pass_advice': 'promote',  # v1.9 (Phase 1.3): pass-to-pass advice scheme -- 'promote' = failing signal nets join first_nets (protected, pre-v1.9 behaviour); 'priority' = first_nets stays the initial critical set and failing connections are ordered via the advice 'priority' pairs (unprotected), built from the previous pass's stuck report
+    'advice_regions': False,
+    'reroute_window_cap': 0,   # v1.9 (Phase 1.5): windowed engine re-route attempts on split signal nets after the post-prune pass (0 = off)
+    'reroute_accept': 'faults',  # v1.9 (Phase 1.5): reroute acceptance key -- 'faults' = the step key (faults first); 'connectivity' = unconnected/splits first, faults last
+    'reroute_margin': 6.0,     # v1.9 (Phase 1.5): window margin (mm) around the stuck corridor / net bbox   # v1.9 (Phase 1.3): with pass_advice='priority', also reserve the stuck report's per-connection region_mm corridor for its net (advice 'regions', reserve_for)
     'attempt_select': False,  # v1.7: bridge-aware attempt selection in finish_leg -- DEFAULT OFF: measured 2026-11-22 head-to-head vs v1.6.0 on srambo (6 nets) + Manikin (4 nets): outcomes identical on all 10, 0 closures, probes cost +14-39s where they engage; enable for the attempts_probed diagnostics
     'ilp_repair_cap': 0,      # AUTO: joint ILP repair per run (v1.5, phase (c) Stage B) -- DEFAULT OFF: measured 2026-11-22, the ILP closes nothing yet (execution/re-bridge binds, not selection); enable per-run to experiment     # AUTO: max large-window hard-A* long_finish attempts per run (v1.4, phase (c) Stage B-0)     # AUTO: max pour-net finish_leg attempts per run (was hard-coded 2)
     'work': 20000000,

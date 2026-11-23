@@ -167,7 +167,8 @@ def run_auto(cfg, pipe, log):
     # grid: policy total 309 vs A-fixed 334 / B-fixed 340 (oracle 290),
     # escalating on 21 of 54 boards. An explicit non-default law or
     # layer_law_policy='off' disables it.
-    if cfg.get('layer_law_policy', 'auto') == 'auto' and (cfg.get('no_tracks_on') or 'In1.Cu') == 'In1.Cu':
+    _law = {x.strip() for x in str(cfg.get('no_tracks_on') or 'In1.Cu').split(',') if x.strip()}  # v1.9 (M4): set compare -- the old string equality misread 'In1.Cu ' / spacing variants as a non-default law and skipped the policy
+    if cfg.get('layer_law_policy', 'auto') == 'auto' and _law == {'In1.Cu'}:
         summ = pipe.tool_board_summary()
         layers = summ.get('copper_layers') or []
         pour_layers = summ.get('pour_layers') or {}
@@ -208,13 +209,15 @@ def _run_auto_once(cfg, pipe, log):
         first = default_first_nets(pipe)
     log('Initial first_nets: %s' % first)
     max_passes = int(cfg.get('max_passes', 4))
+    scheme = str(cfg.get('pass_advice', 'promote')).lower()
+    prio = None; regs = None
     failed_once, failed_twice = set(), set()
     gate = None
     best = None
     prev_sig = None
     for pno in range(1, max_passes + 1):
         try:
-            pipe.tool_route(first_nets=first)
+            pipe.tool_route(first_nets=first, priority=prio, regions=regs)
         except Exception as e:
             log('Route pass %d failed (%s) — finishing with the best board so far' % (pno, e))
             break
@@ -238,9 +241,23 @@ def _run_auto_once(cfg, pipe, log):
         for n in signal_failing:
             if n in failed_once: failed_twice.add(n)
             failed_once.add(n)
-        for n in signal_failing:
-            if n not in first: first.append(n)
-        log('Pass %d failing: %s (promoted into first_nets)' % (pno, signal_failing))
+        if scheme == 'priority':
+            # v1.9 (Phase 1.3): first_nets stays the initial critical
+            # set; the failing CONNECTIONS are ordered via priority
+            # pairs from the pass's stuck report (routed first, but
+            # NOT protected from rip-up), hardest first.
+            stuck_u = (getattr(pipe, 'last_stuck', None) or {}).get('unrouted') or []
+            cand = [u for u in stuck_u if u.get('net') not in pour]
+            cand.sort(key=lambda u: (-(u.get('fails') or 0), u.get('length_mm') or 0))
+            prio = [[u['from'], u['to']] for u in cand[:512]]
+            regs = None
+            if cfg.get('advice_regions'):
+                regs = [{'rect': u['region_mm'], 'reserve_for': [u['net']]} for u in cand[:24] if u.get('region_mm')]
+            log('Pass %d failing: %s (priority advice: %d pairs%s)' % (pno, signal_failing, len(prio), (', %d regions' % len(regs)) if regs else ''))
+        else:
+            for n in signal_failing:
+                if n not in first: first.append(n)
+            log('Pass %d failing: %s (promoted into first_nets)' % (pno, signal_failing))
         if pno == max_passes: break
     if best and pipe.current != best[1]:
         log('Restoring best pass board (%d unconnected) over the last pass' % best[0][0])
@@ -266,7 +283,7 @@ def _run_auto_once(cfg, pipe, log):
     # joint exactly where sequential greedy legs interact (shared
     # victims, crossing corridors).
     gate = pipe.tool_gate()
-    ilp_still = list(gate.get('split_signal_nets') or [])[:int(cfg.get('ilp_repair_cap', 6))]
+    ilp_still = list(gate.get('split_signal_nets') or [])[:int(cfg.get('ilp_repair_cap', 0))]  # v1.9 (L2): fallback was 6 here vs 0 in config/pipeline -- ILP could run when the config never enabled it
     for k in range(0, len(ilp_still), 6):
         try: pipe.tool_ilp_repair(ilp_still[k:k + 6])
         except Exception as e: log('ilp_repair %s failed: %s' % (ilp_still[k:k + 6], e))
@@ -313,6 +330,19 @@ def _run_auto_once(cfg, pipe, log):
         except Exception as e: log('post-prune heal failed: %s' % e)
         gate = pipe.tool_gate()
         log('post-prune pour pass done (key after: %s)' % (_final_key(gate),))
+    # v1.9 (Phase 1.5): windowed engine re-route on the surviving split
+    # signal nets -- the engine re-routes inside a locked-copper window
+    # around each stuck connection. Off by default (cap 0); every
+    # attempt is gate-verified inside the tool.
+    rwcap = int(cfg.get('reroute_window_cap', 0) or 0)
+    if rwcap > 0:
+        sig = list(gate.get('split_signal_nets') or [])[:rwcap]
+        if sig:
+            log('reroute_window stage: %s' % (sig,))
+            for net in sig:
+                try: pipe.tool_reroute_window(net, margin=float(cfg.get('reroute_margin', 6.0)))
+                except Exception as e: log('reroute_window %s failed: %s' % (net, e))
+            gate = pipe.tool_gate()
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))

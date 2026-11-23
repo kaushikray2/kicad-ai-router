@@ -68,6 +68,19 @@ def main():
                 if _k not in cfg and _k not in _owned and _k in rt: cfg[_k] = rt[_k]
         except Exception:
             pass
+        # v1.9 (S6): job overrides are untrusted input to a shared
+        # backend -- clamp the numeric routing params to sane ranges
+        # (a max_passes of 100000 or a negative work budget otherwise
+        # runs effectively forever). Unparseable values are dropped,
+        # leaving the pipeline's own fallbacks.
+        _CLAMPS = {'max_passes': (1, 8), 'work': (100000, 500000000),
+                   'finish_signal_cap': (0, 32), 'finish_pour_cap': (0, 32),
+                   'long_finish_cap': (0, 32), 'ilp_repair_cap': (0, 8),
+                   'reroute_window_cap': (0, 16), 'reroute_margin': (0.5, 50.0)}
+        for _k, (_lo, _hi) in _CLAMPS.items():
+            if _k in cfg:
+                try: cfg[_k] = max(_lo, min(_hi, type(_lo)(cfg[_k])))
+                except Exception: cfg.pop(_k, None)
         write_status(cfg_effective={k: v for k, v in cfg.items() if k != 'api_key'})
         from pipeline import Pipeline
         import orchestrator

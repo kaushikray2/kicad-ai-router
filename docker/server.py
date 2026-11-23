@@ -8,7 +8,7 @@ import tarfile, threading, time, urllib.request, uuid, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-BACKEND_VERSION = '1.8.2'
+BACKEND_VERSION = '1.9.0'
 SCHEMA_VERSION = 1
 DATA = os.environ.get('AIR_DATA_DIR', '/data')
 PORT = int(os.environ.get('AIR_PORT', '8731'))
@@ -165,6 +165,10 @@ def tm_update(url):
 # ------------------------------------------------------------- jobs
 import queue
 _jobs = {}          # id -> dict (status record)
+_jobs_lock = threading.Lock()  # v1.9 (M12): _jobs is shared by the HTTP threads, the worker threads and the retention pruner; unsynchronized iteration during a concurrent insert/pop raised RuntimeError under the 16-job grid load
+
+def _jobs_snapshot():
+    with _jobs_lock: return list(_jobs.values())
 _job_queue = queue.Queue()
 _procs = {}         # id -> Popen
 
@@ -190,12 +194,13 @@ def _load_existing_jobs():
             except Exception: pass
 
 def _prune_retention():
-    keep = load_config().get('retention', {}).get('keep_runs', 20)
-    done = sorted((r for r in _jobs.values() if r.get('status') in ('done', 'error', 'cancelled', 'interrupted')),
-                  key=lambda r: r.get('created', ''))
+    keep = load_config().get('retention', {}).get('keep_runs', 200)  # v1.9 (L11): fallback was 20 -- the value that silently pruned grid runs in Nov 2026; match the config-template default
+    with _jobs_lock:
+        done = sorted((r for r in _jobs.values() if r.get('status') in ('done', 'error', 'cancelled', 'interrupted')),
+                      key=lambda r: r.get('created', ''))
     for rec in done[:max(0, len(done) - keep)]:
         shutil.rmtree(job_dir(rec['id']), ignore_errors=True)
-        _jobs.pop(rec['id'], None)
+        with _jobs_lock: _jobs.pop(rec['id'], None)
 
 def _worker_loop():
     while True:
@@ -224,9 +229,10 @@ def _worker_loop():
 
 def submit_job(board_bytes, pro_bytes, board_name, overrides, kind='route', dru_bytes=None):
     digest = hashlib.sha256(board_bytes + json.dumps(overrides or {}, sort_keys=True).encode()).hexdigest()
-    for rec in _jobs.values():
-        if rec.get('digest') == digest and rec.get('status') in ('queued', 'running') and rec.get('kind') == kind:
-            return rec['id'], True
+    with _jobs_lock:
+        for rec in _jobs.values():
+            if rec.get('digest') == digest and rec.get('status') in ('queued', 'running') and rec.get('kind') == kind:
+                return rec['id'], True
     jid = uuid.uuid4().hex
     jd = job_dir(jid); os.makedirs(jd)
     with open(os.path.join(jd, 'input.kicad_pcb'), 'wb') as f: f.write(board_bytes)
@@ -237,7 +243,8 @@ def submit_job(board_bytes, pro_bytes, board_name, overrides, kind='route', dru_
     rec = {'id': jid, 'kind': kind, 'status': 'queued', 'board_name': board_name,
            'created': time.strftime('%Y-%m-%d %H:%M:%S'), 'digest': digest,
            'overrides': overrides or {}}
-    _jobs[jid] = rec; _write_status(jid)
+    with _jobs_lock: _jobs[jid] = rec
+    _write_status(jid)
     _job_queue.put(jid)
     return jid, False
 
@@ -254,7 +261,7 @@ def selftest_status():
     boards = sorted(f for f in os.listdir(selftest_dir()) if f.endswith('.kicad_pcb')) if os.path.isdir(selftest_dir()) else []
     base = selftest_baselines()
     last = {}
-    for rec in _jobs.values():
+    for rec in _jobs_snapshot():
         if rec.get('kind') == 'selftest' and rec.get('status') == 'done':
             prev = last.get(rec['board_name'])
             if not prev or rec['created'] > prev['created']: last[rec['board_name']] = rec
@@ -263,7 +270,7 @@ def selftest_status():
         row = {'board': b, 'baseline': base.get(b), 'last': None, 'verdict': 'NO BASELINE' if b not in base else 'NOT RUN'}
         if b in last:
             g = (last[b].get('gate') or {})
-            cur = {'unconnected_total': g.get('unconnected_total'), 'split_nets': len(g.get('split_nets') or []), 'banned_layer_tracks': g.get('banned_layer_tracks')}
+            cur = {'unconnected_total': g.get('unconnected_total'), 'split_nets': len(g.get('split_nets') or []), 'banned_layer_tracks': g.get('banned_layer_tracks'), 'copper_violations': g.get('copper_violations')}  # v1.9 (M11): copper joins the recorded baseline
             row['last'] = cur
             if b in base:
                 # TraceMaker is nondeterministic (seeded variant racing),
@@ -272,9 +279,26 @@ def selftest_status():
                 # identical stack. PASS within the tolerance band.
                 tol = load_config().get('selftest_tolerance', {})
                 tu = int(tol.get('unconnected', 2)); ts = int(tol.get('split_nets', 0))
+                # v1.9 (M11): the verdict used to ignore copper entirely --
+                # a board could regress to hundreds of copper faults and
+                # still PASS. Copper is variance-prone under variant
+                # racing (an identical stack reproduced 65 then 91 total
+                # violations), so the band is coarse: baseline + max(10,
+                # 25%), or an explicit selftest_tolerance.copper. A
+                # baseline recorded before v1.9 has no copper field; the
+                # check is then skipped and flagged, and the next
+                # /api/selftest/record stores it.
+                bc = base[b].get('copper_violations')
+                if bc is None or cur['copper_violations'] is None:
+                    copper_ok = True; row['copper_checked'] = False
+                else:
+                    tc = tol.get('copper')
+                    allow = int(tc) if tc is not None else max(10, int(0.25 * bc))
+                    copper_ok = cur['copper_violations'] <= bc + allow; row['copper_checked'] = True
                 row['verdict'] = 'PASS' if (cur['unconnected_total'] is not None and base[b]['unconnected_total'] is not None
                                             and cur['unconnected_total'] <= base[b]['unconnected_total'] + tu
                                             and cur['split_nets'] <= base[b]['split_nets'] + ts
+                                            and copper_ok
                                             and not (cur['banned_layer_tracks'] or 0)) else 'DRIFT'
         out.append(row)
     return out
@@ -291,11 +315,18 @@ class Handler(BaseHTTPRequestHandler):
         return host in local_ips() or host in (self._cfg().get('allowed_hosts') or [])
 
     def _authed(self):
+        # v1.9 (S5): constant-time compares, exact cookie-pair match,
+        # fail closed when no token is configured (the old substring
+        # test degenerated to accepting any 'air_token=' cookie when
+        # the configured token was empty).
         tok = self._cfg().get('auth_token', '')
+        if not tok: return False
         auth = self.headers.get('Authorization') or ''
-        if auth == 'Bearer ' + tok: return True
-        cookie = self.headers.get('Cookie') or ''
-        return ('air_token=' + tok) in cookie
+        if auth.startswith('Bearer ') and secrets.compare_digest(auth[7:], tok): return True
+        for part in (self.headers.get('Cookie') or '').split(';'):
+            part = part.strip()
+            if part.startswith('air_token=') and secrets.compare_digest(part[10:], tok): return True
+        return False
 
     def _send(self, code, body, ctype='application/json'):
         if isinstance(body, (dict, list)): body = json.dumps(body).encode()
@@ -333,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
                                  'tracemaker_versions': tm_versions(),
                                  'tracemaker_selected': cfg.get('tracemaker', {}).get('selected_version', ''),
                                  'queue_depth': _job_queue.qsize(),
-                                 'jobs_running': sum(1 for r in _jobs.values() if r.get('status') == 'running')})
+                                 'jobs_running': sum(1 for r in _jobs_snapshot() if r.get('status') == 'running')})
                 return
             if path == '/':
                 if not self._host_ok(): self._send(403, {'error': 'host not allowed'}); return
@@ -353,7 +384,7 @@ class Handler(BaseHTTPRequestHandler):
                                                 'selected': v == tm.get('selected_version')} for v in tm_versions()],
                                  'url': tm.get('url', '')}); return
             if path == '/api/runs':
-                rows = sorted(_jobs.values(), key=lambda r: r.get('created', ''), reverse=True)
+                rows = sorted(_jobs_snapshot(), key=lambda r: r.get('created', ''), reverse=True)
                 self._send(200, [{k: r.get(k) for k in ('id', 'kind', 'status', 'board_name', 'created', 'started', 'finished', 'gate', 'error')} for r in rows]); return
             if path.startswith('/api/runs/'):
                 parts = path.split('/')

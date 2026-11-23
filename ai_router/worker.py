@@ -12,6 +12,7 @@ import pcbnew
 # routable. Default when the flag is absent: In1.Cu only.
 BANNED_LAYER_IDS = None
 NO_TRACKS_ON_RAW = None
+NO_TRACKS_ON_UNRESOLVED = []  # v1.9 (M4): --no-tracks-on names the canonical table could not resolve; Grid resolves them against the actual board or fails loud
 
 def _layer_id_from_name(n):
     n = n.strip()
@@ -21,6 +22,26 @@ def _layer_id_from_name(n):
         try: return getattr(pcbnew, 'In%d_Cu' % int(n[2:-3]))
         except Exception: return None
     return None
+
+def _resolve_banned_on_board(b, names):
+    # v1.9 (M4): resolve non-canonical --no-tracks-on names against
+    # THIS board. A board may name its copper layers freely (the
+    # one in-house board calls In1.Cu 'GND' in-file) and a config may use either
+    # the canonical name or the board's own. Matches board layer
+    # names and positional canonical names, case-insensitively.
+    # Returns (ids, still_unresolved).
+    stack = copper_stack(b)
+    canon = {}
+    for k, lid in enumerate(stack):
+        canon[b.GetLayerName(lid).strip().lower()] = lid
+        cname = 'F.Cu' if k == 0 else ('B.Cu' if k == len(stack) - 1 else 'In%d.Cu' % k)
+        canon[cname.lower()] = lid
+    ids, still = set(), []
+    for n in names:
+        lid = canon.get(n.strip().lower())
+        if lid is None: still.append(n)
+        else: ids.add(lid)
+    return ids, still
 
 def mm(v): return v / 1e6
 def nm(x): return int(round(x * 1e6))
@@ -245,6 +266,16 @@ class Grid:
         self.nl = len(self.stack)
         self.lidx = {lay: k for k, lay in enumerate(self.stack)}
         _banned = BANNED_LAYER_IDS if BANNED_LAYER_IDS is not None else {pcbnew.In1_Cu}
+        if NO_TRACKS_ON_UNRESOLVED:
+            # v1.9 (M4): a ban name the canonical table could not
+            # resolve must not be silently dropped (the pre-v1.9
+            # behaviour -- that layer was simply never banned in the
+            # finisher). Resolve against this board or fail loud; the
+            # gate census remains the backstop for non-Grid tools.
+            _extra, _still = _resolve_banned_on_board(b, NO_TRACKS_ON_UNRESOLVED)
+            if _still:
+                raise ValueError('--no-tracks-on names not resolvable on this board: %s (copper layers: %s)' % (', '.join(_still), ', '.join(b.GetLayerName(l) for l in self.stack)))
+            _banned = set(_banned) | _extra
         self.routable = {k for k, lay in enumerate(self.stack) if lay not in _banned}
         self.banned_idx = {k for k, lay in enumerate(self.stack) if lay in _banned}
         self.pads, self.segs, self.vias = [], [], []
@@ -2011,6 +2042,41 @@ def _bridge_island(b, conn, netname, pad):
     refill(b); conn.Build(b)
     return False
 
+
+def cmd_lock_window(board_path, out_path, net, margin=6.0, fx=None, fy=None, tx=None, ty=None):
+    # v1.9 (Phase 1.5): prepare a board for a windowed engine re-route:
+    # lock every track/via OUTSIDE the window so TraceMaker --reroute
+    # removes and re-routes only the window's copper. The window is the
+    # stuck connection's endpoint bbox when given, else the net's own
+    # copper bbox, inflated by margin (mm).
+    b = pcbnew.LoadBoard(board_path)
+    nobj = b.FindNet(net)
+    if nobj is None: return {'status': 'error', 'detail': 'no such net'}
+    code = nobj.GetNetCode()
+    if fx is not None:
+        xs, ys = [fx, tx], [fy, ty]
+    else:
+        xs, ys = [], []
+        for t in list(b.GetTracks()):
+            if t.GetNetCode() == code:
+                bb = t.GetBoundingBox(); xs += [pcbnew.ToMM(bb.GetLeft()), pcbnew.ToMM(bb.GetRight())]; ys += [pcbnew.ToMM(bb.GetTop()), pcbnew.ToMM(bb.GetBottom())]
+        for fp in b.GetFootprints():
+            for pad in fp.Pads():
+                if pad.GetNetCode() == code:
+                    p = pad.GetPosition(); xs.append(pcbnew.ToMM(p.x)); ys.append(pcbnew.ToMM(p.y))
+    if not xs: return {'status': 'error', 'detail': 'net has no geometry'}
+    win = (min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
+    locked = unlocked = 0
+    for t in list(b.GetTracks()):
+        bb = t.GetBoundingBox()
+        l, tp, r, bt = pcbnew.ToMM(bb.GetLeft()), pcbnew.ToMM(bb.GetTop()), pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom())
+        inside = not (r < win[0] or l > win[2] or bt < win[1] or tp > win[3])
+        t.SetLocked(not inside)
+        if inside: unlocked += 1
+        else: locked += 1
+    pcbnew.SaveBoard(out_path, b)
+    return {'status': 'locked', 'window': [round(v, 2) for v in win], 'locked': locked, 'unlocked': unlocked}
+
 def cmd_stitch(board_path, out_path):
     b = pcbnew.LoadBoard(board_path)
     refill(b)
@@ -2397,15 +2463,22 @@ def main():
     ap.add_argument('--nets')
     ap.add_argument('--victims')
     ap.add_argument('--attempt-select', action='store_true')
+    ap.add_argument('--margin', type=float, default=6.0)
+    ap.add_argument('--fx', type=float); ap.add_argument('--fy', type=float)
+    ap.add_argument('--tx', type=float); ap.add_argument('--ty', type=float)
     ap.add_argument('--frm')
     ap.add_argument('--dst')
     ap.add_argument('--result')
     ap.add_argument('--no-tracks-on')
     a = ap.parse_args()
     if a.no_tracks_on:
-        global BANNED_LAYER_IDS, NO_TRACKS_ON_RAW
+        global BANNED_LAYER_IDS, NO_TRACKS_ON_RAW, NO_TRACKS_ON_UNRESOLVED
         NO_TRACKS_ON_RAW = a.no_tracks_on
-        BANNED_LAYER_IDS = {i for i in (_layer_id_from_name(x) for x in a.no_tracks_on.split(',')) if i is not None}
+        BANNED_LAYER_IDS = set(); NO_TRACKS_ON_UNRESOLVED = []
+        for _x in a.no_tracks_on.split(','):
+            _i = _layer_id_from_name(_x)
+            if _i is None: NO_TRACKS_ON_UNRESOLVED.append(_x.strip())
+            else: BANNED_LAYER_IDS.add(_i)
     if a.cmd == 'summary': res = cmd_summary(a.board)
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
@@ -2421,6 +2494,7 @@ def main():
         def _pt(s):
             ls, x, y = s.split(':'); return (tuple(int(v) for v in ls.split(',')), float(x), float(y))
         res = cmd_heal_attempt(a.board, a.out, a.net, _pt(a.frm), _pt(a.dst))
+    elif a.cmd == 'lock_window': res = cmd_lock_window(a.board, a.out, a.net, margin=a.margin, fx=a.fx, fy=a.fy, tx=a.tx, ty=a.ty)
     elif a.cmd == 'prune': res = cmd_prune(a.board, a.out)
     elif a.cmd == 'refill': res = cmd_refill(a.board, a.out or a.board)
     else: res = {'status': 'error', 'detail': 'unknown cmd'}

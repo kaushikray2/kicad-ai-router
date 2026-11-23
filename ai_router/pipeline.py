@@ -140,7 +140,7 @@ class Pipeline:
         self._record('scorecard', r)
         return r
 
-    def tool_route(self, first_nets=None, work=None, from_current=False):
+    def tool_route(self, first_nets=None, work=None, from_current=False, priority=None, regions=None):
         self.pass_no += 1
         inp = self.current if from_current else self.base
         outp = os.path.join(self.workdir, 'pass%d.kicad_pcb' % self.pass_no)
@@ -149,19 +149,22 @@ class Pipeline:
         if len(first_nets) > 64:  # TraceMaker rejects advice files with >64 first_nets
             self.log('first_nets capped at 64 (was %d)' % len(first_nets))
             first_nets = first_nets[:64]
+        adv = {'version': 1, 'first_nets': first_nets}
+        if priority: adv['priority'] = [list(p) for p in priority][:512]
+        if regions: adv['regions'] = list(regions)[:24]
         with open(advice, 'w') as f:
-            json.dump({'version': 1, 'first_nets': first_nets}, f)
+            json.dump(adv, f)
         log_path = os.path.join(self.workdir, 'tm-pass%d.log' % self.pass_no)
         if getattr(self, '_copper_layers', None) is None:
             try: self._copper_layers = self._worker('summary', '--board', inp).get('copper_layers') or []
             except Exception: self._copper_layers = []
-        banned = [b.strip() for b in str(self.cfg.get('no_tracks_on', 'In1.Cu,In2.Cu')).split(',') if b.strip()]
+        banned = [b.strip() for b in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if b.strip()]  # v1.9 (M4): the fallback was 'In1.Cu,In2.Cu' here alone -- with no cfg value the engine banned In2 while every finisher banned only In1
         if self._copper_layers: banned = [b for b in banned if b in self._copper_layers]  # TraceMaker rejects ban names that are not copper layers of THIS board (a 2-layer board has no In1.Cu); the worker's canonical stack is the authority
         cmdline = [self.cfg['tracemaker_path'], 'route', inp, '-o', outp,
                    '--json', os.path.join(self.workdir, 'route%d.json' % self.pass_no),
                    '--stuck-report', os.path.join(self.workdir, 'stuck%d.json' % self.pass_no),
                    '--advice', advice, '--soft-zones', '--keep-vias-off-pads',
-                   '--diff-pairs', '--si-rules', '--critical-auto']
+                   '--diff-pairs', '--si-rules', '--critical-auto', '--cut-report']
         if banned:
             cmdline += ['--no-tracks-on', ','.join(banned)]
         cmdline += ['--work', str(work or self.cfg.get('work', 20000000)), '--time', '3600']
@@ -175,31 +178,92 @@ class Pipeline:
             self.log('WARNING: post-route refill failed (%s) — continuing; the gate refills before measuring' % e)
         self._sidecars(outp)
         text = open(log_path).read()
+        # v1.9 (Phase 1.4): read the engine's JSON diagnostics -- the
+        # route report (counts, completion, per-variant results) and
+        # the stuck report (structured unrouted connections with
+        # reasons, crowding and a corridor region each). The log
+        # regexes remain as a fallback for a missing/corrupt report.
         unrouted = []
-        for m in re.finditer(r'unrouted:\s+(\S+):\s+(\S+)\s+->\s+(\S+)\s+\(([^)]*)\)', text):
-            unrouted.append({'net': m.group(1), 'from': m.group(2), 'to': m.group(3), 'note': m.group(4)})
-        m = re.search(r'routed (\d+)/(\d+) connections', text)
-        routed = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+        routed = (None, None)
+        stuck = {'unrouted': [], 'by_reason': []}
+        try:
+            rj = json.load(open(os.path.join(self.workdir, 'route%d.json' % self.pass_no)))
+            routed = (rj.get('routed'), rj.get('connections'))
+            stuck['route'] = {k: rj.get(k) for k in ('completion_pct', 'seconds', 'open', 'unconnected_after_refill')}
+            stuck['failures'] = rj.get('failures') or []
+            cuts = {k: rj[k] for k in rj if 'cut' in k}
+            if cuts: stuck['cuts'] = cuts
+        except Exception:
+            pass
+        try:
+            sj = json.load(open(os.path.join(self.workdir, 'stuck%d.json' % self.pass_no)))
+            for u in sj.get('unrouted') or []:
+                fr, to = u.get('from') or {}, u.get('to') or {}
+                stuck['unrouted'].append({'net': u.get('net'),
+                    'from': '%s.%s' % (fr.get('part'), fr.get('pad')),
+                    'to': '%s.%s' % (to.get('part'), to.get('pad')),
+                    'reason': u.get('reason'), 'length_mm': u.get('length_mm'),
+                    'fails': u.get('fails'), 'region_mm': u.get('region_mm')})
+            stuck['by_reason'] = sj.get('unrouted_by_reason') or []
+        except Exception:
+            pass
+        self.last_stuck = stuck
+        if stuck['unrouted']:
+            unrouted = [{'net': u['net'], 'from': u['from'], 'to': u['to'], 'note': u.get('reason') or ''} for u in stuck['unrouted']]
+        else:
+            for m in re.finditer(r'unrouted:\s+(\S+):\s+(\S+)\s+->\s+(\S+)\s+\(([^)]*)\)', text):
+                unrouted.append({'net': m.group(1), 'from': m.group(2), 'to': m.group(3), 'note': m.group(4)})
+        if routed[0] is None:
+            m = re.search(r'routed (\d+)/(\d+) connections', text)
+            routed = (int(m.group(1)), int(m.group(2))) if m else (None, None)
         self.current = outp
-        self.last_route = {'pass': self.pass_no, 'routed': routed, 'unrouted': unrouted, 'board': outp}
+        self.last_route = {'pass': self.pass_no, 'routed': routed, 'unrouted': unrouted, 'board': outp,
+                           'stuck_unrouted': len(stuck['unrouted']), 'by_reason': stuck['by_reason'],
+                           'route_stats': stuck.get('route'), 'cuts': stuck.get('cuts')} 
         self._record('route', self.last_route)
         self.log('Pass %d: routed %s/%s connections; %d unrouted' % (self.pass_no, routed[0], routed[1], len(unrouted)))
         return self.last_route
 
-    def tool_gate(self, board=None):
-        board = board or self.current
-        self._sidecars(board)
-        # v1.8.2 (#15): a UNIQUE report per gate + the return code is
-        # checked. Before, every post-pass gate reused gate<pass>.drc.txt
-        # and a failed kicad-cli silently left the PREVIOUS board's
-        # report to be parsed as this board's gate.
+    def _drc_measure(self, board):
+        # v1.9: parse the JSON DRC report -- structured output instead
+        # of regexes over the text report, whose layout is a KiCad
+        # display detail. Field semantics are identical to the text
+        # parse (verified class-by-class on fixture boards): the JSON
+        # 'violations' list excludes unconnected items, exactly like
+        # the text header total; unconnected entries carry their
+        # items' descriptions, whose first word is the item kind and
+        # whose [brackets] carry the net, same as the text blocks.
+        # Falls back to the text report when JSON is unavailable or
+        # malformed; a failed DRC still raises (v1.8.2 #15).
         self._gseq += 1
-        drc_path = os.path.join(self.workdir, 'gate-%03d.drc.txt' % self._gseq)
+        seq = self._gseq
+        jp = os.path.join(self.workdir, 'gate-%03d.drc.json' % seq)
+        try:
+            p = subprocess.run([self.cfg.get('kicad_cli', 'kicad-cli'), 'pcb', 'drc', '--refill-zones',
+                                '--format', 'json', '--output', jp, board], capture_output=True, text=True, timeout=900)
+            if p.returncode == 0 and os.path.exists(jp):
+                doc = json.load(open(jp))
+                viols = doc['violations']; uncs = doc['unconnected_items']
+                classes = dict(Counter(v.get('type') or 'unknown' for v in viols))
+                if uncs: classes['unconnected_items'] = len(uncs)
+                pour, signal = 0, []
+                for u in uncs:
+                    items = u.get('items') or []
+                    kinds = [str(it.get('description', '')).split(' ', 1)[0] for it in items]
+                    nets = sorted({m.group(1) for it in items for m in [re.search(r'\[([^\]]+)\]', str(it.get('description', '')))] if m})
+                    if items and all(k == 'Zone' for k in kinds):
+                        pour += 1
+                    else:
+                        signal.append({'nets': nets, 'text': ' '.join(str(it.get('description', '')) for it in items)[:200]})
+                return len(viols), len(uncs), classes, pour, signal
+        except Exception:
+            pass
+        tp = os.path.join(self.workdir, 'gate-%03d.drc.txt' % seq)
         p = subprocess.run([self.cfg.get('kicad_cli', 'kicad-cli'), 'pcb', 'drc', '--refill-zones',
-                        '--output', drc_path, board], capture_output=True, text=True, timeout=900)
-        if p.returncode != 0 or not os.path.exists(drc_path):
+                            '--output', tp, board], capture_output=True, text=True, timeout=900)
+        if p.returncode != 0 or not os.path.exists(tp):
             raise PipelineError('kicad-cli DRC failed (rc=%s) on %s: %s' % (p.returncode, os.path.basename(board), (p.stderr or '')[-300:]))
-        d = open(drc_path).read()
+        d = open(tp).read()
         total = int(re.search(r'Found (\d+) DRC violations', d).group(1))
         unc = int(re.search(r'Found (\d+) unconnected', d).group(1))
         classes = dict(Counter(re.findall(r'^\[(\w+)\]', d, re.M)))
@@ -211,6 +275,16 @@ class Pipeline:
                 pour += 1
             else:
                 signal.append({'nets': sorted(set(n for _k, n in items)), 'text': ' '.join(block.split())[:200]})
+        return total, unc, classes, pour, signal
+
+    def tool_gate(self, board=None):
+        board = board or self.current
+        self._sidecars(board)
+        # v1.8.2 (#15): a UNIQUE report per gate + the return code is
+        # checked. Before, every post-pass gate reused gate<pass>.drc.txt
+        # and a failed kicad-cli silently left the PREVIOUS board's
+        # report to be parsed as this board's gate.
+        total, unc, classes, pour, signal = self._drc_measure(board)
         summ = self._worker('summary', '--board', board)
         # v1.3.2 layer census: any track on a cfg-banned layer is a
         # layer-law fault, counted into fault_count via the gate dict.
@@ -249,6 +323,70 @@ class Pipeline:
         self._record('gate', self.last_gate)
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
         return self.last_gate
+
+    def tool_reroute_window(self, net, margin=6.0):
+        # v1.9 (Phase 1.5): windowed engine re-route. Lock all copper
+        # outside a window around the net's stuck connection, let
+        # TraceMaker --reroute rip and re-route the window, keep the
+        # result only if the lexicographic key improves.
+        before = self.last_gate or self.tool_gate()
+        kb = _accept_key(before)
+        locked = self._out('locked')
+        args = ['--board', self.current, '--out', locked, '--net', net, '--margin', str(margin)]
+        for u in (getattr(self, 'last_stuck', None) or {}).get('unrouted') or []:
+            if u.get('net') == net: break
+        else:
+            u = None
+        if u and u.get('region_mm'):
+            r = u['region_mm']
+            args += ['--fx', str(r[0]), '--fy', str(r[1]), '--tx', str(r[2]), '--ty', str(r[3])]
+        res = self._worker('lock_window', *args)
+        if res.get('status') != 'locked':
+            self._record('reroute_window', {'net': net, 'status': 'lock_failed', 'detail': res})
+            return {'status': 'lock_failed', 'net': net}
+        outp = self._out('rerouted')
+        advice = os.path.join(self.workdir, 'advice-rw-%d.json' % self._oseq)
+        with open(advice, 'w') as f: json.dump({'version': 1, 'first_nets': []}, f)
+        if getattr(self, '_copper_layers', None) is None:
+            try: self._copper_layers = self._worker('summary', '--board', self.current).get('copper_layers') or []
+            except Exception: self._copper_layers = []
+        banned = [x.strip() for x in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if x.strip()]
+        if self._copper_layers: banned = [x for x in banned if x in self._copper_layers]
+        cmdline = [self.cfg['tracemaker_path'], 'route', locked, '-o', outp, '--reroute',
+                   '--json', os.path.join(self.workdir, 'route-rw-%d.json' % self._oseq),
+                   '--stuck-report', os.path.join(self.workdir, 'stuck-rw-%d.json' % self._oseq),
+                   '--advice', advice, '--soft-zones', '--keep-vias-off-pads',
+                   '--diff-pairs', '--si-rules', '--critical-auto', '--cut-report']
+        if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
+        cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
+        log_path = os.path.join(self.workdir, 'tm-rw-%d.log' % self._oseq)
+        try:
+            with open(log_path, 'w') as lf:
+                subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=1900)
+        except Exception as e:
+            self._record('reroute_window', {'net': net, 'status': 'error', 'detail': str(e)[:200]})
+            return {'status': 'error', 'net': net}
+        if not os.path.exists(outp):
+            self._record('reroute_window', {'net': net, 'status': 'no_output'})
+            return {'status': 'no_output', 'net': net}
+        try: self._worker('refill', '--board', outp, '--out', outp)
+        except Exception: pass
+        self._sidecars(outp)
+        after = self.tool_gate(outp)
+        if str(self.cfg.get('reroute_accept', 'faults')) == 'connectivity':
+            ck = lambda g: (10**9 if g.get('unconnected_total') is None else int(g['unconnected_total']), len(g.get('split_nets') or []), fault_count(g))
+            kb, ka = ck(before), ck(after)
+        else:
+            ka = _accept_key(after)
+        if ka < kb:
+            self.current = outp; self.last_gate = after
+            st = 'accepted'
+        else:
+            self.last_gate = before
+            st = 'reverted'
+        self._record('reroute_window', {'net': net, 'status': st, 'key_before': kb, 'key_after': ka, 'window': res.get('window'), 'accept': str(self.cfg.get('reroute_accept', 'faults'))})
+        self.log('reroute_window %s: %s (key %s -> %s)' % (net, st, kb, ka))
+        return {'status': st, 'net': net, 'gate': after}
 
     def tool_finish_leg(self, net):
         outp = self._out('finish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
