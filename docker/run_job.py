@@ -45,12 +45,14 @@ def main():
         cfg = {'endpoint': llm.get('endpoint', ''), 'model': llm.get('model', ''),
                'api_key': llm.get('api_key', ''), 'tracemaker_path': tm_exe,
                'mode': rt.get('mode', 'auto'), 'max_passes': int(rt.get('max_passes', 4)),
-               'work': int(rt.get('work', 20000000)), 'no_tracks_on': rt.get('no_tracks_on', 'In1.Cu,In2.Cu'),
+               'work': int(rt.get('work', 20000000)), 'no_tracks_on': rt.get('no_tracks_on', 'In1.Cu'),
                'strip_existing': bool(rt.get('strip_existing', True)), 'kicad_cli': 'kicad-cli',
                'finish_signal_cap': int(rt.get('finish_signal_cap', 8)),
                'finish_pour_cap': int(rt.get('finish_pour_cap', 4)),
                'long_finish_cap': int(rt.get('long_finish_cap', 6)),
-               'ilp_repair_cap': int(rt.get('ilp_repair_cap', 0)), 'attempt_select': bool(rt.get('attempt_select', False))}
+               'ilp_repair_cap': int(rt.get('ilp_repair_cap', 0)), 'attempt_select': bool(rt.get('attempt_select', False)),
+               'layer_law_policy': rt.get('layer_law_policy', 'auto'),
+               'first_nets_policy': rt.get('first_nets_policy', 'auto')}
         sys.path.insert(0, find_plugin())
         sys.path.insert(0, os.path.join(find_plugin(), 'ai_router'))
         from pipeline import Pipeline
@@ -61,6 +63,11 @@ def main():
         final = res.get('final_board')
         if final and os.path.exists(final):
             import shutil; shutil.copy(final, os.path.join(jd, 'result.kicad_pcb'))
+            # v1.8.1 (#8): serve the WINNING pipeline's ledger -- after a
+            # layer-law escalation two workdirs exist and the later one
+            # is not necessarily the variant that was kept.
+            _led = os.path.join(os.path.dirname(final), 'ledger.json')
+            if os.path.isfile(_led): shutil.copy(_led, os.path.join(jd, 'ledger.json'))
         gate = res.get('gate') or {}
         write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'tracks_by_layer')})
     except Exception as e:

@@ -412,7 +412,7 @@ class Grid:
     def cell(self, x, y):
         return (min(self.NX - 1, max(0, int(round((x - self.X0) / PITCH)))),
                 min(self.NY - 1, max(0, int(round((y - self.Y0) / PITCH)))))
-    def astar(self, blocked, via_block, start_xy, goal_xy, start_layers, goal_layers, extra_layers=()):
+    def astar(self, blocked, via_block, start_xy, goal_xy, start_layers, goal_layers, extra_layers=(), max_pops=None):
         # v1.3.2 layer law: the search may only TRAVEL on routable
         # layers plus extra_layers the caller vouches for (a pour
         # net's own plane layer when bridging that net). Before this,
@@ -423,16 +423,24 @@ class Grid:
         allowed = self.routable | set(extra_layers)
         si = self.cell(*start_xy); gi = self.cell(*goal_xy)
         starts = [(l, si[1], si[0]) for l in start_layers if l in allowed]
-        goalset = {(l, gi[1], gi[0]) for l in goal_layers if l in allowed}
+        # v1.8.1 (#11): a blocked goal cell is unreachable -- exclude it
+        # so an all-blocked goal returns at once instead of flooding
+        # every reachable cell first.
+        goalset = {(l, gi[1], gi[0]) for l in goal_layers if l in allowed and not blocked[l, gi[1], gi[0]]}
         if not starts or not goalset: return None, None
         dist = {s: 0.0 for s in starts}; prev = {}
         def _h(j, i):
             dx, dy = abs(i - gi[0]), abs(j - gi[1])
             return max(dx, dy) + 0.41421356 * min(dx, dy)
         pq = [(_h(s[1], s[2]), 0.0, s) for s in starts]; heapq.heapify(pq)
-        found = None
+        found = None; pops = 0
         while pq:
             _f, dcur, node = heapq.heappop(pq)  # heap key is f = g + h; staleness compares g
+            pops += 1
+            # v1.8.1 (#10): optional expansion budget -- the via hunt
+            # passes one so a fenced target cannot flood the whole
+            # window once per candidate via.
+            if max_pops is not None and pops > max_pops: return None, None
             if dcur > dist.get(node, 1e18): continue
             if node in goalset: found = node; break
             li, j, i = node
@@ -611,7 +619,8 @@ class Grid:
         allowed = self.routable | set(extra_layers)
         for l in start_layers:
             if l in allowed: push(0.0, l, si[1], si[0], 0, 0)
-        goalset = {(l, gi[1], gi[0]) for l in goal_layers if l in allowed}
+        goalset = {(l, gi[1], gi[0]) for l in goal_layers if l in allowed and not blocked[l, gi[1], gi[0]]}
+        if not goalset: return None, None
         found = None; pops = 0
         while pq:
             _f, dcur, this = heapq.heappop(pq)
@@ -784,19 +793,36 @@ def _bridge_candidates(b, conn, net):
             if ci1 == ci2: continue
             ranked.append((math.hypot(sp[1] - gp[1], sp[2] - gp[2]), sp, gp))
     ranked.sort(key=lambda t: t[0])
-    cand = []; seenp = set()
+    def _pkey(sp, gp):
+        # v1.8.1 (#9): canonical UNDIRECTED pair key -- the v1.8.0 key
+        # was directional, so (P,Q) and (Q,P) both passed the dedupe
+        # and the 6-candidate cap held only 3 distinct pairs, each
+        # searched twice on the same undirected grid.
+        a = (round(sp[1], 2), round(sp[2], 2)); bq = (round(gp[1], 2), round(gp[2], 2))
+        return (a, bq) if a <= bq else (bq, a)
+    cand = []; seenp = set(); skipped = []
     for (d, sp, gp) in ranked:
-        key = (round(sp[1], 2), round(sp[2], 2), round(gp[1], 2), round(gp[2], 2))
+        key = _pkey(sp, gp)
         if key in seenp: continue
-        seenp.add(key); cand.append((sp, gp))
+        seenp.add(key)
+        # Diversity stride: a pair whose both endpoints sit within
+        # 1 mm of an already-picked pair (either orientation) adds
+        # little; defer it, backfill only if <6 diverse pairs exist.
+        if any((math.hypot(sp[1] - a[1], sp[2] - a[2]) < 1.0 and math.hypot(gp[1] - bq[1], gp[2] - bq[2]) < 1.0) or
+               (math.hypot(sp[1] - bq[1], sp[2] - bq[2]) < 1.0 and math.hypot(gp[1] - a[1], gp[2] - a[2]) < 1.0)
+               for (a, bq) in cand):
+            skipped.append((sp, gp)); continue
+        cand.append((sp, gp))
         if len(cand) >= 6: break
+    for pair in skipped:
+        if len(cand) >= 6: break
+        cand.append(pair)
     sizes = {ci: len(plist) for ci, plist in pts.items()}
     big = sorted(sizes, key=lambda k: -sizes[k])[:2]
     if len(big) == 2:
         sp = (None, pts[big[0]][0][0], pts[big[0]][0][1], pts[big[0]][0][2])
         gp = (None, pts[big[1]][0][0], pts[big[1]][0][1], pts[big[1]][0][2])
-        key = (round(sp[1], 2), round(sp[2], 2), round(gp[1], 2), round(gp[2], 2))
-        if key not in seenp: cand.append((sp, gp))
+        if _pkey(sp, gp) not in seenp: cand.append((sp, gp))
     return cand
 
 def _bridge_plan(b, net, before, margins=(12, 20)):
@@ -822,11 +848,11 @@ def _bridge_plan(b, net, before, margins=(12, 20)):
                     g.clr_plan = board_clearance(b) + 0.03 + bump
                     g.inf = bw / 2 + g.clr_plan
                 blocked, via_block = g.build({net}, target=net)
+                _stamp_edge_keepback(b, g, blocked, via_block, bw, vd / 2)
+                _stamp_hole_keepback(b, g, blocked, via_block, bw, vdr / 2, net=net)
                 g.free_disc(blocked, via_block, S[1], S[2], layers=tuple(S[3]))
                 g.free_disc(blocked, via_block, Gp[1], Gp[2], layers=tuple(Gp[3]))
                 _stamp_inner_via_blocks(b, via_block, g, {net})
-                _stamp_edge_keepback(b, g, blocked, via_block, bw, vd / 2)
-                _stamp_hole_keepback(b, g, blocked, via_block, bw, vdr / 2, net=net)
                 simp, _c = g.astar(blocked, via_block, (S[1], S[2]), (Gp[1], Gp[2]), tuple(S[3]), tuple(Gp[3]))
                 if simp is None: break
                 segs, vias = path_segs_vias(simp)
@@ -996,11 +1022,11 @@ def _finish_attempt(board_path, out_path, net, A, Bp, simp, victims, window):
                             g2.clr_plan = board_clearance(b) + 0.03 + bump
                             g2.inf = bw_v / 2 + g2.clr_plan
                         blocked, via_block = g2.build({v}, target=v)
+                        _stamp_edge_keepback(b, g2, blocked, via_block, bw_v, _bvd / 2)
+                        _stamp_hole_keepback(b, g2, blocked, via_block, bw_v, _bvdr / 2, net=v)
                         g2.free_disc(blocked, via_block, S[1], S[2], layers=tuple(S[3]))
                         g2.free_disc(blocked, via_block, Gp[1], Gp[2], layers=tuple(Gp[3]))
                         _stamp_inner_via_blocks(b, via_block, g2, {v})
-                        _stamp_edge_keepback(b, g2, blocked, via_block, bw_v, _bvd / 2)
-                        _stamp_hole_keepback(b, g2, blocked, via_block, bw_v, _bvdr / 2, net=v)
                         bsimp, _bc = g2.astar(blocked, via_block, (S[1], S[2]), (Gp[1], Gp[2]), tuple(S[3]), tuple(Gp[3]))
                         if bsimp is None: break
                         bsegs, bvias = path_segs_vias(bsimp)
@@ -1478,6 +1504,16 @@ def _comp_points(b, conn, netname):
                     if key in seen: continue
                     seen.add(key)
                     add(ci, sx, sy, (lay,)); add(ci, ex, ey, (lay,))
+    # v1.8.1 (#9): coalesce per (cluster, rounded xy), unioning layer
+    # sets -- a polyline bend vertex arrived once per segment and a
+    # via + track end at one coordinate arrived as two entries.
+    for ci in pts:
+        merged = {}
+        for (x, y, layers) in pts[ci]:
+            k = (round(x, 2), round(y, 2))
+            if k in merged: merged[k][2].update(layers)
+            else: merged[k] = [x, y, set(layers)]
+        pts[ci] = [(x, y, tuple(sorted(ls))) for (x, y, ls) in merged.values()]
     return pads, comp, pts
 
 
@@ -1587,11 +1623,13 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
             g.clr_plan = board_clearance(b) + 0.03 + bump
             g.inf = bw / 2 + g.clr_plan
         blocked, via_block = g.build({net}, target=net)
+        # v1.8.1 (#11): keepbacks BEFORE free_disc (the v1.7.1 order) --
+        # stamped after, they re-blocked the freed start/goal discs.
+        _stamp_edge_keepback(b, g, blocked, via_block, bw, _vd0 / 2)
+        _stamp_hole_keepback(b, g, blocked, via_block, bw, _vdr0 / 2, net=net)
         g.free_disc(blocked, via_block, fx, fy, layers=fl)
         g.free_disc(blocked, via_block, dx, dy, layers=dl)
         _stamp_inner_via_blocks(b, via_block, g, {net})
-        _stamp_edge_keepback(b, g, blocked, via_block, bw, _vd0 / 2)
-        _stamp_hole_keepback(b, g, blocked, via_block, bw, _vdr0 / 2, net=net)
         # v1.3.2: this net's own plane layers are legal travel for
         # its bridge; every other banned layer stays banned.
         extra = {g.lidx[lay] for z in b.Zones() if z.GetNetname() == net for lay in z.GetLayerSet().Seq() if lay in g.lidx and lay not in (pcbnew.F_Cu, pcbnew.B_Cu)}
@@ -1610,19 +1648,43 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
         # that point; plan from there instead. The hunt needs its own
         # grid: candidates can lie well outside the pair window, and a
         # clamped cell would silently misplace the via.
-        island = _island_polys(b, net, (fx, fy))
-        if not island: return {'status': 'no_path', 'net': net}
-        xs = [fx, dx] + [q[0] for pts, _ps, _oi in island for q in pts]
-        ys = [fy, dy] + [q[1] for pts, _ps, _oi in island for q in pts]
-        grid = Grid(b, (min(xs) - 2, max(xs) + 2, min(ys) - 2, max(ys) + 2), track_w=bw, via_r=net_class_via(b, net)[0] / 2)
-        blocked, via_block = grid.build({net}, target=net)
-        grid.free_disc(blocked, via_block, fx, fy, layers=fl)
-        grid.free_disc(blocked, via_block, dx, dy, layers=dl)
-        _stamp_inner_via_blocks(b, via_block, grid, {net})
-        _stamp_edge_keepback(b, grid, blocked, via_block, bw, _vd0 / 2)
-        _stamp_hole_keepback(b, grid, blocked, via_block, bw, _vdr0 / 2, net=net)
-        hunt_via, simp = _via_hunt(b, net, (fx, fy), grid, blocked, via_block, (dx, dy), dl, extra_layers=extra)
-        if simp is None: return {'status': 'no_path', 'net': net}
+        # v1.8.1 (#10): islands attributed by ownership (anchors = the
+        # component's via / TH-pad points); hunt grid bounded to the
+        # pair bbox + 12 mm (a board-spanning main polygon made the
+        # old grid board-wide -- the multi-minute thrash); if the frm
+        # side has no island, hunt symmetrically from dst's island.
+        _hp, _hc, _hpts = _comp_points(b, conn0, net)
+        def _anchors(xy):
+            for ci, plist in _hpts.items():
+                if any(abs(x - xy[0]) < 0.011 and abs(y - xy[1]) < 0.011 for (x, y, _l) in plist):
+                    out = [(x, y) for (x, y, ls) in plist if len(ls) == b.GetCopperLayerCount()]
+                    out += [(x, y) for (_n, x, y, _l, p) in _hp if _hc.get(_n) == ci and p.GetDrillSize().x > 0]
+                    return out
+            return []
+        def _hunt(island, target_xy, target_layers):
+            wx = (min(fx, dx) - 12, max(fx, dx) + 12, min(fy, dy) - 12, max(fy, dy) + 12)
+            isl = []
+            for (pts, ps, oi) in island:
+                xs_ = [q[0] for q in pts]; ys_ = [q[1] for q in pts]
+                if max(xs_) >= wx[0] and min(xs_) <= wx[1] and max(ys_) >= wx[2] and min(ys_) <= wx[3]: isl.append((pts, ps, oi))
+            if not isl: return None
+            xs = [fx, dx] + [q[0] for pts, _ps, _oi in isl for q in pts]
+            ys = [fy, dy] + [q[1] for pts, _ps, _oi in isl for q in pts]
+            g2 = Grid(b, (max(min(xs) - 2, wx[0]), min(max(xs) + 2, wx[1]), max(min(ys) - 2, wx[2]), min(max(ys) + 2, wx[3])), track_w=bw, via_r=net_class_via(b, net)[0] / 2)
+            bl, vb = g2.build({net}, target=net)
+            _stamp_edge_keepback(b, g2, bl, vb, bw, _vd0 / 2)
+            _stamp_hole_keepback(b, g2, bl, vb, bw, _vdr0 / 2, net=net)
+            g2.free_disc(bl, vb, fx, fy, layers=fl)
+            g2.free_disc(bl, vb, dx, dy, layers=dl)
+            _stamp_inner_via_blocks(b, vb, g2, {net})
+            hv, sp = _via_hunt(b, net, isl, g2, bl, vb, target_xy, target_layers, extra_layers=extra, scan_win=wx)
+            if sp is None: return None
+            return (hv, sp, g2)
+        hunt = _hunt(_island_polys(b, net, (fx, fy), _anchors((fx, fy))), (dx, dy), dl)
+        if hunt is None:
+            hunt = _hunt(_island_polys(b, net, (dx, dy), _anchors((dx, dy))), (fx, fy), fl)
+        if hunt is None: return {'status': 'no_path', 'net': net}
+        hunt_via, simp, grid = hunt
     segs, vias = path_segs_vias(simp)
     planned = list(vias) + ([hunt_via] if hunt_via is not None else [])
     for t in b.GetTracks():
@@ -1649,11 +1711,17 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
 
 
 
-def _island_polys(b, net, frm_xy):
+def _island_polys(b, net, frm_xy, anchors=None):
     # Filled zone polygons of the net on inner layers that contain (or
     # nearly contain) the fragment point -- the fragment's plane island.
     # Copper layer IDs are NOT 0..count-1 (KiCad 10: F=0, B=2, In1=4,
     # In2=6); enumerate from the net's own zone layer sets instead.
+    # v1.8.1 (#10): with anchors given (the fragment component's via /
+    # TH-pad points, which pierce every layer), a polygon counts as
+    # the fragment's island ONLY if it contains an anchor -- the old
+    # 2D-proximity test also matched the MAIN plane polygon whenever
+    # the fragment point sat over or within 1 mm of the main fill, and
+    # the via hunt then bridged main to main (discarded as no_merge).
     fx, fy = frm_xy
     def in_poly(px, py, pts):
         inside = False
@@ -1676,14 +1744,16 @@ def _island_polys(b, net, frm_xy):
                 # v1.3 Y1: containment is hole-aware (SHAPE_POLY_SET
                 # .Contains) -- the outer-ring in_poly test counts a
                 # point inside a pour cutout as inside the island.
-                if polys.Contains(pcbnew.VECTOR2I(nm(fx), nm(fy)), oi) or pt_poly_dist(fx, fy, pts) < 1.0: island.append((pts, polys, oi))
+                if anchors is not None:
+                    if any(polys.Contains(pcbnew.VECTOR2I(nm(ax), nm(ay)), oi) for (ax, ay) in anchors): island.append((pts, polys, oi))
+                elif polys.Contains(pcbnew.VECTOR2I(nm(fx), nm(fy)), oi) or pt_poly_dist(fx, fy, pts) < 1.0: island.append((pts, polys, oi))
     return island
 
-def _via_hunt(b, net, frm_xy, grid, blocked, via_block, dst_xy, dl, extra_layers=()):
-    # Find a legal via site inside the fragment's filled zone polygon
-    # on an inner layer, from which the planner can reach the target.
+def _via_hunt(b, net, island, grid, blocked, via_block, dst_xy, dl, extra_layers=(), scan_win=None):
+    # Find a legal via site inside the given filled zone polygons (one
+    # component's island, attributed by the caller) on an inner layer,
+    # from which the planner can reach the target point.
     # Returns (via_xy, simp) or (None, None).
-    fx, fy = frm_xy
     def in_poly(px, py, pts):
         inside = False
         for i in range(len(pts)):
@@ -1691,7 +1761,6 @@ def _via_hunt(b, net, frm_xy, grid, blocked, via_block, dst_xy, dl, extra_layers
             if (y1 > py) != (y2 > py):
                 if px < x1 + (py - y1) * (x2 - x1) / (y2 - y1): inside = not inside
         return inside
-    island = _island_polys(b, net, frm_xy)
     if not island: return None, None
     # via legality: clear of foreign pads, vias and tracks (any layer)
     obs_pads, obs_vias, obs_seg = [], [], []
@@ -1735,12 +1804,22 @@ def _via_hunt(b, net, frm_xy, grid, blocked, via_block, dst_xy, dl, extra_layers
     cands = []
     for pts, pset, oi in island:
         xs = [q[0] for q in pts]; ys = [q[1] for q in pts]
-        x = min(xs)
-        while x <= max(xs):
-            y = min(ys)
-            while y <= max(ys):
-                if pset.Contains(pcbnew.VECTOR2I(nm(x), nm(y)), oi) and via_legal(x, y):
-                    cands.append((math.hypot(x - dst_xy[0], y - dst_xy[1]), x, y))
+        x_lo, x_hi, y_lo, y_hi = min(xs), max(xs), min(ys), max(ys)
+        if scan_win is not None:
+            # v1.8.1 (#10): never scan a polygon's full bbox -- a plane
+            # polygon can span the board; only the hunt window matters.
+            x_lo = max(x_lo, scan_win[0]); x_hi = min(x_hi, scan_win[1])
+            y_lo = max(y_lo, scan_win[2]); y_hi = min(y_hi, scan_win[3])
+        x = x_lo
+        while x <= x_hi:
+            y = y_lo
+            while y <= y_hi:
+                # cheap grid prefilter BEFORE the pcbnew Contains call
+                # and the pure-Python via_legal scan over board lists.
+                _ci, _cj = grid.cell(x, y)
+                if (0 <= _cj < grid.NY and 0 <= _ci < grid.NX) and not via_block[_cj, _ci]:
+                    if pset.Contains(pcbnew.VECTOR2I(nm(x), nm(y)), oi) and via_legal(x, y):
+                        cands.append((math.hypot(x - dst_xy[0], y - dst_xy[1]), x, y))
                 y += 0.5
             x += 0.5
     cands.sort()
@@ -1751,7 +1830,7 @@ def _via_hunt(b, net, frm_xy, grid, blocked, via_block, dst_xy, dl, extra_layers
     for _d, x, y in cands[:6]:
         blocked[...] = _snap_b; via_block[...] = _snap_v
         grid.free_disc(blocked, via_block, x, y, layers=tuple(range(grid.nl)))
-        simp, _c = grid.astar(blocked, via_block, (x, y), dst_xy, tuple(range(grid.nl)), dl, extra_layers=extra_layers)
+        simp, _c = grid.astar(blocked, via_block, (x, y), dst_xy, tuple(range(grid.nl)), dl, extra_layers=extra_layers, max_pops=400000)
         if simp is not None: return (x, y), simp
     blocked[...] = _snap_b; via_block[...] = _snap_v
     return None, None
@@ -1841,17 +1920,36 @@ def _bridge_island(b, conn, netname, pad):
             if (y1 > y) != (y2 > y):
                 if x < x1 + (y - y1) * (x2 - x1) / (y2 - y1): inside = not inside
         return inside
-    goals = []
+    def pt_poly_dist(x, y, pts):
+        return min(seg_pt(x, y, pts[i][0], pts[i][1], pts[(i + 1) % len(pts)][0], pts[(i + 1) % len(pts)][1]) for i in range(len(pts)))
+    stack0 = copper_stack(b)
+    lidx0 = {lay: k for k, lay in enumerate(stack0)}
+    goals = []  # (layer_index, polys, oi, outline_pts)
     for z in b.Zones():
-        if z.GetNetname() != netname or not z.IsOnLayer(layer): continue
-        polys = z.GetFilledPolysList(layer)
-        for oi in range(polys.OutlineCount()):
-            o = polys.Outline(oi)
-            pts = [(mm(o.CPoint(k).x), mm(o.CPoint(k).y)) for k in range(o.PointCount())]
-            # v1.3 Y1: hole-aware -- a goal inside a pour cutout has
-            # no copper to bridge to.
-            if not polys.Contains(pcbnew.VECTOR2I(nm(px), nm(py)), oi): goals.append((pts, polys, oi))
+        if z.GetNetname() != netname: continue
+        for glay in z.GetLayerSet().Seq():
+            if glay not in lidx0: continue
+            polys = z.GetFilledPolysList(glay)
+            for oi in range(polys.OutlineCount()):
+                # v1.3 Y1: hole-aware -- a goal inside a pour cutout
+                # has no copper to bridge to. On the pad's own layer,
+                # skip the polygon the pad already sits in; on inner
+                # layers every filled polygon of the net is a legal
+                # 1-via target (v1.8.1 #12 -- the astar was locked to
+                # the pad's layer at both ends, so via counts were
+                # parity-locked to 0 or 2 and the 1-via drop into the
+                # net's own plane was structurally impossible).
+                if glay == layer and polys.Contains(pcbnew.VECTOR2I(nm(px), nm(py)), oi): continue
+                _o = polys.Outline(oi)
+                _pts = [(mm(_o.CPoint(k).x), mm(_o.CPoint(k).y)) for k in range(_o.PointCount())]
+                goals.append((lidx0[glay], polys, oi, _pts))
     if not goals: return False
+    # v1.8.1 (#12): length pre-filter -- the bridge is rejected past
+    # 8 mm anyway, so when every goal polygon is farther than that,
+    # skip the grid build entirely (dense boards carry many host-less
+    # floating pads; building a grid per hopeless pad dominated
+    # cmd_stitch's runtime there).
+    if min(pt_poly_dist(px, py, _pts) for (_l, _ps, _oi, _pts) in goals) > 8.0: return False
     def padset():
         return set((round(mm(it.GetPosition().x), 2), round(mm(it.GetPosition().y), 2)) for it in conn.GetConnectedItems(pad) if it.Type() == pcbnew.PCB_PAD_T)
     before = padset()
@@ -1860,23 +1958,31 @@ def _bridge_island(b, conn, netname, pad):
     # class width), not the 0.25 default -- planning narrower than the
     # drawn track put copper 0.025 mm closer to obstacles than checked.
     draw_w = net_class_width(b, netname, 0.30)
-    grid = Grid(b, window, track_w=draw_w)
+    _vd0, _vdr0 = net_class_via(b, netname)
+    grid = Grid(b, window, track_w=draw_w, via_r=_vd0 / 2)
     if li is None: li = grid.nl - 1
     blocked, via_block = grid.build({netname}, target=netname)
+    _stamp_edge_keepback(b, grid, blocked, via_block, draw_w, _vd0 / 2)
+    _stamp_hole_keepback(b, grid, blocked, via_block, draw_w, _vdr0 / 2, net=netname)
     goal = None
+    by_layer = {}
+    for (gl, ps, oi, _pts) in goals: by_layer.setdefault(gl, []).append((ps, oi))
     for j in range(grid.NY):
         for i in range(grid.NX):
-            if blocked[li, j, i]: continue
             x, y = float(grid.gx[i]), float(grid.gy[j])
-            if any(ps.Contains(pcbnew.VECTOR2I(nm(x), nm(y)), oi) for _pts, ps, oi in goals):
-                d = math.hypot(x - px, y - py)
-                if goal is None or d < goal[0]: goal = (d, x, y)
+            pt = None
+            for gl, polys in by_layer.items():
+                if blocked[gl, j, i]: continue
+                if pt is None: pt = pcbnew.VECTOR2I(nm(x), nm(y))
+                if any(ps.Contains(pt, oi) for (ps, oi) in polys):
+                    d = math.hypot(x - px, y - py)
+                    if goal is None or d < goal[0]: goal = (d, x, y, gl)
     if goal is None: return False
-    _, gx_, gy_ = goal
+    _, gx_, gy_, gli = goal
     grid.free_disc(blocked, via_block, px, py, layers=(li,))
-    grid.free_disc(blocked, via_block, gx_, gy_, layers=(li,))
+    grid.free_disc(blocked, via_block, gx_, gy_, layers=(gli,))
     _stamp_inner_via_blocks(b, via_block, grid, {netname})
-    simp, _c = grid.astar(blocked, via_block, (px, py), (gx_, gy_), (li,), (li,))
+    simp, _c = grid.astar(blocked, via_block, (px, py), (gx_, gy_), (li,), (gli,), extra_layers={gli})
     if simp is None: return False
     segs, vias = path_segs_vias(simp)
     length = sum(math.hypot(x2 - x1, y2 - y1) for (_l, x1, y1, x2, y2) in segs)
@@ -2004,7 +2110,15 @@ def cmd_stitch(board_path, out_path):
             cluster_pads = [it for it in items if it.Type() == pcbnew.PCB_PAD_T]
             px, py = mm(pad.GetPosition().x), mm(pad.GetPosition().y)
             hosts = [(ps, oi) for (ps, oi) in host_sets if ps.Contains(pad.GetPosition(), oi)]
-            if not hosts: failed.append(name); continue
+            if not hosts:
+                # v1.8.1 (#12): no outer-layer host polygon -- try the
+                # track bridge anyway (outer island or 1-via plane drop).
+                if _bridge_island(b, conn, netname, pad):
+                    stitched.append({'pad': name, 'net': netname, 'bridge': True})
+                else:
+                    failed.append(name)
+                done.extend(cluster_pads)
+                continue
             # v1.2.5: scan only a +-6 mm window around the cluster's pads
             # (was: the whole host outline's bbox) and bucket dmin to
             # 0.1 mm so the distance tiebreak actually engages -- float

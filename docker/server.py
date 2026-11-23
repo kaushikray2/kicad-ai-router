@@ -8,7 +8,7 @@ import tarfile, threading, time, urllib.request, uuid, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-BACKEND_VERSION = '1.8.0'
+BACKEND_VERSION = '1.8.1'
 SCHEMA_VERSION = 1
 DATA = os.environ.get('AIR_DATA_DIR', '/data')
 PORT = int(os.environ.get('AIR_PORT', '8731'))
@@ -337,10 +337,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, open(rp, 'rb').read(), 'application/octet-stream'); return
                 out = dict(rec)
                 led = os.path.join(job_dir(jid))
-                ledgers = [os.path.join(dp, f) for dp, _dn, fn in os.walk(led) for f in fn if f == 'ledger.json']
-                if ledgers:
-                    try: out['ledger'] = json.load(open(sorted(ledgers)[-1]))
+                _root_led = os.path.join(led, 'ledger.json')
+                if os.path.isfile(_root_led):
+                    try: out['ledger'] = json.load(open(_root_led))
                     except Exception: pass
+                else:
+                    ledgers = [os.path.join(dp, f) for dp, _dn, fn in os.walk(led) for f in fn if f == 'ledger.json']
+                    if ledgers:
+                        try: out['ledger'] = json.load(open(sorted(ledgers)[-1]))
+                        except Exception: pass
                 logp = os.path.join(led, 'job.log')
                 if os.path.exists(logp): out['log_tail'] = open(logp, errors='replace').read()[-2000:]
                 self._send(200, out); return
