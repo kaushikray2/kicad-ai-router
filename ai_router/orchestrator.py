@@ -396,4 +396,7 @@ def _run_auto_once(cfg, pipe, log):
             result['engineered_nets'] = rep
     except Exception as e:
         log('Engineered nets report failed (%s)' % e)
+    audit = getattr(pipe, '_audit', None)  # #42: independent of markings
+    if audit is not None:
+        result['placement_audit'] = audit
     return result

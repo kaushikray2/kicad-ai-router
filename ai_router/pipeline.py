@@ -42,6 +42,8 @@ try:
     from ai_router import powerplan as _powerplan
     from ai_router import wcca as _wcca
     from ai_router import kbclient as _kbclient
+    from ai_router import library_rules as _library_rules
+    from ai_router import placement_audit as _placement_audit
 except Exception:
     try:
         import markings as _markings
@@ -51,6 +53,8 @@ except Exception:
         import powerplan as _powerplan
         import wcca as _wcca
         import kbclient as _kbclient
+        import library_rules as _library_rules
+        import placement_audit as _placement_audit
     except Exception:
         _markings = None
         _tlcalc = None
@@ -59,6 +63,8 @@ except Exception:
         _powerplan = None
         _wcca = None
         _kbclient = None
+        _library_rules = None
+        _placement_audit = None
 
 # KiCad's built-in Default netclass values (what LoadBoard synthesises
 # when a board has no .kicad_pro); used as the clone source for an
@@ -147,6 +153,13 @@ class Pipeline:
             self._eng = {'error': 'engineered setup failed: %s' % e}
             self.log('Engineered nets: setup failed (%s) -- continuing unmarked' % e)
             self._record('engineered_nets', {'error': str(e)})
+        self._audit = None
+        try:
+            self.tool_placement_audit()
+        except Exception as e:
+            # The audit must never break a route either.
+            self.log('Placement audit failed (%s) -- continuing without it' % e)
+            self._record('placement_audit', {'error': str(e)})
 
     # ------------------------------------------------------------ internals
     def _record(self, step, data):
@@ -206,8 +219,11 @@ class Pipeline:
     def _engineered_first_nets(self):
         eng = getattr(self, '_eng', None)
         if isinstance(eng, dict):
-            return list(eng.get('first_nets') or [])
-        return []
+            base = list(eng.get('first_nets') or [])
+        else:
+            base = []
+        extra = ((getattr(self, '_audit', None) or {}).get('first_nets_extra') or [])
+        return base + [n for n in extra if n not in base]
 
     def _engineered_setup(self):
         # #67 Step 1: when a markings sidecar exists for the input board,
@@ -739,6 +755,64 @@ class Pipeline:
                      % (net, len(r.get('smoothed') or []), r.get('adopted')))
         return agg
 
+    def tool_placement_audit(self):
+        # #42: pre-routing placement audit + library-rule
+        # materialisation.  Runs on the working copy after strip,
+        # before any route pass.  The audit never moves a part; it
+        # reports placement facts, writes library rule-area zones
+        # the board copy lacks onto the working copy (with
+        # provenance in the ledger), and contributes first_nets
+        # advice for RF-class parts.
+        if _placement_audit is None or _library_rules is None:
+            return {'status': 'unavailable'}
+        if not self.cfg.get('placement_audit', True):
+            return {'status': 'disabled'}
+        facts = self._worker('auditgeom', '--board', self.current) or {}
+        libs = {}
+        try:
+            libs = _library_rules.load_library_rules(self.board_path)
+        except Exception as e:
+            self.log('placement audit: library tables unreadable: %s' % e)
+        library = {}
+        for fp in facts.get('footprints') or []:
+            fpid = fp.get('fpid')
+            if not fpid or fpid in library:
+                continue
+            p = _library_rules.library_footprint_path(libs, fpid)
+            if p:
+                try:
+                    library[fpid] = _library_rules.parse_footprint_rules(open(p).read())
+                except Exception:
+                    library[fpid] = None
+            else:
+                library[fpid] = None
+        rep = _placement_audit.audit(facts, library)
+        rep['status'] = 'ok'
+        self._audit = rep
+        if rep.get('materialise'):
+            p = os.path.join(self.workdir, 'audit_zones.json')
+            with open(p, 'w') as fh:
+                json.dump(rep['materialise'], fh)
+            r = self._worker('audit_zones', '--board', self.current, '--spec', p)
+            rep['materialised'] = r.get('added') or []
+            for m in rep['materialise']:
+                self._record('placement_materialise',
+                             {'ref': m['ref'], 'provenance': m['provenance'],
+                              'layers': m['layers'], 'keepout': m['keepout']})
+            self.log('placement audit: materialised %d library rule zones'
+                     % len(rep['materialised']))
+        bad = sum(1 for it in rep['footprints'].values()
+                  for c in it['checks'] if c.get('ok') is False
+                  or c['kind'] == 'keepout_intrusion')
+        self._record('placement_audit',
+                     {'footprints': len(rep['footprints']),
+                      'failed_checks': bad,
+                      'gaps': [g['ref'] for g in rep['gaps']],
+                      'first_nets_extra': rep['first_nets_extra']})
+        self.log('placement audit: %d footprints, %d failed checks, %d library gaps'
+                 % (len(rep['footprints']), bad, len(rep['gaps'])))
+        return rep
+
     def _eng_power_netlist(self):
         # #68 Step 2: the schematic netlist joins the run inputs.
         # Order: explicit config path, a sibling <board>.net export,
@@ -904,6 +978,9 @@ class Pipeline:
         plan = getattr(self, '_eng_power_plan', None)
         if plan is not None:
             rep['power'] = plan
+        audit = getattr(self, '_audit', None)
+        if audit is not None:
+            rep['placement_audit'] = audit
         nets = list((eng.get('nets') or {}).keys())
         if not nets and not (eng.get('diff') or {}):
             if plan is None:
