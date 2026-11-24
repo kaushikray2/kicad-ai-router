@@ -296,6 +296,35 @@ below, which stands until the decision is taken.
   battery (zero added faults). Kill: a treatment that cannot place
   without gate regressions ships as a report-only warning instead —
   the gap-crossing check already is one.
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented.** The checker is split in two: ai_router/rfcheck.py
+  is a pure-Python rule module (path graph + GATE-1..12 / WARN-1..8
+  evaluation over measured facts), and the worker's rfgeom command
+  measures the facts with pcbnew (segments planarised at
+  T-junctions; the GATE-1 corridor sampled at +/-3h against zone
+  fills, pads and tracks of the reference net, the feed's own via
+  antipads excluded by design). Treatments are worker commands
+  sharing one legality core modelled on stitch (clearance to foreign
+  copper, no-via rule areas, containment in the ground pour on every
+  layer that carries one): rf_vias places a symmetric return pair
+  per unserved feed via (single via as fallback, unplaceable vias
+  reported), rf_fence does GCPW ground tying at the band pitch for
+  coplanar nets that ask for it, and smooth replaces qualifying
+  track-track joints with tangent arcs (R = min(3W, fit)). The
+  pipeline admits each treatment as a unit through the acceptance
+  gate (smoothing additionally requires the clearance class to
+  hold), after the reroute window and before finalize; the report
+  embeds the per-net checks, a VER-4 pre-fab checklist and the
+  treatment record. Known draft limits: GATE-7 pi position is
+  checked against the marking's declared ends (the pi blocks are
+  user-declared footprints); GATE-9 pad-entry geometry and WARN-5
+  width variation use endpoint/width facts only; the corridor
+  oracle treats tracks of the reference net as coverage, which is
+  generous where a wide pour exists. Verified on a synthetic
+  4-layer fixture with planted defects (split reference, unserved
+  vias, stub, thermal pad): checks report exactly the planted set,
+  treatments repair the vias, and GATE-1 still fails afterwards --
+  the plane gap is a layout defect, not hidden by the pass.
 - **Step 3 — fast follow: differential pairs.** Width + gap for
   edge-coupled microstrip / stripline (e.g. 90 Ω USB). Length
   matching is explicitly out: a separate later item — length does
