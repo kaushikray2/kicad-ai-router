@@ -2665,6 +2665,198 @@ def cmd_krt_route(board_path, out_path):
     return {'status': 'routed', 'seconds': round(time.time() - t0, 1), 'refill': refill_note}
 
 
+# ---------------------------------------------------------------- stackup
+# v1.11 (#67 Step 1, engineered-nets branch): stackup reader for the
+# impedance sizing + verification report.  KiCad 10's pcbnew does not
+# wrap BOARD_STACKUP (GetStackupOrDefault returns an unbound object),
+# so the board file's own (setup (stackup ...)) block -- the primary
+# source KiCad itself persists -- is parsed directly.
+
+def _sexpr_at(text, start):
+    # Minimal s-expression reader: returns (tree, end_index) for the
+    # list starting at text[start] == '('.
+    def parse(i):
+        items = []
+        i += 1
+        while i < len(text):
+            c = text[i]
+            if c in ' \t\r\n':
+                i += 1
+            elif c == '(':
+                sub, i = parse(i)
+                items.append(sub)
+            elif c == ')':
+                return items, i + 1
+            elif c == '"':
+                j = i + 1
+                buf = []
+                while j < len(text) and text[j] != '"':
+                    if text[j] == '\\' and j + 1 < len(text):
+                        buf.append(text[j + 1]); j += 2
+                    else:
+                        buf.append(text[j]); j += 1
+                items.append(''.join(buf))
+                i = j + 1
+            else:
+                j = i
+                while j < len(text) and text[j] not in '() \t\r\n':
+                    j += 1
+                items.append(text[i:j])
+                i = j
+        return items, i
+    return parse(start)
+
+
+def _stackup_entries(board_path):
+    try:
+        with open(board_path, encoding='utf-8', errors='replace') as f:
+            text = f.read()
+    except OSError:
+        return None
+    i = text.find('(stackup')
+    if i < 0:
+        return None
+    try:
+        tree, _end = _sexpr_at(text, i)
+    except Exception:
+        return None
+    entries = []
+    for node in tree[1:]:
+        if not (isinstance(node, list) and node and node[0] == 'layer'):
+            continue
+        e = {'name': node[1] if len(node) > 1 else '', 'type': None,
+             'thickness_mm': None, 'material': None, 'er': None,
+             'loss_tangent': None}
+        for sub in node[2:]:
+            if not (isinstance(sub, list) and sub):
+                continue
+            if sub[0] == 'type' and len(sub) > 1:
+                e['type'] = sub[1]
+            elif sub[0] == 'thickness' and len(sub) > 1:
+                try: e['thickness_mm'] = float(sub[1])
+                except Exception: pass
+            elif sub[0] == 'material' and len(sub) > 1:
+                e['material'] = sub[1]
+            elif sub[0] == 'epsilon_r' and len(sub) > 1:
+                try: e['er'] = float(sub[1])
+                except Exception: pass
+            elif sub[0] == 'loss_tangent' and len(sub) > 1:
+                try: e['loss_tangent'] = float(sub[1])
+                except Exception: pass
+        entries.append(e)
+    return entries
+
+
+def _is_dielectric(e):
+    return (e['type'] in ('core', 'prepreg')) or e['name'].startswith('dielectric')
+
+
+def cmd_stackup(board_path, nets=None):
+    b = pcbnew.LoadBoard(board_path)
+    stack = copper_stack(b)
+    ncu = len(stack)
+    canon = ((['F.Cu'] + ['In%d.Cu' % i for i in range(1, ncu - 1)] + ['B.Cu'])
+             if ncu > 1 else ['F.Cu'])
+    lid2canon = {lid: canon[k] for k, lid in enumerate(stack)}
+    pour_by_layer = {}
+    for z in b.Zones():
+        zn = z.GetNetname() or ''
+        if not zn:
+            continue
+        for lid in z.GetLayerSet().CuStack():
+            c = lid2canon.get(lid)
+            if c:
+                pour_by_layer.setdefault(c, set()).add(zn)
+    gnd_layers = {c for c, ns_ in pour_by_layer.items()
+                  if any('GND' in n.upper() for n in ns_)}
+    entries = _stackup_entries(board_path)
+    file_coppers = [e for e in (entries or []) if e['type'] == 'copper']
+    defined = bool(entries) and len(file_coppers) == ncu
+    reasons = []
+    if not defined:
+        reasons.append('no_stackup_in_board_file')
+    copper = []
+    if defined:
+        diels = [e for e in entries if _is_dielectric(e)]
+        if any(e['thickness_mm'] in (None, 0) for e in diels):
+            reasons.append('dielectric_missing_thickness')
+        uniform = (len({e['er'] for e in diels}) == 1 and len({e['thickness_mm'] for e in diels}) == 1)
+        if len(diels) > 1 and uniform:
+            reasons.append('uniform_dielectric_suggests_defaults')
+        pos = {id(e): k for k, e in enumerate(entries)}
+        for k, lid in enumerate(stack):
+            fe = file_coppers[k]
+            j = pos[id(fe)]
+            above = next((entries[m] for m in range(j - 1, -1, -1)
+                          if _is_dielectric(entries[m])), None)
+            below = next((entries[m] for m in range(j + 1, len(entries))
+                          if _is_dielectric(entries[m])), None)
+            mask = None
+            if k == 0:
+                mask = next((entries[m] for m in range(j - 1, -1, -1)
+                             if entries[m]['type'] and 'Solder Mask' in entries[m]['type']), None)
+            elif k == ncu - 1:
+                mask = next((entries[m] for m in range(j + 1, len(entries))
+                             if entries[m]['type'] and 'Solder Mask' in entries[m]['type']), None)
+            def _d(e):
+                return None if e is None else {
+                    'thickness_mm': e['thickness_mm'], 'er': e['er'],
+                    'loss_tangent': e['loss_tangent'], 'material': e['material']}
+            copper.append({
+                'name': canon[k], 'board_name': b.GetLayerName(lid),
+                'thickness_mm': fe['thickness_mm'],
+                'class': ('surface_top' if k == 0 else
+                          'surface_bottom' if k == ncu - 1 else 'inner'),
+                'diel_above': _d(above), 'diel_below': _d(below),
+                'mask': None if mask is None else {
+                    'thickness_mm': mask['thickness_mm'], 'er': mask['er']},
+                'gnd_pour': canon[k] in gnd_layers,
+                'pour_nets': sorted(pour_by_layer.get(canon[k], ())),
+            })
+    net_info = {}
+    if nets:
+        want = set(nets)
+        ns = b.GetDesignSettings().m_NetSettings
+        for n in nets:
+            info = {'pads': 0, 'pad_layers': [], 'netclass': None,
+                    'netclass_width_mm': None, 'track_layers': {},
+                    'length_mm': 0.0, 'vias': 0}
+            try:
+                eff = ns.GetEffectiveNetClass(n)
+                info['netclass'] = eff.GetName()
+                info['netclass_width_mm'] = mm(eff.GetTrackWidth())
+            except Exception:
+                pass
+            net_info[n] = info
+        pad_layers = {n: set() for n in nets}
+        for fp in b.GetFootprints():
+            for p in fp.Pads():
+                n = p.GetNetname()
+                if n in want:
+                    net_info[n]['pads'] += 1
+                    for lid in p.GetLayerSet().CuStack():
+                        c = lid2canon.get(lid)
+                        if c:
+                            pad_layers[n].add(c)
+        for n in nets:
+            net_info[n]['pad_layers'] = [c for c in canon if c in pad_layers[n]]
+        for t in b.GetTracks():
+            n = t.GetNetname()
+            if n not in want:
+                continue
+            if t.Type() == pcbnew.PCB_VIA_T:
+                net_info[n]['vias'] += 1
+            else:
+                c = lid2canon.get(t.GetLayer())
+                if c:
+                    net_info[n]['track_layers'][c] = net_info[n]['track_layers'].get(c, 0) + 1
+                    net_info[n]['length_mm'] += mm(t.GetLength())
+    return {'defined': defined, 'placeholder': bool(reasons),
+            'placeholder_reasons': reasons,
+            'board_thickness_mm': mm(b.GetDesignSettings().GetBoardThickness()),
+            'copper_layers': canon, 'copper': copper, 'nets': net_info}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd')
@@ -2694,6 +2886,7 @@ def main():
             if _i is None: NO_TRACKS_ON_UNRESOLVED.append(_x.strip())
             else: BANNED_LAYER_IDS.add(_i)
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
+    elif a.cmd == 'stackup': res = cmd_stackup(a.board, [n for n in (a.nets or '').split(',') if n])
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
     elif a.cmd == 'finish_leg': res = cmd_finish_leg(a.board, a.out, a.net, attempt_select=bool(getattr(a, 'attempt_select', False)))
