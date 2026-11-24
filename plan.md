@@ -140,3 +140,61 @@ whatever they say. Do not tune against them.
 - **Engine adoption:** the plugin runs the pinned TraceMaker release.
   Trying newer engine builds is parked until the TraceMaker programme's
   own Phase 2 finishes.
+
+## After Phase 2 — Phase 3 gets planned from the results
+
+There is deliberately no Phase 3 plan yet. Phase 2 was scoped to end in
+measurements, and Phase 3 will be written from them. Planning it
+earlier would mean sizing workstreams against numbers nobody has.
+
+### The evidence Phase 3 will be planned from
+
+- **The final exam.** The 49 held-out boards, Phase 2 stack vs v1.9.6
+  stack: clean pass / CP_delta, unconnected, copper, wall time. This is
+  the generalization number — it says whether Phase 2's wins hold on
+  boards nothing was tuned against, and where the remaining losses
+  live.
+- **Per-item verdicts.** Each workstream's A/B outcome, including the
+  kills. If P2.3 parks, its measurements bound what negotiation can buy
+  here; if P2.2's probed costs predict re-bridge success, victim pricing
+  becomes a platform later items can build on — and if they do not,
+  that line closes.
+- **The re-scope checkpoint record.** What the TraceMaker programme
+  shipped during Phase 2 (its later stages: a determinism mode, a
+  finish mode, bystander-safe re-route) and what the engine-adoption
+  measurement then showed. Engine capability decides how much router
+  the plugin still needs to be.
+- **The fair engine A/B.** Whether KRT and Freerouting, run fairly,
+  earn permanent portfolio seats changes the portfolio's shape — and
+  what a per-instance chooser would have to choose between.
+- **The residual census.** A P2.0-style decomposition run on the final
+  stack: whatever fault classes and unconnected residuals remain after
+  Phase 2 are Phase 3's problem statement, in the same base / routed /
+  final terms.
+
+### Candidate directions (uncommitted)
+
+- **KiCad IPC migration.** KiCad 11 removes the SWIG bindings the
+  worker is built on; moving board access to the IPC API is the one
+  candidate with an external clock. Its size depends on how much of
+  the worker's pcbnew surface Phase 2 leaves standing.
+- **Engine integration, second round.** If the engine's finish mode
+  and deterministic mode land and measure well, finisher stages retire
+  or re-shape around them, and self-test tolerances can shrink toward
+  exact gates.
+- **Per-instance algorithm selection.** The portfolio already logs
+  per-board features and per-engine outcomes; at this data scale the
+  research conclusion was a SATzilla-style chooser over learned
+  policies. Phase 2's batteries roughly double the labelled runs
+  available to build one from.
+- **Placement audit preprocess (issue #42).** Materialise library
+  rules on the working copy and report placement-shaped faults before
+  routing — the census showed placement geometry is the dominant fault
+  source, and no router release fixes it.
+
+### How it gets written
+
+Same discipline as Phase 2: drafted from the evidence above, reviewed
+against the code before adoption, sequenced measurement-first, and
+every workstream carries an exit and a kill criterion. Until then,
+this section is the whole of the Phase 3 plan.
