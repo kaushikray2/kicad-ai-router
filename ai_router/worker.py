@@ -2840,12 +2840,15 @@ def cmd_stackup(board_path, nets=None):
         ns = b.GetDesignSettings().m_NetSettings
         for n in nets:
             info = {'pads': 0, 'pad_layers': [], 'netclass': None,
-                    'netclass_width_mm': None, 'track_layers': {},
+                    'netclass_width_mm': None, 'netclass_diff_width_mm': None,
+                    'netclass_diff_gap_mm': None, 'track_layers': {},
                     'length_mm': 0.0, 'vias': 0}
             try:
                 eff = ns.GetEffectiveNetClass(n)
                 info['netclass'] = eff.GetName()
                 info['netclass_width_mm'] = mm(eff.GetTrackWidth())
+                info['netclass_diff_width_mm'] = mm(eff.GetDiffPairWidth())
+                info['netclass_diff_gap_mm'] = mm(eff.GetDiffPairGap())
             except Exception:
                 pass
             net_info[n] = info

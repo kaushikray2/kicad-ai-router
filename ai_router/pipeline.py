@@ -221,25 +221,29 @@ class Pipeline:
             self._eng = False
             return
         nets = mk.impedance_nets()
+        pairs = mk.differential
+        legs = [n for p in pairs for n in p['nets']]
+        all_marked = nets + [l for l in legs if l not in nets]
         state = {'markings_file': os.path.basename(mk.path or ''),
-                 'first_nets': nets, 'nets': {},
-                 'entries': {e['net']: e for e in mk.impedance}}
+                 'first_nets': all_marked, 'nets': {},
+                 'entries': {e['net']: e for e in mk.impedance},
+                 'diff_entries': {p['name']: p for p in pairs}, 'diff': {}}
         self._eng = state
-        if not nets:
+        if not nets and not pairs:
             self._record('engineered_nets',
-                         {'note': 'sidecar present, no impedance markings'})
+                         {'note': 'sidecar present, no impedance or differential markings'})
             return
-        su = self._worker('stackup', '--board', self.base, '--nets', ','.join(nets))
+        su = self._worker('stackup', '--board', self.base, '--nets', ','.join(all_marked))
         state['stackup_defined'] = bool(su.get('defined'))
         state['stackup_placeholder'] = bool(su.get('placeholder'))
         state['placeholder_reasons'] = su.get('placeholder_reasons') or []
         if not su.get('defined'):
             self.log('Engineered nets: no stackup in the board file -- marked '
-                     'nets %s join first_nets but cannot be sized' % nets)
+                     'nets %s join first_nets but cannot be sized' % all_marked)
             self._record('engineered_nets',
                          {'stackup_defined': False,
                           'placeholder_reasons': state['placeholder_reasons'],
-                          'first_nets': nets})
+                          'first_nets': all_marked})
             return
         copper = {c['name']: c for c in su.get('copper') or []}
         sized = {}
@@ -263,8 +267,29 @@ class Pipeline:
                 rec['warning'] = 'no layer produced a solvable width'
             sized[net] = rec
             state['nets'][net] = rec
+        dsized = {}
+        for pair in pairs:
+            pname = pair['name']
+            pad_layers = sorted({l for n in pair['nets']
+                                 for l in (((su.get('nets') or {}).get(n) or {}).get('pad_layers') or [])})
+            cand = [c for c in (pair.get('layers') or pad_layers) if c in copper]
+            per_layer = {lname: self._eng_diff_layer(pair, copper[lname], len(copper))
+                         for lname in cand}
+            primary = next((l for l in cand if per_layer[l].get('width_mm')), None)
+            rec = {'nets': pair['nets'], 'target_zdiff': pair['zdiff_ohm'],
+                   'freq_hz': pair.get('freq_hz'), 'candidate_layers': cand,
+                   'per_layer': per_layer, 'primary_layer': primary,
+                   'width_mm': per_layer[primary]['width_mm'] if primary else None,
+                   'gap_mm': per_layer[primary]['gap_mm'] if primary else None}
+            if not cand:
+                rec['warning'] = 'pair legs have no pads on any copper layer (not on board?)'
+            elif primary is None:
+                rec['warning'] = 'no layer produced a solvable pair geometry'
+            dsized[pname] = rec
+            state['diff'][pname] = rec
         applied = self._eng_patch_pro(sized, su)
-        su2 = self._worker('stackup', '--board', self.base, '--nets', ','.join(nets))
+        dapplied = self._eng_patch_pro_diff(dsized, su) if dsized else {}
+        su2 = self._worker('stackup', '--board', self.base, '--nets', ','.join(all_marked))
         for net, rec in sized.items():
             got = ((su2.get('nets') or {}).get(net) or {}).get('netclass_width_mm')
             rec['applied_class'] = applied.get(net)
@@ -272,12 +297,28 @@ class Pipeline:
             rec['width_verified'] = bool(
                 got is not None and rec['width_mm'] is not None
                 and abs(got - rec['width_mm']) < 0.001)
+        for pname, rec in dsized.items():
+            rec['applied_class'] = dapplied.get(pname)
+            ok = bool(rec.get('width_mm') and rec.get('gap_mm'))
+            rec['applied_per_leg'] = {}
+            for leg in rec['nets']:
+                li = (su2.get('nets') or {}).get(leg) or {}
+                gw, gs = li.get('netclass_diff_width_mm'), li.get('netclass_diff_gap_mm')
+                rec['applied_per_leg'][leg] = {'diff_width_mm': gw, 'diff_gap_mm': gs}
+                ok = bool(ok and gw is not None and gs is not None
+                          and abs(gw - rec['width_mm']) < 0.001
+                          and abs(gs - rec['gap_mm']) < 0.001)
+            rec['verified'] = ok
         self._record('engineered_nets', {
             'stackup_defined': True, 'placeholder': state['stackup_placeholder'],
             'sized': {n: {'primary_layer': r['primary_layer'],
                           'width_mm': r['width_mm'],
                           'verified': r.get('width_verified')}
-                      for n, r in sized.items()}})
+                      for n, r in sized.items()},
+            'diff_sized': {p: {'primary_layer': r['primary_layer'],
+                               'width_mm': r['width_mm'], 'gap_mm': r['gap_mm'],
+                               'verified': r.get('verified')}
+                           for p, r in dsized.items()}})
         self.log('Engineered nets: sized %s'
                  % {n: r['width_mm'] for n, r in sized.items()})
 
@@ -412,6 +453,112 @@ class Pipeline:
             json.dump(data, fh, indent=1)
         return applied
 
+
+    def _eng_diff_layer(self, pair, cu, ncu):
+        # #67 Step 3: edge-coupled pair geometry for one layer.  Surface
+        # layers use tlcalc's IPC-2141A / AN-905 differential microstrip
+        # form, inner layers the Cohn differential stripline; the
+        # single-ended companion is the same layer's Step 1 model.
+        # Solder mask is not modelled for pairs in this draft (flagged).
+        t = cu.get('thickness_mm') or 0.035
+        cls = cu.get('class')
+        flags = ['diff_mask_not_modelled'] if cls in ('surface_top', 'surface_bottom') else []
+        if cls in ('surface_top', 'surface_bottom'):
+            diel = cu.get('diel_below') if cls == 'surface_top' else cu.get('diel_above')
+            if not diel or not diel.get('thickness_mm'):
+                return {'error': 'no dielectric inside the surface layer'}
+            h = diel['thickness_mm']
+            er = pair.get('dk') or diel.get('er')
+            if not er:
+                return {'error': 'dielectric er unknown and no dk in marking'}
+            diff_of = lambda w, s: _tlcalc.diff_microstrip(w, s, h, t, er)
+            single_of = lambda w: _tlcalc.microstrip(w, h, t, er, f_hz=pair.get('freq_hz') or 0.0)
+            model = 'diff_microstrip'
+        elif cls == 'inner':
+            da, db = cu.get('diel_above'), cu.get('diel_below')
+            if (not da or not db or not da.get('thickness_mm')
+                    or not db.get('thickness_mm')):
+                return {'error': 'inner layer lacks dielectric on both sides'}
+            h1 = db['thickness_mm']
+            h2 = da['thickness_mm']
+            b = h1 + t + h2
+            if pair.get('dk'):
+                er = pair['dk']
+            elif da.get('er') and db.get('er'):
+                er = (da['er'] * h2 + db['er'] * h1) / (h1 + h2)
+            else:
+                er = da.get('er') or db.get('er')
+            if not er:
+                return {'error': 'dielectric er unknown and no dk in marking'}
+            diff_of = lambda w, s: _tlcalc.diff_stripline(w, s, b, t, er)
+            single_of = lambda w: _tlcalc.stripline(w, b, t, er, a=h1)
+            model = 'diff_stripline'
+        else:
+            return {'error': 'unknown layer class %r' % (cls,)}
+        r = _tlcalc.solve_diff_geometry(diff_of, single_of, pair['zdiff_ohm'],
+                                        gap_mm=pair.get('gap_mm'),
+                                        width_mm=pair.get('width_mm'))
+        if 'error' in r:
+            return {'model': model, 'flags': flags, 'error': r['error']}
+        r = dict(r)
+        r['model'] = model
+        r['flags'] = flags + list(r.get('flags') or [])
+        return r
+
+    def _eng_patch_pro_diff(self, dsized, su):
+        # #67 Step 3: one AI-DIFF-* netclass per pair in the workdir
+        # project file, same discipline as _eng_patch_pro: clone of the
+        # first leg's current class with track width, diff-pair width
+        # and diff-pair gap replaced, and BOTH legs' pattern
+        # assignments replaced outright.
+        pro_path = os.path.join(self.workdir, 'input.kicad_pro')
+        data = None
+        if os.path.exists(pro_path):
+            try:
+                with open(pro_path) as fh:
+                    data = json.load(fh)
+            except Exception:
+                data = None
+        if not isinstance(data, dict):
+            data = {}
+        nset = data.setdefault('net_settings', {})
+        classes = nset.setdefault('classes', [])
+        patterns = nset.setdefault('netclass_patterns', [])
+        if not any(isinstance(c, dict) and c.get('name') == 'Default' for c in classes):
+            classes.insert(0, dict(_ENG_DEFAULT_CLASS))
+        by_name = {c.get('name'): c for c in classes if isinstance(c, dict)}
+        applied = {}
+        used = set()
+        for pname, rec in dsized.items():
+            if not rec.get('width_mm') or not rec.get('gap_mm'):
+                continue
+            base_name = 'AI-DIFF-' + (re.sub(r'[^A-Za-z0-9]+', '_', pname).strip('_') or 'PAIR')
+            name, k = base_name, 2
+            while name in used:
+                name = '%s_%d' % (base_name, k)
+                k += 1
+            used.add(name)
+            src_name = ((su.get('nets') or {}).get(rec['nets'][0]) or {}).get('netclass')
+            clone = dict(by_name.get(src_name) or by_name.get('Default')
+                         or _ENG_DEFAULT_CLASS)
+            clone['name'] = name
+            clone['track_width'] = round(rec['width_mm'], 4)
+            clone['diff_pair_width'] = round(rec['width_mm'], 4)
+            clone['diff_pair_gap'] = round(rec['gap_mm'], 4)
+            clone['priority'] = 1000
+            if name in by_name:
+                classes[classes.index(by_name[name])] = clone
+            else:
+                classes.append(clone)
+            by_name[name] = clone
+            for leg in rec['nets']:
+                patterns[:] = [pp for pp in patterns
+                               if not (isinstance(pp, dict) and pp.get('pattern') == leg)]
+                patterns.append({'netclass': name, 'pattern': leg})
+            applied[pname] = name
+        with open(pro_path, 'w') as fh:
+            json.dump(data, fh, indent=1)
+        return applied
 
     # ---- #67 Step 2: RF checks + treatments (branch-only) ----
     # Annex band conventions: thresholds are evaluated at the band TOP,
@@ -619,10 +766,12 @@ class Pipeline:
                   if e2.get('step') in ('rf_vias', 'rf_fence', 'rf_smooth')]
         if treats:
             rep['treatments'] = treats
-        nets = list((eng.get('nets') or {}).keys()) or list(eng.get('first_nets') or [])
-        if not nets:
+        nets = list((eng.get('nets') or {}).keys())
+        if not nets and not (eng.get('diff') or {}):
             rep['note'] = 'sidecar present, no impedance markings'
             return rep
+        all_marked = nets + [l for r in (eng.get('diff') or {}).values()
+                             for l in r['nets'] if l not in nets]
         checks = {}
         if _rfcheck is not None and (eng.get('entries') or {}):
             try:
@@ -637,7 +786,7 @@ class Pipeline:
                             (eng.get('entries') or {}).get(n) or {}, ctxs[n], f)
             except Exception as exc:
                 checks = {'error': str(exc)}
-        su = self._worker('stackup', '--board', final_board, '--nets', ','.join(nets))
+        su = self._worker('stackup', '--board', final_board, '--nets', ','.join(all_marked))
         copper = su.get('copper') or []
         order = [c['name'] for c in copper]
         by_name = {c['name']: c for c in copper}
@@ -697,6 +846,27 @@ class Pipeline:
                     'fail': sum(1 for x in checks[net] if x['severity'] == 'fail'),
                     'warn': sum(1 for x in checks[net] if x['severity'] == 'warn')}
             rep['nets'][net] = e
+        diffs = []
+        for pname, rec in (eng.get('diff') or {}).items():
+            lens = {leg: round(((su.get('nets') or {}).get(leg) or {}).get('length_mm') or 0.0, 2)
+                    for leg in rec['nets']}
+            diffs.append({
+                'name': pname, 'nets': rec['nets'],
+                'target_zdiff_ohm': rec.get('target_zdiff'),
+                'primary_layer': rec.get('primary_layer'),
+                'per_layer': rec.get('per_layer'),
+                'applied_width_mm': rec.get('width_mm'),
+                'applied_gap_mm': rec.get('gap_mm'),
+                'applied_class': rec.get('applied_class'),
+                'verified': rec.get('verified'),
+                'leg_lengths_mm': lens,
+                'skew_mm': (round(abs(lens[rec['nets'][0]] - lens[rec['nets'][1]]), 2)
+                            if len(lens) == 2 else None),
+                'note': 'Skew is a measured fact only: length matching is a '
+                        'separate item, and KiCad DRC diff-pair checks '
+                        'remain the authority.'})
+        if diffs:
+            rep['differential'] = diffs
         self._record('engineered_report', {'nets': list(rep['nets'].keys())})
         return rep
 
