@@ -329,6 +329,23 @@ below, which stands until the decision is taken.
   edge-coupled microstrip / stripline (e.g. 90 Ω USB). Length
   matching is explicitly out: a separate later item — length does
   not set impedance.
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented.** A `differential` markings section (name, two nets,
+  zdiff target, optional designer-pinned gap or width) is sized per
+  layer by tlcalc.solve_diff_geometry (width at a declared gap, gap
+  at a declared width, as-declared evaluation, and a default solve
+  along gap == width — zdiff along that line is non-monotonic for
+  stripline, so the default scans for its bracket). The primary
+  layer's geometry lands as an AI-DIFF-* netclass (track width +
+  diff-pair width/gap) on both legs, verified by effective-netclass
+  readback; legs join first_nets. The report carries per-layer
+  solutions, applied values, leg lengths and measured skew — skew
+  as a fact only; length matching remains the separate item, and
+  KiCad DRC's diff-pair checks remain the authority. Draft limits:
+  solder mask is not modelled for pairs (flagged per layer), and
+  pair generation is the engine's --diff-pairs mode — the plugin
+  contributes marking, sizing, priority and verification, and does
+  not itself couple the legs' geometry.
 
 **Implementation sketch** (design discussion, 2026-11-24). Design
 reference: issue #67 itself, its "Research refinements
