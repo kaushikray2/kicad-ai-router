@@ -606,6 +606,15 @@ lengths/delays match hand measurement within rounding; a member
 that cannot fit reports its shortfall — never silently
 accepted. Stated limitation: no field solver, no meander
 self-coupling model; the report says so.
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented.** markings length_groups schema (nets or a diff
+  pair by name; longest / absolute length / absolute delay
+  targets; mm and/or ps tolerances); ai_router/lengthmatch.py
+  evaluates per-member length + delay from routed geometry
+  (powergeom facts incl. arc lengths); the worker meander
+  command adds accordion length on the member's longest segment
+  and tool_length_match admits it only through the exact
+  checker, re-evaluates, and reports shortfalls as failures.
 
 ### P2.11 — High-voltage domains (issue #70)
 The safety axis of the engineered-nets block. The user assigns
