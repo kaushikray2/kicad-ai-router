@@ -444,6 +444,24 @@ regression during development was a phantom baseline (v1.2.5
 control run reproduced the identical 15). Fixtures: heal bridges
 2, finish /RAM_A14 rolled back, stitch clean no-op.
 
+## v1.10.2 -- 2026-11-24
+
+Hotfix for a defect in v1.10.1's #50 fix, found by the fix's own
+verification an hour after the release: cmd_lock_window keyed its
+lock-state record by str(m_Uuid), which in KiCad 10 is the SWIG
+proxy repr -- the SAME string for every item -- so the record
+collapsed to a couple of keys and cmd_restore_locks restored
+nothing (changed: 0 on a 163-track board; 78 tracks would have
+kept the window pass's locks). Both sites now use
+m_Uuid.AsString(). The user-lock protection half of #50 (never
+unlock user-locked copper in the window) was and is correct.
+
+- tests/test_lock_roundtrip.py: synthetic 3-track board -- record
+holds every item, the outside track flips back on restore, final
+lock states identical to the original. Fails on v1.10.1, passes
+here. The reroute_window stage is off by default, so no default
+v1.10.1 run was affected.
+
 ## v1.10.1 -- 2026-11-24
 
 Hygiene batch from the fourteenth external review (a follow-up audit of

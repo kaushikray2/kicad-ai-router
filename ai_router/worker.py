@@ -2160,7 +2160,7 @@ def cmd_lock_window(board_path, out_path, net, margin=6.0, fx=None, fy=None, tx=
     # --reroute then ripped it.
     states = {}
     for t in list(b.GetTracks()):
-        try: states[str(t.m_Uuid)] = bool(t.IsLocked())
+        try: states[t.m_Uuid.AsString()] = bool(t.IsLocked())
         except Exception: pass
     locked = unlocked = kept = 0
     for t in list(b.GetTracks()):
@@ -2184,7 +2184,7 @@ def cmd_restore_locks(board_path, out_path, locks_file):
     b = pcbnew.LoadBoard(board_path)
     n = 0
     for t in list(b.GetTracks()):
-        try: u = str(t.m_Uuid)
+        try: u = t.m_Uuid.AsString()
         except Exception: continue
         if u in states and bool(t.IsLocked()) != states[u]:
             t.SetLocked(states[u]); n += 1
