@@ -59,7 +59,8 @@ def main():
         z.write(os.path.join(pkg_src, 'icon.png'), 'resources/icon.png')
     blob = open(zip_path, 'rb').read()
     sha = hashlib.sha256(blob).hexdigest()
-    install_size = sum(os.path.getsize(os.path.join(pkg_src, f)) for f in files)
+    with zipfile.ZipFile(zip_path) as z:
+        install_size = sum(e.file_size for e in z.infolist())
     pkg_entry = dict(METADATA)
     pkg_entry['versions'] = [dict(METADATA['versions'][0],
                                   download_sha256=sha, download_size=len(blob),
