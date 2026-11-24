@@ -144,16 +144,16 @@ def test_mils_scale_invariance():
 
 
 def test_solve_diff_geometry_round_trips():
-    d = lambda w, s: tlcalc.diff_microstrip(w, s, 0.2, 0.035, 4.4)
-    sg = lambda w: tlcalc.microstrip(w, 0.2, 0.035, 4.4)
+    d = lambda w, s: T.diff_microstrip(w, s, 0.2, 0.035, 4.4)
+    sg = lambda w: T.microstrip(w, 0.2, 0.035, 4.4)
     for kw in ({}, {'gap_mm': 0.15}, {'width_mm': 0.3}):
-        r = tlcalc.solve_diff_geometry(d, sg, 90.0, **kw)
+        r = T.solve_diff_geometry(d, sg, 90.0, **kw)
         assert 'error' not in r, r
         back = d(r['width_mm'], r['gap_mm'])
         assert abs(back.zdiff - 90.0) < 0.1, (kw, r, back.zdiff)
-    both = tlcalc.solve_diff_geometry(d, sg, 90.0, gap_mm=0.15, width_mm=0.3)
+    both = T.solve_diff_geometry(d, sg, 90.0, gap_mm=0.15, width_mm=0.3)
     assert both['mode'] == 'as_declared' and abs(both['zdiff'] - 81.3) < 0.2
-    ds = lambda w, s: tlcalc.diff_stripline(w, s, 1.4, 0.035, 4.4)
-    ss = lambda w: tlcalc.stripline(w, 1.4, 0.035, 4.4, a=0.68)
-    r = tlcalc.solve_diff_geometry(ds, ss, 100.0)
+    ds = lambda w, s: T.diff_stripline(w, s, 1.4, 0.035, 4.4)
+    ss = lambda w: T.stripline(w, 1.4, 0.035, 4.4, a=0.68)
+    r = T.solve_diff_geometry(ds, ss, 100.0)
     assert 'error' not in r and abs(ds(r['width_mm'], r['gap_mm']).zdiff - 100.0) < 0.1, r
