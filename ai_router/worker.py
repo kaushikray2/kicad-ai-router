@@ -3183,6 +3183,269 @@ def cmd_rfgeom(board_path, spec):
     return out
 
 
+# ------------------------------------------------------- RF treatments
+# #67 Step 2 treatments.  All three commands place copper only where it
+# is legal by the same rules the stitch command enforces (clearance to
+# foreign pads/tracks/vias with the ground netclass via, no-via rule
+# areas, containment in the ground pour on both outer layers and on
+# every inner layer that carries a ground zone) and refill at the end.
+# The pipeline admits or rolls back each command as a unit through the
+# acceptance gate, so a treatment can never silently degrade a board.
+
+class _ViaSites:
+    def __init__(self, b, gnd):
+        self.b = b
+        self.gnd = gnd
+        vw, vd = net_class_via(b, gnd)
+        self.vw, self.vd = vw, vd
+        try:
+            self.clr = mm(b.GetDesignSettings().m_NetSettings.GetEffectiveNetClass(gnd).GetClearance())
+        except Exception:
+            self.clr = 0.2
+        self.fills = {}        # layer id -> [(poly_set, [outline idx])]
+        self.inner = []        # inner layer ids carrying a GND zone
+        stack = copper_stack(b)
+        for z in b.Zones():
+            if z.GetNetname() != gnd:
+                continue
+            for lid in z.GetLayerSet().CuStack():
+                try:
+                    ps = z.GetFilledPolysList(lid)
+                except Exception:
+                    continue
+                if ps and ps.OutlineCount():
+                    self.fills.setdefault(lid, []).append(ps)
+                    if lid not in (stack[0], stack[-1]) and lid not in self.inner:
+                        self.inner.append(lid)
+        self.outer = [stack[0], stack[-1]] if len(stack) > 1 else [stack[0]]
+        self.pads = [(p.GetNetname(), _pad_sdf_params(p))
+                     for fp in b.GetFootprints() for p in fp.Pads()]
+        self.segs = [(mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x),
+                      mm(t.GetEnd().y), t.GetLayer(), mm(t.GetWidth()), t.GetNetname())
+                     for t in b.GetTracks() if t.Type() != pcbnew.PCB_VIA_T]
+        self.vias = [(mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetWidth()), t.GetNetname())
+                     for t in b.GetTracks() if t.Type() == pcbnew.PCB_VIA_T]
+        self.novia = []
+        for z in b.Zones():
+            if z.GetIsRuleArea() and z.GetZoneRuleAreaSettings().GetNoVia():
+                self.novia.append(z.Outline())
+
+    def _inside_gnd(self, lid, x, y):
+        pt = pcbnew.VECTOR2I(nm(x), nm(y))
+        for ps in self.fills.get(lid, []):
+            for oi in range(ps.OutlineCount()):
+                if ps.Contains(pt, oi):
+                    return True
+        return False
+
+    def ok(self, x, y):
+        r = self.vw / 2
+        for (n, prm) in self.pads:
+            if n != self.gnd and _pad_sdf_dist(prm, x, y) < self.clr + r:
+                return False
+        for (ax, ay, bx, by, lid, w, n) in self.segs:
+            if n != self.gnd and seg_pt(x, y, ax, ay, bx, by) < self.clr + r + w / 2:
+                return False
+        for (vx, vy, w, n) in self.vias:
+            if n != self.gnd and math.hypot(x - vx, y - vy) < self.clr + r + w / 2:
+                return False
+        pt = pcbnew.VECTOR2I(nm(x), nm(y))
+        for ps in self.novia:
+            for oi in range(ps.OutlineCount()):
+                if ps.Contains(pt, oi):
+                    return False
+        for lid in self.outer + self.inner:
+            if lid in self.fills and not self._inside_gnd(lid, x, y):
+                return False
+        return True
+
+    def place(self, x, y):
+        nets = {n: self.b.FindNet(n) for n in (self.gnd,)}
+        v = add_via(self.b, nets, self.gnd, x, y, self.vw, self.vd)
+        self.vias.append((x, y, self.vw, self.gnd))
+        return v
+
+
+def cmd_rf_vias(board_path, spec):
+    # Annex GEN-3: every signal via of a marked net gets a ground return
+    # via inside the band ceiling (a symmetric pair where both sides are
+    # legal - the pair is what keeps the return loop small).
+    b = pcbnew.LoadBoard(board_path)
+    refill(b)
+    placed, unplaced = [], []
+    for net, ns in (spec.get('nets') or {}).items():
+        gnd = ns.get('gnd_net') or 'GND'
+        ceiling = ns.get('ceiling_mm') or 2.54
+        sites = _ViaSites(b, gnd)
+        gnd_pts = [(x, y) for (x, y, _w, n) in sites.vias if n == gnd]
+        gnd_pts += [prm[:2] for (n, prm) in sites.pads if n == gnd]
+        sig_vias = [(x, y) for (x, y, _w, n) in sites.vias if n == net]
+        for (x, y) in sig_vias:
+            if any(math.hypot(x - gx, y - gy) <= ceiling for (gx, gy) in gnd_pts):
+                continue
+            done = False
+            for frac in (0.5, 0.65, 0.8):
+                r = ceiling * frac
+                for k in range(8):
+                    th = math.pi * k / 4
+                    ax, ay = x + r * math.cos(th), y + r * math.sin(th)
+                    bx, by = x - r * math.cos(th), y - r * math.sin(th)
+                    if sites.ok(ax, ay) and sites.ok(bx, by):
+                        sites.place(ax, ay); sites.place(bx, by)
+                        placed += [(round(ax, 2), round(ay, 2)), (round(bx, 2), round(by, 2))]
+                        gnd_pts += [(ax, ay), (bx, by)]
+                        done = True
+                        break
+                if done:
+                    break
+            if not done:
+                for frac in (0.5, 0.65, 0.8):
+                    r = ceiling * frac
+                    for k in range(8):
+                        th = math.pi * k / 4
+                        ax, ay = x + r * math.cos(th), y + r * math.sin(th)
+                        if sites.ok(ax, ay):
+                            sites.place(ax, ay)
+                            placed.append((round(ax, 2), round(ay, 2)))
+                            gnd_pts.append((ax, ay))
+                            done = True
+                            break
+                    if done:
+                        break
+            if not done:
+                unplaced.append((round(x, 2), round(y, 2)))
+    refill(b)
+    pcbnew.SaveBoard(board_path, b)
+    return {'placed': placed, 'unplaced': unplaced}
+
+
+def cmd_rf_fence(board_path, spec):
+    # Annex GEN-4: fencing is coplanar ground tying only - ground vias at
+    # the band pitch alongside a coplanar feed, tied into the same-layer
+    # pour (containment is part of _ViaSites.ok).  No shielding claim.
+    b = pcbnew.LoadBoard(board_path)
+    refill(b)
+    placed = []
+    for net, ns in (spec.get('nets') or {}).items():
+        gnd = ns.get('gnd_net') or 'GND'
+        pitch = ns.get('pitch_mm') or 2.0
+        gap = ns.get('gap_mm')
+        sites = _ViaSites(b, gnd)
+        if gap is None:
+            gap = sites.clr
+        existing = [(x, y) for (x, y, _w, n) in sites.vias if n == gnd]
+        segs = [(mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y), mm(t.GetWidth()))
+                for t in b.GetTracks()
+                if t.GetNetname() == net and t.Type() != pcbnew.PCB_VIA_T]
+        for (ax, ay, bx, by, w) in segs:
+            dx, dy = bx - ax, by - ay
+            L = math.hypot(dx, dy)
+            if L < pitch:
+                continue
+            ux, uy = dx / L, dy / L
+            px, py = -uy, ux
+            n = int(L / pitch)
+            for k in range(1, n + 1):
+                cx, cy = ax + ux * pitch * k, ay + uy * pitch * k
+                for extra in (0.0, 0.3, 0.6):
+                    off = w / 2 + gap + extra + sites.vw / 2
+                    done = False
+                    for sgn in (1, -1):
+                        vx, vy = cx + sgn * px * off, cy + sgn * py * off
+                        if any(math.hypot(vx - ex, vy - ey) < pitch * 0.6 for (ex, ey) in existing):
+                            continue
+                        if sites.ok(vx, vy):
+                            sites.place(vx, vy)
+                            placed.append((round(vx, 2), round(vy, 2)))
+                            existing.append((vx, vy))
+                            done = True
+                            break
+                    if done:
+                        break
+    refill(b)
+    pcbnew.SaveBoard(board_path, b)
+    return {'placed': placed}
+
+
+def cmd_smooth(board_path, net):
+    # Annex GEN-2: replace sharp interior track joints of one net with
+    # tangent arcs.  Only plain track-track vertices qualify (no pad,
+    # via, branch or layer change at the vertex, equal widths); the arc
+    # radius targets 3x the track width and must fit inside 45% of the
+    # shorter neighbour segment, else the joint is left alone.  The
+    # caller gates the result - this command just does the geometry.
+    b = pcbnew.LoadBoard(board_path)
+    refill(b)
+    tracks = [t for t in b.GetTracks() if t.GetNetname() == net]
+    segs = [t for t in tracks if t.Type() == pcbnew.PCB_TRACE_T]
+    via_pos = {(t.GetPosition().x, t.GetPosition().y) for t in tracks if t.Type() == pcbnew.PCB_VIA_T}
+    pad_pos = {(p.GetPosition().x, p.GetPosition().y)
+               for fp in b.GetFootprints() for p in fp.Pads() if p.GetNetname() == net}
+    ends = {}
+    for t in segs:
+        for pt in (t.GetStart(), t.GetEnd()):
+            ends.setdefault((pt.x, pt.y), []).append(t)
+    smoothed, skipped = [], []
+    for (vx, vy), ts in ends.items():
+        if len(ts) != 2 or (vx, vy) in via_pos or (vx, vy) in pad_pos:
+            continue
+        t1, t2 = ts
+        if t1.GetLayer() != t2.GetLayer() or abs(t1.GetWidth() - t2.GetWidth()) > 1000:
+            continue
+        def _other(t):
+            s, e = t.GetStart(), t.GetEnd()
+            return e if (s.x, s.y) == (vx, vy) else s
+        o1, o2 = _other(t1), _other(t2)
+        W = mm(t1.GetWidth())
+        ux, uy = vx - o1.x, vy - o1.y   # into the vertex, nm
+        wx, wy = o2.x - vx, o2.y - vy   # out of the vertex, nm
+        L1, L2 = math.hypot(ux, uy), math.hypot(wx, wy)
+        if L1 < 1 or L2 < 1:
+            continue
+        ux, uy, wx, wy = ux / L1, uy / L1, wx / L2, wy / L2
+        cos_phi = max(-1.0, min(1.0, ux * wx + uy * wy))
+        phi = math.acos(cos_phi)              # turn angle; 0 = straight
+        if phi < math.radians(40):
+            continue
+        tan_half = math.tan(phi / 2)
+        R_fit = 0.45 * min(L1, L2) / 1e6 / tan_half if tan_half > 0 else 0
+        R = min(3 * W, R_fit)
+        if R < 1.0 * W:
+            skipped.append({'x': round(vx / 1e6, 2), 'y': round(vy / 1e6, 2), 'why': 'no room for R >= W'})
+            continue
+        T = R * tan_half                      # tangent length, mm
+        vxm, vym = vx / 1e6, vy / 1e6
+        p1 = (vxm - ux * T, vym - uy * T)
+        p2 = (vxm + wx * T, vym + wy * T)
+        bx, by = -ux + wx, -uy + wy           # vertex -> centre direction
+        bl = math.hypot(bx, by)
+        if bl < 1e-9:
+            continue
+        d = R / math.sin(phi / 2)
+        cx, cy = vxm + bx / bl * d, vym + by / bl * d
+        mx, my = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
+        ml = math.hypot(mx - cx, my - cy)
+        mid = (cx + (mx - cx) / ml * R, cy + (my - cy) / ml * R)
+        for t, p in ((t1, p1), (t2, p2)):
+            s, e = t.GetStart(), t.GetEnd()
+            if (s.x, s.y) == (vx, vy):
+                t.SetStart(pcbnew.VECTOR2I(nm(p[0]), nm(p[1])))
+            else:
+                t.SetEnd(pcbnew.VECTOR2I(nm(p[0]), nm(p[1])))
+        arc = pcbnew.PCB_ARC(b)
+        arc.SetStart(pcbnew.VECTOR2I(nm(p1[0]), nm(p1[1])))
+        arc.SetMid(pcbnew.VECTOR2I(nm(mid[0]), nm(mid[1])))
+        arc.SetEnd(pcbnew.VECTOR2I(nm(p2[0]), nm(p2[1])))
+        arc.SetWidth(t1.GetWidth())
+        arc.SetLayer(t1.GetLayer())
+        arc.SetNetCode(t1.GetNetCode())
+        b.Add(arc)
+        smoothed.append({'x': round(vxm, 2), 'y': round(vym, 2), 'r_mm': round(R, 3)})
+    refill(b)
+    pcbnew.SaveBoard(board_path, b)
+    return {'net': net, 'smoothed': smoothed, 'skipped': skipped}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd')
@@ -3214,6 +3477,11 @@ def main():
             else: BANNED_LAYER_IDS.add(_i)
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'stackup': res = cmd_stackup(a.board, [n for n in (a.nets or '').split(',') if n])
+    elif a.cmd == 'rf_vias':
+        with open(a.spec) as _f: res = cmd_rf_vias(a.board, json.load(_f))
+    elif a.cmd == 'rf_fence':
+        with open(a.spec) as _f: res = cmd_rf_fence(a.board, json.load(_f))
+    elif a.cmd == 'smooth': res = cmd_smooth(a.board, a.net)
     elif a.cmd == 'rfgeom':
         with open(a.spec) as _f: res = cmd_rfgeom(a.board, json.load(_f))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
