@@ -109,3 +109,23 @@ def test_differential_section():
         except markings.MarkingsError:
             continue
         raise AssertionError('accepted bad differential entry: %r' % (bad,))
+
+
+def test_power_section_validation():
+    ok = markings.validate({'version': 1, 'power': [{
+        'net': 'V5', 'voltage': {'nominal_v': 5},
+        'loads': {'U1': {'peak_a': 1.0}}, 'regulators': {'U2': {'type': 'ldo'}}}]})
+    e = ok['power'][0]
+    assert e['voltage'] == {'nominal_v': 5.0, 'min_v': 5.0, 'max_v': 5.0}
+    assert e['loads']['U1']['sustained_a'] == 1.0  # conservative default
+    for bad in ({'net': 'V5', 'voltage': {'nominal_v': 5, 'min_v': 6}},
+                {'net': 'V5', 'loads': {'U1': {'peak_a': -1}}},
+                {'net': 'V5', 'loads': {'U1': {'peak_a': 1, 'kind': 'magic'}}},
+                {'net': 'V5', 'regulators': {'U2': {'type': 'buck'}}},
+                {'net': 'V5', 'protective': {'F1': {}}},
+                {'loads': {}}):
+        try:
+            markings.validate({'version': 1, 'power': [bad]})
+        except markings.MarkingsError:
+            continue
+        raise AssertionError('accepted bad power entry: %r' % (bad,))

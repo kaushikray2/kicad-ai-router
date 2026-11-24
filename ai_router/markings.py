@@ -134,6 +134,19 @@ class Markings:
         return [e['net'] for e in self.impedance]
 
     @property
+    def power(self):
+        return self.data.get('power', [])
+
+    def power_corners(self):
+        return self.data.get('power_corners') or {}
+
+    def power_for(self, net):
+        for e in self.power:
+            if e['net'] == net:
+                return e
+        return None
+
+    @property
     def differential(self):
         return self.data.get('differential', [])
 
@@ -170,11 +183,25 @@ def validate(data):
             out[name] = [_check_impedance_entry(e, i) for i, e in enumerate(entries)]
         elif name == 'differential':
             out[name] = [_check_differential_entry(e, i) for i, e in enumerate(entries)]
+        elif name == 'power':
+            out[name] = [_check_power_entry(e, i) for i, e in enumerate(entries)]
         else:
             for e in entries:
                 if not isinstance(e, dict):
                     raise MarkingsError('"%s" entries must be objects' % name)
             out[name] = entries
+    if data.get('power_corners') is not None:
+        pc = data['power_corners']
+        if not isinstance(pc, dict):
+            raise MarkingsError('"power_corners" must be an object')
+        for key in ('ambient_c', 'delta_t_c', 'drop_budget_v',
+                    'width_increment_mm', 'etch_tol_mm', 'foil_tol_frac',
+                    'plating_um'):
+            if pc.get(key) is not None:
+                v = pc[key]
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                    raise MarkingsError('"power_corners.%s" must be a positive number' % key)
+        out['power_corners'] = dict(pc)
     return out
 
 
@@ -215,6 +242,109 @@ def _check_differential_entry(entry, idx):
         if (not isinstance(layers, list)
                 or not all(isinstance(x, str) for x in layers)):
             raise MarkingsError('%s: "layers" must be a list of layer names' % where)
+    return out
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_power_entry(entry, idx):
+    # #68: one power-rail marking.  Currents are user-entered (or, from
+    # Step 3 on, KB-confirmed values merged in the same shape) -- the
+    # authority order is user > KB-confirmed > nothing, and a load
+    # with no entry here is UNKNOWN, never estimated.
+    where = 'power[%d]' % idx
+    if not isinstance(entry, dict):
+        raise MarkingsError('%s: entry must be an object' % where)
+    net = entry.get('net')
+    if not isinstance(net, str) or not net:
+        raise MarkingsError('%s: "net" must be a non-empty string' % where)
+    out = dict(entry)
+    if entry.get('root') is not None and not isinstance(entry['root'], dict):
+        raise MarkingsError('%s: "root" must be an object (declared rail root)' % where)
+    if entry.get('voltage') is not None:
+        v = entry['voltage']
+        if not isinstance(v, dict) or not _num(v.get('nominal_v')) or v['nominal_v'] <= 0:
+            raise MarkingsError('%s: "voltage.nominal_v" must be a positive number' % where)
+        vv = {'nominal_v': float(v['nominal_v'])}
+        for key in ('min_v', 'max_v'):
+            if v.get(key) is not None:
+                if not _num(v[key]) or v[key] <= 0:
+                    raise MarkingsError('%s: "voltage.%s" must be a positive number' % (where, key))
+                vv[key] = float(v[key])
+        vv.setdefault('min_v', vv['nominal_v'])
+        vv.setdefault('max_v', vv['nominal_v'])
+        if not (vv['min_v'] <= vv['nominal_v'] <= vv['max_v']):
+            raise MarkingsError('%s: voltage corners must satisfy min <= nominal <= max' % where)
+        out['voltage'] = vv
+    if entry.get('drop_budget_v') is not None:
+        if not _num(entry['drop_budget_v']) or entry['drop_budget_v'] <= 0:
+            raise MarkingsError('%s: "drop_budget_v" must be a positive number' % where)
+        out['drop_budget_v'] = float(entry['drop_budget_v'])
+    for sect, fields in (('loads', ('peak_a',)), ('regulators', ('type',)),
+                         ('conduits', ()), ('protective', ('rating_a',))):
+        raw = entry.get(sect)
+        if raw is None:
+            continue
+        if not isinstance(raw, dict):
+            raise MarkingsError('%s: "%s" must be an object keyed by ref' % (where, sect))
+        norm = {}
+        for ref, spec in raw.items():
+            if not isinstance(spec, dict):
+                raise MarkingsError('%s: "%s.%s" must be an object' % (where, sect, ref))
+            s = dict(spec)
+            for f in fields:
+                if f not in s:
+                    raise MarkingsError('%s: "%s.%s" needs "%s"' % (where, sect, ref, f))
+            if sect == 'loads':
+                if not _num(s['peak_a']) or s['peak_a'] < 0:
+                    raise MarkingsError('%s: loads.%s.peak_a must be a number >= 0' % (where, ref))
+                s['peak_a'] = float(s['peak_a'])
+                if s.get('sustained_a') is not None:
+                    if not _num(s['sustained_a']) or s['sustained_a'] < 0:
+                        raise MarkingsError('%s: loads.%s.sustained_a must be a number >= 0' % (where, ref))
+                    s['sustained_a'] = float(s['sustained_a'])
+                else:
+                    s['sustained_a'] = s['peak_a']  # conservative default, stated
+                if s.get('kind') is not None and s['kind'] not in (
+                        'constant_current', 'resistive', 'constant_power'):
+                    raise MarkingsError('%s: loads.%s.kind must be constant_current|resistive|constant_power' % (where, ref))
+                s.setdefault('kind', 'constant_current')
+                if s.get('modes') is not None:
+                    if (not isinstance(s['modes'], list)
+                            or not all(isinstance(m, str) for m in s['modes'])):
+                        raise MarkingsError('%s: loads.%s.modes must be a list of strings' % (where, ref))
+                if s.get('duty') is not None:
+                    if not _num(s['duty']) or not (0 < s['duty'] <= 1):
+                        raise MarkingsError('%s: loads.%s.duty must be in (0, 1]' % (where, ref))
+                    s['duty'] = float(s['duty'])
+            elif sect == 'regulators':
+                if s['type'] not in ('buck', 'ldo', 'switch'):
+                    raise MarkingsError('%s: regulators.%s.type must be buck|ldo|switch' % (where, ref))
+                if s['type'] == 'buck':
+                    if not _num(s.get('eta_min')) or not (0 < s['eta_min'] <= 1):
+                        raise MarkingsError('%s: regulators.%s (buck) needs eta_min in (0, 1]' % (where, ref))
+                    s['eta_min'] = float(s['eta_min'])
+                if s['type'] == 'ldo' and s.get('iq_a') is not None:
+                    if not _num(s['iq_a']) or s['iq_a'] < 0:
+                        raise MarkingsError('%s: regulators.%s.iq_a must be a number >= 0' % (where, ref))
+                    s['iq_a'] = float(s['iq_a'])
+            elif sect == 'conduits':
+                if s.get('r_mohm') is not None:
+                    if not _num(s['r_mohm']) or s['r_mohm'] < 0:
+                        raise MarkingsError('%s: conduits.%s.r_mohm must be a number >= 0' % (where, ref))
+                    s['r_mohm'] = float(s['r_mohm'])
+                if s.get('rating_a') is not None:
+                    if not _num(s['rating_a']) or s['rating_a'] <= 0:
+                        raise MarkingsError('%s: conduits.%s.rating_a must be a positive number' % (where, ref))
+                    s['rating_a'] = float(s['rating_a'])
+            elif sect == 'protective':
+                if not _num(s['rating_a']) or s['rating_a'] <= 0:
+                    raise MarkingsError('%s: protective.%s.rating_a must be a positive number' % (where, ref))
+                s['rating_a'] = float(s['rating_a'])
+            norm[ref] = s
+        out[sect] = norm
     return out
 
 
