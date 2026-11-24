@@ -56,7 +56,7 @@ def main():
         z.writestr('metadata.json', json.dumps(METADATA, indent=2))
         for f in files:
             z.write(os.path.join(pkg_src, f), 'plugins/ai_router/' + f)
-        z.write(os.path.join(pkg_src, 'icon.png'), 'resources/icon.png')
+        z.write(os.path.join(pkg_src, 'icon64.png'), 'resources/icon.png')
     blob = open(zip_path, 'rb').read()
     sha = hashlib.sha256(blob).hexdigest()
     with zipfile.ZipFile(zip_path) as z:
