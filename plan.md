@@ -55,13 +55,17 @@ pinned KRT binary, and the repo's first automated tests (tests/, five
 files). v1.10.2 hotfixed a defect in v1.10.1's lock fix that its own
 verification caught: the lock record was keyed by a SWIG proxy string
 (identical for every item); it now uses `m_Uuid.AsString()`, with a
-round-trip test that fails on 1.10.1.
+round-trip test that fails on 1.10.1. Verification (2026-11-24): all six
+production self-tests PASS at unchanged baselines — hbridge and
+mapone clean on both backends; the Nomad self-test at 0 unconnected /
+0 splits / copper 14 on both backends, better than its {2, 2, 18}
+baseline now that the portfolio actually runs on backend jobs. The
+zorinbox backend container moved to a 16-CPU host the same day.
 
 ## In progress
 
-- v1.10.2 release verification: production self-tests running on both
-  backends (verdict pending, 2026-11-24).
-- Next up: **P2.1b**.
+- **P2.1b** (below) is next up. The fair engine A/B follows it, per
+  the owner's sequencing.
 
 ## Remaining (in sequence)
 
