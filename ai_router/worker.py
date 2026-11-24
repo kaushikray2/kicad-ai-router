@@ -1599,6 +1599,42 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
             s = (mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y), mm(t.GetWidth()) / 2)
             _li = _lidx.get(t.GetLayer())
             if _li is not None: fsegs[_li].append(s)
+    # v1.10.0 (Phase 2, P2.1): exact keepout / board-edge / drill-hole tests. The
+    # keepout test below used to sample the segment centreline every
+    # 0.1 mm with no half-width, so a leg whose copper overlapped a
+    # rule area while its centreline stayed outside passed here and
+    # faulted at the gate (items_not_allowed); Edge.Cuts and drilled
+    # holes were not tested at all, so copper_edge_clearance /
+    # hole_clearance / hole_to_hole faults reached the gate the same
+    # way (the graze band the accept key then reverted wholesale).
+    edge_segs = []
+    try: edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
+    except Exception: edge_clr = 0.5
+    if edge_clr > 0:
+        for dr in b.GetDrawings():
+            if dr.GetLayer() != pcbnew.Edge_Cuts: continue
+            if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+                edge_segs.append((mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y)))
+            else:
+                bb = dr.GetBoundingBox()
+                el, et, er, eb = mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom())
+                edge_segs += [(el, et, er, et), (er, et, er, eb), (er, eb, el, eb), (el, eb, el, et)]
+    fdrills = []
+    try: hole_clr = mm(b.GetDesignSettings().m_HoleClearance)
+    except Exception: hole_clr = 0.25
+    try: h2h = mm(b.GetDesignSettings().m_HoleToHoleMin)
+    except Exception: h2h = hole_clr
+    if hole_clr > 0 or h2h > 0:
+        for fp in b.GetFootprints():
+            for p in fp.Pads():
+                if p.GetNetname() == net: continue
+                ds = p.GetDrillSize()
+                if ds.x > 0:
+                    fdrills.append((mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2))
+        for t in b.GetTracks():
+            if t.GetNetname() == net or t.Type() != pcbnew.PCB_VIA_T: continue
+            fdrills.append((mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2))
+    vdr = net_class_via(b, net)[1] / 2
     def in_poly(px, py, pts):
         inside = False
         for i in range(len(pts)):
@@ -1616,9 +1652,15 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
             if _seg_pad_dist(prm, x1, y1, x2, y2) < hw + CLR: return False
         for (pts, klayers, no_tracks, _nv) in keepouts:
             if no_tracks and li in klayers:
-                steps = max(2, int(math.hypot(x2 - x1, y2 - y1) / 0.1) + 1)
-                for k in range(steps + 1):
-                    if in_poly(x1 + (x2 - x1) * k / steps, y1 + (y2 - y1) * k / steps, pts): return False
+                if in_poly(x1, y1, pts) or in_poly(x2, y2, pts): return False
+                for i in range(len(pts)):
+                    q = pts[(i + 1) % len(pts)]
+                    if seg_seg_dist((x1, y1, x2, y2), (pts[i][0], pts[i][1], q[0], q[1])) < hw + 0.02: return False
+        for (ex1, ey1, ex2, ey2) in edge_segs:
+            if max(ex1, ex2) < min(x1, x2) - hw - edge_clr or min(ex1, ex2) > max(x1, x2) + hw + edge_clr or max(ey1, ey2) < min(y1, y2) - hw - edge_clr or min(ey1, ey2) > max(y1, y2) + hw + edge_clr: continue
+            if seg_seg_dist((x1, y1, x2, y2), (ex1, ey1, ex2, ey2)) < hw + edge_clr: return False
+        for (hx, hy, hr_) in fdrills:
+            if seg_pt(hx, hy, x1, y1, x2, y2) < hr_ + hw + hole_clr: return False
     for (x, y) in vias:
         for li in range(_nl):
             for (sx1, sy1, sx2, sy2, hr) in fsegs[li]:
@@ -1639,6 +1681,12 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
                 if in_poly(x, y, pts): return False
                 d = min(seg_pt(x, y, pts[i][0], pts[i][1], pts[(i + 1) % len(pts)][0], pts[(i + 1) % len(pts)][1]) for i in range(len(pts)))
                 if d < vr + 0.02: return False
+        for (ex1, ey1, ex2, ey2) in edge_segs:
+            if seg_pt(x, y, ex1, ey1, ex2, ey2) < vr + edge_clr: return False
+        for (hx, hy, hr_) in fdrills:
+            d = math.hypot(x - hx, y - hy)
+            if d < hr_ + vr + hole_clr: return False
+            if d < hr_ + vdr + h2h: return False
     return True
 
 def cmd_heal_attempt(board_path, out_path, net, frm, dst):
