@@ -295,18 +295,28 @@ def _check_power_entry(entry, idx):
                 raise MarkingsError('%s: "%s.%s" must be an object' % (where, sect, ref))
             s = dict(spec)
             for f in fields:
-                if f not in s:
+                if f not in s and not (sect == 'loads' and f == 'peak_a' and 'kb' in s):
                     raise MarkingsError('%s: "%s.%s" needs "%s"' % (where, sect, ref, f))
             if sect == 'loads':
-                if not _num(s['peak_a']) or s['peak_a'] < 0:
-                    raise MarkingsError('%s: loads.%s.peak_a must be a number >= 0' % (where, ref))
-                s['peak_a'] = float(s['peak_a'])
-                if s.get('sustained_a') is not None:
-                    if not _num(s['sustained_a']) or s['sustained_a'] < 0:
-                        raise MarkingsError('%s: loads.%s.sustained_a must be a number >= 0' % (where, ref))
-                    s['sustained_a'] = float(s['sustained_a'])
+                if 'peak_a' in s:
+                    if not _num(s['peak_a']) or s['peak_a'] < 0:
+                        raise MarkingsError('%s: loads.%s.peak_a must be a number >= 0' % (where, ref))
+                    s['peak_a'] = float(s['peak_a'])
+                    if s.get('sustained_a') is not None:
+                        if not _num(s['sustained_a']) or s['sustained_a'] < 0:
+                            raise MarkingsError('%s: loads.%s.sustained_a must be a number >= 0' % (where, ref))
+                        s['sustained_a'] = float(s['sustained_a'])
+                    else:
+                        s['sustained_a'] = s['peak_a']  # conservative default, stated
                 else:
-                    s['sustained_a'] = s['peak_a']  # conservative default, stated
+                    # KB-referenced load (#68 Step 3): currents arrive
+                    # only via a confirmed KB estimate at run time.
+                    kb = s.get('kb')
+                    if not (isinstance(kb, dict) and isinstance(kb.get('mpn'), str)
+                            and kb.get('mpn') and isinstance(kb.get('datasheet_rev'), str)
+                            and kb.get('datasheet_rev')):
+                        raise MarkingsError('%s: loads.%s needs "peak_a" or a "kb" {"mpn", "datasheet_rev"} reference' % (where, ref))
+                    s['kb'] = {'mpn': kb['mpn'], 'datasheet_rev': kb['datasheet_rev']}
                 if s.get('kind') is not None and s['kind'] not in (
                         'constant_current', 'resistive', 'constant_power'):
                     raise MarkingsError('%s: loads.%s.kind must be constant_current|resistive|constant_power' % (where, ref))

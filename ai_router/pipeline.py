@@ -41,6 +41,7 @@ try:
     from ai_router import powertree as _powertree
     from ai_router import powerplan as _powerplan
     from ai_router import wcca as _wcca
+    from ai_router import kbclient as _kbclient
 except Exception:
     try:
         import markings as _markings
@@ -49,6 +50,7 @@ except Exception:
         import powertree as _powertree
         import powerplan as _powerplan
         import wcca as _wcca
+        import kbclient as _kbclient
     except Exception:
         _markings = None
         _tlcalc = None
@@ -56,6 +58,7 @@ except Exception:
         _powertree = None
         _powerplan = None
         _wcca = None
+        _kbclient = None
 
 # KiCad's built-in Default netclass values (what LoadBoard synthesises
 # when a board has no .kicad_pro); used as the clone source for an
@@ -787,6 +790,20 @@ class Pipeline:
         try:
             parsed = _powertree.parse_netlist(open(netlist).read())
             entries = mk.power
+            resolutions = []
+            if _kbclient is not None and any(
+                    'kb' in s for e in entries
+                    for s in (e.get('loads') or {}).values()):
+                cache_path = self.cfg.get('kb_cache') or (
+                    os.path.splitext(self.board_path)[0] + '.ai-router-kb-cache.json')
+                cache = _kbclient.KbCache(cache_path)
+                kb = None
+                if self.cfg.get('kb_endpoint'):
+                    try:
+                        kb = _kbclient.HttpKb(self.cfg['kb_endpoint'])
+                    except Exception as e:
+                        self.log('power: KB endpoint unusable: %s' % e)
+                entries, resolutions = _kbclient.resolve_loads(entries, cache, kb)
             tree = _powertree.compute_currents(
                 _powertree.build_tree(parsed, entries))
         except Exception as e:
@@ -814,6 +831,8 @@ class Pipeline:
                                      entries_by_net)
         plan['status'] = 'ok'
         plan['netlist'] = os.path.basename(netlist)
+        if resolutions:
+            plan['kb_resolutions'] = resolutions
         self._eng_power_plan = plan
         applied = {}
         if plan.get('widen'):
