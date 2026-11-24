@@ -22,7 +22,7 @@ Schema v1:
                           role?, loss_budget_db?, pi?, fence?,
                           smooth?} ],   # Step 2: EMC treatment fields
       "power":         [ ... ],   # #68, carried, not enforced yet
-      "length_groups": [ ... ],   # #69, carried, not enforced yet
+      "length_groups": [ ... ],   # #69 matched groups (schema in _check_length_group)
       "hv_domains":    [ ... ],   # #70, carried, not enforced yet
       "quiet":         [ ... ]    # #71, carried, not enforced yet
     }
@@ -147,6 +147,10 @@ class Markings:
         return None
 
     @property
+    def length_groups(self):
+        return self.data.get('length_groups', [])
+
+    @property
     def differential(self):
         return self.data.get('differential', [])
 
@@ -185,6 +189,8 @@ def validate(data):
             out[name] = [_check_differential_entry(e, i) for i, e in enumerate(entries)]
         elif name == 'power':
             out[name] = [_check_power_entry(e, i) for i, e in enumerate(entries)]
+        elif name == 'length_groups':
+            out[name] = [_check_length_group(e, i) for i, e in enumerate(entries)]
         else:
             for e in entries:
                 if not isinstance(e, dict):
@@ -247,6 +253,42 @@ def _check_differential_entry(entry, idx):
 
 def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_length_group(entry, idx):
+    where = 'length_groups[%d]' % idx
+    if not isinstance(entry, dict):
+        raise MarkingsError('%s: entry must be an object' % where)
+    out = dict(entry)
+    name = entry.get('name')
+    if not isinstance(name, str) or not name:
+        raise MarkingsError('%s: "name" (string) is required' % where)
+    nets = entry.get('nets')
+    pair = entry.get('pair')
+    if nets is not None:
+        if (not isinstance(nets, list) or len(nets) < 2
+                or not all(isinstance(n, str) for n in nets)
+                or len(set(nets)) != len(nets)):
+            raise MarkingsError('%s: "nets" must be a list of >= 2 distinct net names' % where)
+    elif not (isinstance(pair, str) and pair):
+        raise MarkingsError('%s: needs "nets" (>= 2) or "pair" (a differential pair name)' % where)
+    mode = entry.get('target_mode', 'longest')
+    if mode not in ('longest', 'length', 'delay'):
+        raise MarkingsError('%s: "target_mode" must be longest|length|delay' % where)
+    out['target_mode'] = mode
+    if mode in ('length', 'delay'):
+        v = entry.get('target_value')
+        if not _num(v) or v <= 0:
+            raise MarkingsError('%s: "target_value" (positive, mm or ps) is required for target_mode=%s' % (where, mode))
+        out['target_value'] = float(v)
+    if entry.get('tolerance_mm') is None and entry.get('tolerance_ps') is None:
+        raise MarkingsError('%s: a tolerance is required ("tolerance_mm" and/or "tolerance_ps")' % where)
+    for key in ('tolerance_mm', 'tolerance_ps'):
+        if entry.get(key) is not None:
+            if not _num(entry[key]) or entry[key] < 0:
+                raise MarkingsError('%s: "%s" must be a non-negative number' % (where, key))
+            out[key] = float(entry[key])
+    return out
 
 
 def _check_power_entry(entry, idx):
