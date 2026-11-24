@@ -5,6 +5,7 @@
       "$schema": "https://go.kicad.org/pcm/schemas/v2",
       "name": "AI Router",
       "description": "LLM-orchestrated PCB routing for KiCad: deterministic TraceMaker passes, DRC gating, finishing and stitching. Local or Docker backend.",
+      "description_full": "AI Router finishes PCB layouts in KiCad 10 with deterministic tools under an exact-geometry gate. An LLM (or the built-in AUTO strategy, which needs no LLM) makes strategy decisions only - it never draws geometry. All copper is produced by deterministic code: TraceMaker routing passes, a grid-A* finisher with displacement and re-bridging, a plane-fragment healer and a pour stitcher. Every result is accepted or reverted by kicad-cli DRC plus exact clearance checks, with a per-layer track census and split-net metrics on every gate. Requires the TraceMaker routing engine (open source, GPL-3.0) and, for routing jobs, the routing backend whose Docker image is provided in the repository. The plugin always works on a copy of your board; the open board is never modified.",
       "identifier": "ca.siliconbrane.ai-router",
       "type": "plugin",
       "author": {
@@ -20,14 +21,24 @@
         }
       },
       "license": "GPL-3.0-or-later",
-      "url": "https://www.siliconbrane.com",
+      "resources": {
+        "homepage": "https://github.com/kaushikray2/kicad-ai-router",
+        "website": "https://www.siliconbrane.com"
+      },
+      "tags": [
+        "autorouting",
+        "pcb-routing",
+        "ai",
+        "llm"
+      ],
       "versions": [
         {
           "version": "1.10.2",
           "status": "stable",
           "kicad_version": "10.0",
-          "download_sha256": "e59fde17c37e83f1e24ab8f35fe3753554aa705ffa72571f2f38cb06a1882b48",
-          "download_size": 67342,
+          "runtime": "swig",
+          "download_sha256": "6a2d384e13497d002e5e67e5a736d7ef5abad7f54c732a704db243204cce9600",
+          "download_size": 67804,
           "download_url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/ai-router-1.10.2.zip",
           "install_size": 230918
         }

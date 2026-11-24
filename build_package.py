@@ -12,18 +12,35 @@ REPO_BASE_URL = 'https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/m
 DESCRIPTION = ('LLM-orchestrated PCB routing for KiCad: deterministic TraceMaker passes, '
                'DRC gating, finishing and stitching. Local or Docker backend.')
 assert len(DESCRIPTION) <= 150, len(DESCRIPTION)
+DESCRIPTION_FULL = (
+    'AI Router finishes PCB layouts in KiCad 10 with deterministic tools '
+    'under an exact-geometry gate. An LLM (or the built-in AUTO strategy, '
+    'which needs no LLM) makes strategy decisions only - it never draws '
+    'geometry. All copper is produced by deterministic code: TraceMaker '
+    'routing passes, a grid-A* finisher with displacement and re-bridging, '
+    'a plane-fragment healer and a pour stitcher. Every result is accepted '
+    'or reverted by kicad-cli DRC plus exact clearance checks, with a '
+    'per-layer track census and split-net metrics on every gate. Requires '
+    'the TraceMaker routing engine (open source, GPL-3.0) and, for routing '
+    'jobs, the routing backend whose Docker image is provided in the '
+    'repository. The plugin always works on a copy of your board; the open '
+    'board is never modified.')
+assert len(DESCRIPTION_FULL) <= 1000, len(DESCRIPTION_FULL)
 
 METADATA = {
     '$schema': 'https://go.kicad.org/pcm/schemas/v2',
     'name': 'AI Router',
     'description': DESCRIPTION,
+    'description_full': DESCRIPTION_FULL,
     'identifier': IDENTIFIER,
     'type': 'plugin',
     'author': {'name': 'SiliconBrane Inc', 'contact': {'email': 'ray@siliconbrane.com'}},
     'maintainer': {'name': 'SiliconBrane Inc', 'contact': {'email': 'ray@siliconbrane.com'}},
     'license': 'GPL-3.0-or-later',
-    'url': 'https://www.siliconbrane.com',
-    'versions': [{'version': VERSION, 'status': 'stable', 'kicad_version': '10.0'}],
+    'resources': {'homepage': 'https://github.com/kaushikray2/kicad-ai-router',
+                  'website': 'https://www.siliconbrane.com'},
+    'tags': ['autorouting', 'pcb-routing', 'ai', 'llm'],
+    'versions': [{'version': VERSION, 'status': 'stable', 'kicad_version': '10.0', 'runtime': 'swig'}],
 }
 
 def main():
