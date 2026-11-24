@@ -721,6 +721,12 @@ earlier would mean sizing workstreams against numbers nobody has.
   rules on the working copy and report placement-shaped faults before
   routing — the census showed placement geometry is the dominant fault
   source, and no router release fixes it.
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented ahead of Phase 3** (owner lane direction pulled it
+  into this branch): library_rules + placement_audit modules,
+  auditgeom/audit_zones worker commands, pipeline preprocess with
+  ledger provenance, RF-class first_nets advice.  The same
+  materialisation layer serves #70/#71.
 
 ### How it gets written
 
