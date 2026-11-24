@@ -18,7 +18,9 @@ Schema v1:
       "version": 1,
       "board": "<board file name>",
       "impedance":     [ {net, z0_ohm, freq_hz?, dk?, dk_basis?,
-                          mask?, layers?, gap_mm?, tol_pct?} ],
+                          mask?, layers?, gap_mm?, tol_pct?,
+                          role?, loss_budget_db?, pi?, fence?,
+                          smooth?} ],   # Step 2: EMC treatment fields
       "power":         [ ... ],   # #68, carried, not enforced yet
       "length_groups": [ ... ],   # #69, carried, not enforced yet
       "hv_domains":    [ ... ],   # #70, carried, not enforced yet
@@ -81,6 +83,39 @@ def _check_impedance_entry(entry, idx):
         if (not isinstance(layers, list)
                 or not all(isinstance(x, str) for x in layers)):
             raise MarkingsError('%s: "layers" must be a list of layer names' % where)
+    # Step 2 (EMC treatment) optional fields.  `role` scales the loss
+    # warnings (WARN-1: GNSS/LNA feeds warn at 0.2 dB) and the 2nd-
+    # harmonic stub check (WARN-8, TX feeds); `pi` declares the
+    # pi-match footprints the schematic calls for (GATE-7 checks
+    # presence on the net; WARN-6 judges displacement against the
+    # declared radio end); `fence` / `smooth` switch the generation
+    # treatments per net (defaults: fence coplanar nets, smooth all).
+    if entry.get('role') is not None and entry['role'] not in (
+            'tx', 'rx', 'gnss_lna', 'lna_input', 'generic'):
+        raise MarkingsError(
+            '%s: "role" must be tx|rx|gnss_lna|lna_input|generic' % where)
+    if entry.get('loss_budget_db') is not None:
+        lb = entry['loss_budget_db']
+        if not isinstance(lb, (int, float)) or isinstance(lb, bool) or lb <= 0:
+            raise MarkingsError('%s: "loss_budget_db" must be a positive number' % where)
+        out['loss_budget_db'] = float(lb)
+    if entry.get('pi') is not None:
+        pi = entry['pi']
+        if not isinstance(pi, dict):
+            raise MarkingsError('%s: "pi" must be an object' % where)
+        for key in pi:
+            if key not in ('radio', 'antenna', 'radio_ref'):
+                raise MarkingsError('%s: "pi" key %r not radio|antenna|radio_ref' % (where, key))
+            v = pi[key]
+            if key == 'radio_ref':
+                if not isinstance(v, str) or not v:
+                    raise MarkingsError('%s: "pi.radio_ref" must be a footprint reference' % where)
+            elif (not isinstance(v, list) or not v
+                    or not all(isinstance(x, str) and x for x in v)):
+                raise MarkingsError('%s: "pi.%s" must be a non-empty list of footprint references' % (where, key))
+    for sw in ('fence', 'smooth'):
+        if entry.get(sw) is not None and not isinstance(entry[sw], bool):
+            raise MarkingsError('%s: "%s" must be a boolean' % (where, sw))
     return out
 
 

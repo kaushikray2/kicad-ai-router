@@ -68,3 +68,27 @@ def test_impedance_validation():
     assert ok['impedance'][0]['z0_ohm'] == 75.0
     for name in markings.SECTIONS:
         assert ok.get(name, []) == [] or name == 'impedance'
+
+def test_impedance_step2_fields():
+    ok = markings.validate({'impedance': [{
+        'net': 'ANT', 'z0_ohm': 50, 'freq_hz': 2.44e9, 'role': 'tx',
+        'loss_budget_db': 0.4, 'fence': True, 'smooth': False,
+        'pi': {'radio': ['L1', 'C1', 'C2'], 'antenna': ['L9'],
+               'radio_ref': 'U1'}}]})
+    e = ok['impedance'][0]
+    assert e['role'] == 'tx' and e['loss_budget_db'] == 0.4
+    assert e['pi']['radio'] == ['L1', 'C1', 'C2'] and e['pi']['radio_ref'] == 'U1'
+    bad = [
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'role': 'loud'}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'loss_budget_db': -0.5}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'pi': ['L1']}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'pi': {'middle': ['L1']}}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'pi': {'radio': 'L1'}}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'fence': 'yes'}]},
+    ]
+    for data in bad:
+        try:
+            markings.validate(data)
+            raise AssertionError('expected MarkingsError for %r' % (data,))
+        except markings.MarkingsError:
+            pass
