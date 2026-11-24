@@ -320,8 +320,23 @@ def build_tree(parsed, power_entries, return_net='GND'):
     for n, r in rails.items():
         if not r['sources'] and not r['candidate_sources'] and not r['root'] and n not in fed:
             flags.append({'kind': 'rail_without_source', 'net': n})
+    for n, r in rails.items():
+        pins = net_pins[n]
+        r['load_pins'] = {ref: [(rr, p) for (rr, p, t) in pins if rr == ref]
+                          for ref in set(r['loads']) | set(r['unknown_loads'])}
+        src_refs = {s['ref'] for s in r['sources']} | {s['ref'] for s in r['candidate_sources']}
+        r['source_pins'] = {ref: [(rr, p) for (rr, p, t) in pins if rr == ref]
+                            for ref in src_refs}
+    for e in edges:
+        for key, net in (('in_pins', e['from']), ('out_pins', e['to'])):
+            e[key] = ([(r, p) for (r, p, t) in net_pins[net] if r == e['ref']]
+                      if net else [])
+    return_pins = {}
+    for (r, p, t) in net_pins.get(return_net, []):
+        return_pins.setdefault(r, []).append((r, p))
     return {'rails': rails, 'edges': edges, 'flags': flags,
-            'return_net': return_net}
+            'return_net': return_net, 'return_pins': return_pins,
+            'components': parsed['components']}
 
 
 # ---------------------------------------------------------------- currents
@@ -408,10 +423,15 @@ def compute_currents(tree):
         if e['from'] is None or e['to'] not in rails:
             e['design'] = {'peak_a': None, 'sustained_a': None}
             continue
+        per_kind = {}
         for which in ('peak_a', 'sustained_a'):
             vals = {('BASE' if m is None else m): edge_input(e, m, which, frozenset())
                     for m in mode_list}
+            per_kind[which] = vals
             e['design'][which] = round(max(vals.values()), 6) if vals else 0.0
+        e['by_mode'] = {m: {'peak_a': round(per_kind['peak_a'][m], 6),
+                            'sustained_a': round(per_kind['sustained_a'][m], 6)}
+                        for m in per_kind['peak_a']}
     tree['modes'] = ['BASE' if m is None else m for m in mode_list]
     # de-duplicate flags raised once per mode/kind pass
     seen, uniq = set(), []
