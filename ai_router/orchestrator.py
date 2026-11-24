@@ -380,4 +380,11 @@ def _run_auto_once(cfg, pipe, log):
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))
-    return {'final_board': final, 'gate': gate}
+    result = {'final_board': final, 'gate': gate}
+    try:
+        rep = pipe.engineered_report(final)  # #67 Step 1 (branch-only)
+        if rep is not None:
+            result['engineered_nets'] = rep
+    except Exception as e:
+        log('Engineered nets report failed (%s)' % e)
+    return result

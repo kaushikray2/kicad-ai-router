@@ -225,6 +225,27 @@ below, which stands until the decision is taken.
   Calculator within rounding on a defined-stackup fixture; a marked
   net routes first at the computed width; unmarked nets do not
   regress on the standing A/B set.
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented.** Markings live in a sidecar JSON beside the board
+  (the Step 0 persistence ruling is still formally open; the store
+  is isolated in ai_router/markings.py behind a narrow interface).
+  ai_router/tlcalc.py ports KiCad 10's own calculator formulations
+  (Hammerstad-Jensen/Kirschning-Jansen microstrip, KiCad stripline,
+  Ghione-Naldi coplanar) plus Wadell embedded/coated, IPC-2141A/
+  AN-905 differential microstrip and Cohn differential stripline --
+  the sketch's "IPC-2141 closed forms" and the exit's "match KiCad"
+  conflict (the IPC log form sits ~10% from KiCad's on a reference
+  geometry), and KiCad's formulation won because the exit names it.
+  Widths are computed per layer and reported per layer, but ONE
+  width is applied per net: KiCad netclasses are per-net, so the
+  primary layer's width is written (a per-layer width needs engine
+  support -- open). The width lands as an AI-IMP-* netclass in the
+  working copy's project file, replacing the net's pattern
+  assignment (a second matching pattern makes KiCad build a
+  composite class that kept the old width in testing), and is
+  verified by readback before routing. Boards without a markings
+  sidecar are untouched; a sidecar on a board with no stackup in
+  the file still prioritises the nets but cannot size them.
 - **Step 2 — EMC treatment + arc smoothing.** Keep marked nets on
   a layer with a solid reference; a gate check that the routed path
   crosses no split or gap in its reference pour — in the annex's
@@ -385,6 +406,18 @@ reference document; this entry is its plan shape.
   order already puts user values first) and Step 1 is
   re-scoped on that basis — the spike's output is the verdict,
   not code we keep.
+  **Spike verdict (2026-11-24): extraction PROVEN** (full report:
+  agent-runs/nets-spike/REPORT.md; also filed on #68). kicad-cli's
+  netlist export carries per-pin electrical types and sheet paths
+  in both formats -- no .kicad_sch parsing; hierarchical instance
+  counting proven; the reference tree hand-verified end to end.
+  The gap is sources, not loads: rails are commonly fed by
+  passive-typed connectors and non-power_out pins, and power
+  symbols are invisible in exports. Two model rules follow:
+  (a) output-typed pins on power nets count as candidate sources;
+  (b) a still-sourceless rail gets its root declared at marking
+  time. The full user-declared fallback is NOT needed -- rail
+  roots only.
 - **Step 1 — power-tree WCCA core** (pure, unit-tested). The
   tree is built from the schematic's pin electrical types
   (power_out = source, power_in = load, the rest conduits),

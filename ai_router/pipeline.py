@@ -30,6 +30,34 @@ try:
 except Exception:
     _CFG_DEFAULTS = {}
 
+# Engineered nets (#67 Step 1, branch-only): markings sidecar + TL
+# calculator.  Defensive import in the config pattern -- a run without
+# markings must behave byte-identically to before, so any failure here
+# simply disables the feature.
+try:
+    from ai_router import markings as _markings
+    from ai_router import tlcalc as _tlcalc
+except Exception:
+    try:
+        import markings as _markings
+        import tlcalc as _tlcalc
+    except Exception:
+        _markings = None
+        _tlcalc = None
+
+# KiCad's built-in Default netclass values (what LoadBoard synthesises
+# when a board has no .kicad_pro); used as the clone source for an
+# engineered-net class when there is no project class to clone.
+_ENG_DEFAULT_CLASS = {'bus_width': 12, 'clearance': 0.2, 'diff_pair_gap': 0.2,
+                      'diff_pair_via_gap': 0.25, 'diff_pair_width': 0.25,
+                      'line_style': 0, 'microvia_diameter': 0.3,
+                      'microvia_drill': 0.1, 'name': 'Default',
+                      'pcb_color': 'rgba(0, 0, 0, 0.000)', 'priority': -1,
+                      'schematic_color': 'rgba(0, 0, 0, 0.000)',
+                      'track_width': 0.2, 'tuning_profile': '',
+                      'via_diameter': 0.8, 'via_drill': 0.4, 'wire_width': 6}
+
+
 def resolve_ban_names(raw, aliases):
     # v1.10.1 (#49): the ONE layer-law resolution point. raw config
     # names (canonical, board-specific, any case) -> canonical names
@@ -96,6 +124,14 @@ class Pipeline:
             self.base = src_copy
         self.current = self.base
         self._record('setup', {'base': self.base})
+        self._eng = None
+        try:
+            self._engineered_setup()
+        except Exception as e:
+            # Markings must never break a route: surface it and continue.
+            self._eng = {'error': 'engineered setup failed: %s' % e}
+            self.log('Engineered nets: setup failed (%s) -- continuing unmarked' % e)
+            self._record('engineered_nets', {'error': str(e)})
 
     # ------------------------------------------------------------ internals
     def _record(self, step, data):
@@ -151,6 +187,315 @@ class Pipeline:
             raise PipelineError('worker %s bad output: %s' % (cmd, marked[-1][:300]))
 
     # ------------------------------------------------------------ tools
+    # ------------------------------------------------- engineered nets (#67)
+    def _engineered_first_nets(self):
+        eng = getattr(self, '_eng', None)
+        if isinstance(eng, dict):
+            return list(eng.get('first_nets') or [])
+        return []
+
+    def _engineered_setup(self):
+        # #67 Step 1: when a markings sidecar exists for the input board,
+        # size its impedance-marked nets from the board stackup, write
+        # the computed widths into the working copy's project netclasses
+        # (one AI-IMP-* class per net, cloned from the net's current
+        # class), and remember the nets so tool_route puts them first.
+        # No sidecar -> self._eng stays False and nothing changes.
+        if _markings is None or _tlcalc is None:
+            self._eng = False
+            return
+        if not self.cfg.get('engineered_nets', True):
+            self._eng = False
+            return
+        try:
+            mk = _markings.load_markings(self.board_path)
+        except _markings.MarkingsError as e:
+            self._eng = {'error': str(e), 'first_nets': []}
+            self.log('Engineered nets: %s -- continuing unmarked' % e)
+            self._record('engineered_nets', {'error': str(e)})
+            return
+        if mk is None:
+            self._eng = False
+            return
+        nets = mk.impedance_nets()
+        state = {'markings_file': os.path.basename(mk.path or ''),
+                 'first_nets': nets, 'nets': {}}
+        self._eng = state
+        if not nets:
+            self._record('engineered_nets',
+                         {'note': 'sidecar present, no impedance markings'})
+            return
+        su = self._worker('stackup', '--board', self.base, '--nets', ','.join(nets))
+        state['stackup_defined'] = bool(su.get('defined'))
+        state['stackup_placeholder'] = bool(su.get('placeholder'))
+        state['placeholder_reasons'] = su.get('placeholder_reasons') or []
+        if not su.get('defined'):
+            self.log('Engineered nets: no stackup in the board file -- marked '
+                     'nets %s join first_nets but cannot be sized' % nets)
+            self._record('engineered_nets',
+                         {'stackup_defined': False,
+                          'placeholder_reasons': state['placeholder_reasons'],
+                          'first_nets': nets})
+            return
+        copper = {c['name']: c for c in su.get('copper') or []}
+        sized = {}
+        for entry in mk.impedance:
+            net = entry['net']
+            info = (su.get('nets') or {}).get(net) or {}
+            cand = [c for c in (entry.get('layers') or info.get('pad_layers') or [])
+                    if c in copper]
+            per_layer = {lname: self._eng_layer_width(entry, copper[lname], len(copper))
+                         for lname in cand}
+            primary = next((l for l in cand if per_layer[l].get('width_mm')), None)
+            rec = {'target_z0': entry['z0_ohm'], 'freq_hz': entry.get('freq_hz'),
+                   'dk_basis': entry.get('dk_basis') or 'stackup',
+                   'candidate_layers': cand, 'per_layer': per_layer,
+                   'primary_layer': primary,
+                   'width_mm': per_layer[primary]['width_mm'] if primary else None,
+                   'pads': info.get('pads', 0)}
+            if not cand:
+                rec['warning'] = 'net has no pads on any copper layer (not on board?)'
+            elif primary is None:
+                rec['warning'] = 'no layer produced a solvable width'
+            sized[net] = rec
+            state['nets'][net] = rec
+        applied = self._eng_patch_pro(sized, su)
+        su2 = self._worker('stackup', '--board', self.base, '--nets', ','.join(nets))
+        for net, rec in sized.items():
+            got = ((su2.get('nets') or {}).get(net) or {}).get('netclass_width_mm')
+            rec['applied_class'] = applied.get(net)
+            rec['applied_width_mm'] = got
+            rec['width_verified'] = bool(
+                got is not None and rec['width_mm'] is not None
+                and abs(got - rec['width_mm']) < 0.001)
+        self._record('engineered_nets', {
+            'stackup_defined': True, 'placeholder': state['stackup_placeholder'],
+            'sized': {n: {'primary_layer': r['primary_layer'],
+                          'width_mm': r['width_mm'],
+                          'verified': r.get('width_verified')}
+                      for n, r in sized.items()}})
+        self.log('Engineered nets: sized %s'
+                 % {n: r['width_mm'] for n, r in sized.items()})
+
+    def _eng_layer_width(self, entry, cu, ncu):
+        target = entry['z0_ohm']
+        f = entry.get('freq_hz') or 0.0
+        t = cu.get('thickness_mm')
+        flags = []
+        if t is None:
+            t = 0.035
+            flags.append('cu_thickness_assumed_0.035')
+        cls = cu.get('class')
+        if cls in ('surface_top', 'surface_bottom'):
+            diel = cu.get('diel_below') if cls == 'surface_top' else cu.get('diel_above')
+            if not diel or not diel.get('thickness_mm'):
+                return {'error': 'no dielectric inside the surface layer'}
+            h = diel['thickness_mm']
+            er = entry.get('dk') or diel.get('er')
+            if not er:
+                return {'error': 'dielectric er unknown and no dk in marking'}
+            tand = diel.get('loss_tangent') or 0.0
+            if entry.get('model') == 'coplanar':
+                gap = entry.get('gap_mm')
+                if not gap:
+                    return {'error': 'coplanar marking needs gap_mm'}
+                fn = lambda w: _tlcalc.coplanar(w, gap, h, t, er, f_hz=f,
+                                                grounded=ncu > 1, tand=tand)
+                model = 'coplanar'
+            else:
+                mask = None
+                want = entry.get('mask')
+                sm = cu.get('mask')
+                if want == 'covered' or (want is None and sm):
+                    if sm and sm.get('thickness_mm'):
+                        mask = (sm['thickness_mm'], sm.get('er') or 3.5)
+                        if not sm.get('er'):
+                            flags.append('mask_er_assumed_3.5')
+                    else:
+                        mask = (0.02, 3.5)
+                        flags.append('mask_assumed_0.02mm_er3.5')
+                fn = lambda w: _tlcalc.microstrip(w, h, t, er, f_hz=f,
+                                                  tand=tand, mask=mask)
+                model = 'microstrip'
+        elif cls == 'inner':
+            da, db = cu.get('diel_above'), cu.get('diel_below')
+            if (not da or not db or not da.get('thickness_mm')
+                    or not db.get('thickness_mm')):
+                return {'error': 'inner layer lacks dielectric on both sides'}
+            h1 = db['thickness_mm']  # gap from strip face to the lower plane
+            h2 = da['thickness_mm']
+            b = h1 + t + h2
+            if entry.get('dk'):
+                er = entry['dk']
+            elif da.get('er') and db.get('er'):
+                er = (da['er'] * h2 + db['er'] * h1) / (h1 + h2)
+                if abs(da['er'] - db['er']) > 0.05:
+                    flags.append('mixed_dielectric_er_weighted')
+            else:
+                er = da.get('er') or db.get('er')
+            if not er:
+                return {'error': 'dielectric er unknown and no dk in marking'}
+            tand = da.get('loss_tangent') or db.get('loss_tangent') or 0.0
+            fn = lambda w: _tlcalc.stripline(w, b, t, er, a=h1, f_hz=f, tand=tand)
+            model = 'stripline'
+        else:
+            return {'error': 'unknown layer class %r' % (cls,)}
+        w = _tlcalc.solve_width(lambda ww: fn(ww).z0, target)
+        if w is None:
+            return {'model': model, 'flags': flags,
+                    'error': 'target z0 unreachable in width range'}
+        res = fn(w)
+        return {'model': model, 'width_mm': round(w, 4),
+                'z0_at_width': round(res.z0, 3), 'eps_eff': round(res.eps_eff, 4),
+                'in_range': res.in_range, 'flags': flags + list(res.flags),
+                'loss_db_per_mm': res.loss_db_per_mm}
+
+    def _eng_patch_pro(self, sized, su):
+        # Write one AI-IMP-* netclass per sized net into the WORKDIR copy
+        # of the project file (never the user's own): clone of the net's
+        # current effective class with the track width replaced, plus an
+        # exact-name pattern assignment.  _sidecars() propagates the
+        # patched file beside every board the workers/engine touch.
+        pro_path = os.path.join(self.workdir, 'input.kicad_pro')
+        data = None
+        if os.path.exists(pro_path):
+            try:
+                with open(pro_path) as fh:
+                    data = json.load(fh)
+            except Exception:
+                data = None
+        if not isinstance(data, dict):
+            data = {}
+        nset = data.setdefault('net_settings', {})
+        classes = nset.setdefault('classes', [])
+        patterns = nset.setdefault('netclass_patterns', [])
+        if not any(isinstance(c, dict) and c.get('name') == 'Default' for c in classes):
+            classes.insert(0, dict(_ENG_DEFAULT_CLASS))
+        by_name = {c.get('name'): c for c in classes if isinstance(c, dict)}
+        applied = {}
+        used = set()
+        for net, rec in sized.items():
+            if not rec.get('width_mm'):
+                continue
+            base_name = 'AI-IMP-' + (re.sub(r'[^A-Za-z0-9]+', '_', net).strip('_') or 'NET')
+            name, k = base_name, 2
+            while name in used:
+                name = '%s_%d' % (base_name, k)
+                k += 1
+            used.add(name)
+            src_name = ((su.get('nets') or {}).get(net) or {}).get('netclass')
+            clone = dict(by_name.get(src_name) or by_name.get('Default')
+                         or _ENG_DEFAULT_CLASS)
+            clone['name'] = name
+            clone['track_width'] = round(rec['width_mm'], 4)
+            clone['priority'] = 1000
+            if name in by_name:
+                classes[classes.index(by_name[name])] = clone
+            else:
+                classes.append(clone)
+            by_name[name] = clone
+            # KiCad projects commonly carry an explicit Default pattern
+            # for every net; a second matching pattern makes KiCad build
+            # a COMPOSITE class whose width resolution kept Default's
+            # value in testing.  The marking replaces the net's
+            # assignment outright (the clone carries every other
+            # parameter of the class it replaces).
+            patterns[:] = [pp for pp in patterns
+                           if not (isinstance(pp, dict) and pp.get('pattern') == net)]
+            patterns.append({'netclass': name, 'pattern': net})
+            applied[net] = name
+        with open(pro_path, 'w') as fh:
+            json.dump(data, fh, indent=1)
+        return applied
+
+    def engineered_report(self, final_board):
+        # #67 Step 1 per-net verification report.  Verifies geometry and
+        # stackup math only -- it does not predict S11 (annex VER-2).
+        eng = getattr(self, '_eng', None)
+        if not isinstance(eng, dict):
+            return None
+        if eng.get('error'):
+            return {'error': eng['error']}
+        rep = {'scope': 'Verifies geometry and stackup math only; '
+                        'it does not predict S11.',
+               'stackup_defined': eng.get('stackup_defined'),
+               'stackup_placeholder': eng.get('stackup_placeholder'),
+               'placeholder_reasons': eng.get('placeholder_reasons') or [],
+               'fab_notes': [
+                   'Request an impedance test coupon per panel '
+                   '(IPC-TM-650 2.5.5.7) and the fab as-built stackup '
+                   'calculation for every marked net.',
+                   'Dk basis is recorded per net; widths are solved with '
+                   'Dk at the operating frequency (annex CALC-3) -- a '
+                   '1 MHz Dk on a GHz design invalidates the width.',
+                   'Widths assume the solder-mask state recorded per net; '
+                   'ENIG above 1 GHz adds loss the calculator does not '
+                   'model (annex WARN-2).',
+                   'A coupon verifies the fab process on coupon geometry; '
+                   'it is not a measurement of the routed feed itself.'],
+               'nets': {}}
+        nets = list((eng.get('nets') or {}).keys()) or list(eng.get('first_nets') or [])
+        if not nets:
+            rep['note'] = 'sidecar present, no impedance markings'
+            return rep
+        su = self._worker('stackup', '--board', final_board, '--nets', ','.join(nets))
+        copper = su.get('copper') or []
+        order = [c['name'] for c in copper]
+        by_name = {c['name']: c for c in copper}
+        for net in nets:
+            sized = (eng.get('nets') or {}).get(net) or {}
+            info = (su.get('nets') or {}).get(net) or {}
+            routed_layers = sorted((info.get('track_layers') or {}).keys())
+            ref = []
+            for lname in routed_layers:
+                if lname not in by_name:
+                    continue
+                k = order.index(lname)
+                cls = by_name[lname].get('class')
+                if cls == 'surface_top':
+                    adj = [order[k + 1]] if k + 1 < len(order) else []
+                elif cls == 'surface_bottom':
+                    adj = [order[k - 1]] if k > 0 else []
+                else:
+                    adj = ([order[k - 1]] if k > 0 else []) + \
+                          ([order[k + 1]] if k + 1 < len(order) else [])
+                for a in adj:
+                    ref.append({'layer': lname, 'reference_layer': a,
+                                'gnd_pour': bool(by_name[a].get('gnd_pour')),
+                                'result': 'ok' if by_name[a].get('gnd_pour') else 'warn'})
+            e = {'target_z0_ohm': sized.get('target_z0'),
+                 'freq_hz': sized.get('freq_hz'),
+                 'band': _tlcalc.band_of(sized.get('freq_hz') or 0) if _tlcalc else None,
+                 'dk_basis': sized.get('dk_basis'),
+                 'primary_layer': sized.get('primary_layer'),
+                 'computed_width_mm': sized.get('width_mm'),
+                 'applied_width_mm': sized.get('applied_width_mm'),
+                 'width_verified': sized.get('width_verified'),
+                 'per_layer': sized.get('per_layer'),
+                 'routed_layers': routed_layers,
+                 'vias': info.get('vias'),
+                 'routed_length_mm': round(info.get('length_mm') or 0.0, 2),
+                 'reference_plane': ref,
+                 'warnings': []}
+            if sized.get('warning'):
+                e['warnings'].append(sized['warning'])
+            if any(r['result'] == 'warn' for r in ref):
+                e['warnings'].append('no ground pour found on a reference layer')
+            f = sized.get('freq_hz')
+            prim = (sized.get('per_layer') or {}).get(sized.get('primary_layer') or '') or {}
+            if f and prim.get('eps_eff'):
+                lam = _tlcalc.lambda_g_mm(prim['eps_eff'], f)
+                e['rf'] = {
+                    'lambda_g_mm': round(lam, 2) if lam else None,
+                    'w_over_lambda_g': (round(sized['width_mm'] / lam, 4)
+                                        if lam and sized.get('width_mm') else None),
+                    'loss_db_per_mm': prim.get('loss_db_per_mm'),
+                    'est_feed_loss_db': (round(prim['loss_db_per_mm'] * (info.get('length_mm') or 0.0), 3)
+                                         if prim.get('loss_db_per_mm') is not None else None)}
+            rep['nets'][net] = e
+        self._record('engineered_report', {'nets': list(rep['nets'].keys())})
+        return rep
+
     def tool_board_summary(self):
         r = self._worker('summary', '--board', self.current)
         split = [n for n in r['nets'] if n['components'] > 1 and n['net'] not in ('GND',)]
@@ -169,6 +514,9 @@ class Pipeline:
         outp = os.path.join(self.workdir, 'pass%d.kicad_pcb' % self.pass_no)
         advice = os.path.join(self.workdir, 'advice%d.json' % self.pass_no)
         first_nets = list(first_nets or [])
+        eng_first = self._engineered_first_nets()
+        if eng_first:
+            first_nets = eng_first + [n for n in first_nets if n not in eng_first]
         if len(first_nets) > 64:  # TraceMaker rejects advice files with >64 first_nets
             self.log('first_nets capped at 64 (was %d)' % len(first_nets))
             first_nets = first_nets[:64]
