@@ -8,7 +8,7 @@ PCBWorld-Bench tiers + named fixtures).
 
 Programme totals: hotfix 3–5 h; core path roughly 105–170 h; spikes
 gated separately. Phase 2E (below) adds the WeaveEngine-derived
-feature block: 8–15 d by the issues' own estimates, plus #63 (3–5 d)
+feature block, plus #63
 riding as P2.1b's first step.
 
 ## Done
@@ -73,8 +73,7 @@ zorinbox backend container moved to a 16-CPU host the same day.
 ## Remaining (in sequence)
 
 ### P2.1b — tool_fix_violations (12–20 h)
-**Step 0 — #63, pour skeleton reservation pre-check (3–5 d by the
-issue's estimate).** Compute each pour's pad spanning tree (width =
+**Step 0 — #63, pour skeleton reservation pre-check.** Compute each pour's pad spanning tree (width =
 zone min-thickness + slack + clearance deltas, confined to the pour
 region) before routing/repair and reserve it: severing the skeleton is
 a first-class cost, the reservation is inserted last and yields first
@@ -104,7 +103,7 @@ winner is re-gated — ~2 gate cycles saved per run, ~4 on escalation);
 a persistent worker process or batched gate calls; profile one AUTO run
 end to end and attack the top fixed cost.
 
-### Phase 2E — engine & measurement block (8–15 d by the issues' estimates)
+### Phase 2E — engine & measurement block
 Six features adapted from the WeaveEngine review (2026-11-24; ideas
 reimplemented, no code taken). The block sits here — after P2.7a,
 before P2.7b — because its verdicts multiply: the harness and the
@@ -114,14 +113,14 @@ rides as P2.1b's step 0 (above), because P2.1b's pour-side fault
 definition comes from it.
 
 1. **#62 — bench harness: prepared-input caching + nothing-worse
-   gate (2–4 d).** Cache prepared inputs keyed by a hash of the
+   gate.** Cache prepared inputs keyed by a hash of the
    source board files (re-prep on unchanged sources is byte-stable);
    score "worse" on routing-caused DRC — per board, per violation
    kind, DRC after routing minus DRC of the stripped input — never
    on raw counts. Committing the harness this way also discharges
    #54's remainder. First because every later verdict in this block,
    and the final exam, rides on it.
-2. **#66 — portfolio racing, fixed-order selection (2–3 d).** Race
+2. **#66 — portfolio racing, fixed-order selection.** Race
    whole engine passes at varied parameter sets, in heats; selection
    keeps the first COMPLETE variant in a fixed priority order, never
    the first to finish — the chosen result is independent of worker
@@ -134,13 +133,11 @@ definition comes from it.
    `-mt 1` and power-type DSN layer export; tm_relax bounded by
    rounds, on #66's deterministic selection. Report faults /
    wirelength / vias alongside unconnected.
-4. **#64 — severance penalty in finisher candidate scoring
-   (2–4 d)** and **#65 — regret-order sequencing for multi-net
-   repair (1–2 d).** Implemented against the finisher and judged
+4. **#64 — severance penalty in finisher candidate scoring**
+   and **#65 — regret-order sequencing for multi-net repair.** Implemented against the finisher and judged
    on this block's A/B battery, per their acceptance criteria: keep
    each only if the A/B says it earns its cost.
-5. **#61 — best-so-far output + shared time-limit semantics
-   (1–2 d).** Atomic artifact writes; a checkpoint hook rewrites
+5. **#61 — best-so-far output + shared time-limit semantics.** Atomic artifact writes; a checkpoint hook rewrites
    the output whenever a pass beats the best-so-far acceptance key;
    one wall-clock deadline shared by every worker in a backend run,
    after which the run finishes with the best so far. Results
