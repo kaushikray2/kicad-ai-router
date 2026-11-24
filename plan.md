@@ -493,6 +493,26 @@ reference document; this entry is its plan shape.
   exactly on the fixture schematic (one buck, one LDO, one
   FET-switched branch with mutually exclusive loads, one fused
   input, one hierarchical repeated load).
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented.** Sizing-math annex filed on #68 first (sources:
+  Saturn Toolkit Help v8.45; Brooks & Adam 2015, the published
+  fits to the IPC-2152 charts). Thermal sizing implements those
+  fits (external + internal rows) at minimum manufactured
+  geometry, with the IPC-2221 closed form as cross-check only.
+  Via capacity uses the barrel-area model at the IPC-2221
+  external constant: it lands 3-16% below the ticket's indicative
+  Saturn points (conservative), and exact Saturn parity is NOT
+  claimed -- Saturn publishes no via equations and its model is
+  height-dependent; the gap is recorded on the ticket. The tree
+  builder (ai_router/powertree.py) works on the kicadsexpr
+  netlist export with the spike's rules, closes the rail set over
+  declared edge components (a fused input stub has no typed
+  pins), and computes EVA design currents per operating mode;
+  the hand-worked fixture table (fused input, buck, LDO,
+  FET-switched exclusive branch, 4x hierarchical load, CP and
+  resistive corners) matches exactly in tests. Markings carry
+  the power schema (voltage corners, per-ref loads/regulators/
+  conduits/protective, root-level power_corners).
 - **Step 2 — run integration + verification.** Per-segment
   widths applied to the routed board; via arrays placed by the
   finisher (barrel cross-section matching, IPC-2152; via
