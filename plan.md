@@ -179,6 +179,47 @@ Collapse multi-step A* staircases into 2-segment 0°/45°/90° doglegs
 under the P2.1 exact checker. Exit: equal closures, lower copper and
 wirelength on the finish battery.
 
+### P2.8 — Impedance-controlled nets (issue #67)
+A feature axis, not finisher repair: user-marked nets get
+stackup-computed widths, priority routing, EMC treatment, and
+gate-verified arc smoothing. It sits here — after P2.4, whose
+exact-check discipline its smoothing post-pass reuses, and after the
+Phase 2E harness (#62) that its nothing-worse verification runs on.
+It displaces nothing in the sequence above; it pulls forward only if
+a funded work package takes it (the NLnet application names it),
+decided at a re-scope checkpoint. Three steps, in the issue's own
+staging:
+
+- **Step 1 — marking, width, priority, report.** Marked nets and
+  their target impedance live in the plugin config. Width per layer
+  from the board stackup via the IPC-2141 / Wadell closed forms (the
+  equations KiCad's PCB Calculator uses), every assumption printed,
+  placeholder stackups warned on, the computed width written into
+  the net's class before routing. Marked nets route first — a
+  permanent user-declared first_nets set — and are protected from
+  later re-route windows. The run report states, per marked net:
+  target vs calculated width, layer(s) used, via count,
+  reference-plane check. Exit: computed widths match KiCad PCB
+  Calculator within rounding on a defined-stackup fixture; a marked
+  net routes first at the computed width; unmarked nets do not
+  regress on the standing A/B set.
+- **Step 2 — EMC treatment + arc smoothing.** Keep marked nets on
+  a layer with a solid reference; a gate check that the routed path
+  crosses no split or gap in its reference pour; a GND return via
+  beside every layer-change via on a marked net; via fencing along
+  RF nets where clearance allows. Arc smoothing is a post-pass on
+  marked nets only (fitted arcs, radius ≥ 3× trace width),
+  accepted per net only if the exact gate proves zero clearance
+  regression, rolled back otherwise — the engine stays
+  straight-segment. Exit: each treatment gate-verified clean on the
+  battery (zero added faults). Kill: a treatment that cannot place
+  without gate regressions ships as a report-only warning instead —
+  the gap-crossing check already is one.
+- **Step 3 — fast follow: differential pairs.** Width + gap for
+  edge-coupled microstrip / stripline (e.g. 90 Ω USB). Length
+  matching is explicitly out: a separate later item — length does
+  not set impedance.
+
 ### P2.5 — Push-and-shove spike (15–20 h, hard stop, gated behind P2.3)
 Runs only if P2.3 leaves a shove-shaped residual class behind. Default
 verdict NO unless it produces a closure nothing else has.
