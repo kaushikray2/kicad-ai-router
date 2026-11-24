@@ -220,6 +220,55 @@ staging:
   matching is explicitly out: a separate later item — length does
   not set impedance.
 
+**Implementation sketch** (design discussion, 2026-11-24). The plugin
+encodes the math and the design rules as code; it never embeds the
+standard's text.
+
+- **Calculator module** (new, pure Python, unit-tested): the
+  IPC-2141A closed-form family — surface and embedded microstrip,
+  symmetric and asymmetric stripline, coplanar waveguide,
+  edge-coupled differential — each giving Z0 from width, inverted
+  by bisection on width. Every model carries its published validity
+  range (e.g. microstrip ±5% only for 0.1 < W/H < 2.0, 1 < er < 15);
+  outside range the tool reports it and falls back rather than
+  extrapolating silently. Fixtures: Saturn PCB Toolkit worked
+  examples and KiCad PCB Calculator outputs (Step 1's exit).
+- **Stackup reader:** BOARD_STACKUP via pcbnew (dielectric
+  thickness and er per layer pair, copper thickness). Each copper
+  layer is classified — surface microstrip, stripline between two
+  planes, coplanar when a GND pour shares the layer — and the
+  classification selects the formula. Placeholder stackups (default
+  er everywhere, missing thicknesses) are flagged in the run report;
+  the calculation is only as good as that data.
+- **Run integration:** the computed width (and gap for pairs) is
+  written into the working copy's netclass before routing; marked
+  nets join the permanent first_nets advice set (the advice channel
+  caps at 64 first nets, TraceMaker's limit); marked-net copper is
+  locked against re-route windows via a net-scoped lock pass on the
+  v1.10.1 lock machinery — today that machinery is corridor-scoped
+  (it locks by geometry around a target net), so the net-scoped
+  variant is an extension of the hook, not an existing switch.
+- **Gate checks are the report:** post-route, per marked net —
+  actual routed width measured, achieved Z0 recomputed from the
+  actual width and stackup against target ± tolerance, the
+  reference-pour gap-crossing check, via count. Return vias and via
+  fencing are placed by the finisher through the existing stitch
+  via-placement machinery; arc smoothing runs last, per net, under
+  the exact checker.
+- **Sources and licensing (hard rule):** implement the republished
+  equations and cite IPC-2141A as the source — never lift IPC's
+  verbatim text or tables into the repo. IPC-2141A is a paid
+  standard (US$178, ANSI Webstore) and current IPC editions
+  prohibit transferring their content into AI systems; the
+  archive.org copies are unofficial uploads and are not a source.
+  The equations are legitimately free: Saturn PCB Toolkit
+  (cross-check reference), the open-source pcb-toolkit crate source
+  on docs.rs (the 2141A closed forms and validity ranges),
+  Wevolver's controlled-impedance guide, and National
+  Semiconductor AN-905 (via TI) for the differential-microstrip
+  forms. Designation correction: the RF/microwave guide is
+  IPC-2252, not IPC-2251 (2251 is high-speed packaging).
+
 ### P2.5 — Push-and-shove spike (15–20 h, hard stop, gated behind P2.3)
 Runs only if P2.3 leaves a shove-shaped residual class behind. Default
 verdict NO unless it produces a closure nothing else has.
