@@ -37,13 +37,16 @@ except Exception:
 try:
     from ai_router import markings as _markings
     from ai_router import tlcalc as _tlcalc
+    from ai_router import rfcheck as _rfcheck
 except Exception:
     try:
         import markings as _markings
         import tlcalc as _tlcalc
+        import rfcheck as _rfcheck
     except Exception:
         _markings = None
         _tlcalc = None
+        _rfcheck = None
 
 # KiCad's built-in Default netclass values (what LoadBoard synthesises
 # when a board has no .kicad_pro); used as the clone source for an
@@ -219,7 +222,8 @@ class Pipeline:
             return
         nets = mk.impedance_nets()
         state = {'markings_file': os.path.basename(mk.path or ''),
-                 'first_nets': nets, 'nets': {}}
+                 'first_nets': nets, 'nets': {},
+                 'entries': {e['net']: e for e in mk.impedance}}
         self._eng = state
         if not nets:
             self._record('engineered_nets',
@@ -408,6 +412,174 @@ class Pipeline:
             json.dump(data, fh, indent=1)
         return applied
 
+
+    # ---- #67 Step 2: RF checks + treatments (branch-only) ----
+    # Annex band conventions: thresholds are evaluated at the band TOP,
+    # loss estimates at the band-centre frequency listed here; the
+    # return-via ceiling is 2.54 mm up to 3 GHz and 1.5 mm above it
+    # (annex GATE-4/GEN-3, from the Keysight via-design note).
+    _BAND_TOP_HZ = {'SUB': 1e9, 'MID': 3e9, 'HIGH': 6e9}
+    _BAND_MID_HZ = {'SUB': 5e8, 'MID': 2e9, 'HIGH': 4.5e9}
+    _BAND_CEILING_MM = {'SUB': 2.54, 'MID': 2.54, 'HIGH': 1.5}
+
+    def _eng_rf_spec(self, board):
+        """Build the rfgeom spec + rfcheck contexts for every marked net
+        from the markings state and a fresh stackup read of `board`.
+        Returns (spec, ctxs).  The reference map mirrors the adjacency
+        logic of engineered_report; h is the dielectric thickness
+        between the routed layer and that reference."""
+        eng = self._eng
+        entries = eng.get('entries') or {}
+        su = self._worker('stackup', '--board', board,
+                          '--nets', ','.join(entries.keys()))
+        copper = su.get('copper') or []
+        order = [c['name'] for c in copper]
+        by_name = {c['name']: c for c in copper}
+        spec, ctxs = {'nets': {}}, {}
+        for net, entry in entries.items():
+            info = (su.get('nets') or {}).get(net) or {}
+            routed = sorted((info.get('track_layers') or {}).keys())
+            refs = {}
+            for lname in routed:
+                if lname not in by_name:
+                    continue
+                k = order.index(lname)
+                cls = by_name[lname].get('class')
+                cu = by_name[lname]
+                cand = []
+                if cls == 'surface_top':
+                    cand = [(order[k + 1], (cu.get('diel_below') or {}).get('thickness_mm'))] if k + 1 < len(order) else []
+                elif cls == 'surface_bottom':
+                    cand = [(order[k - 1], (cu.get('diel_above') or {}).get('thickness_mm'))] if k > 0 else []
+                else:
+                    if k > 0:
+                        cand.append((order[k - 1], (cu.get('diel_above') or {}).get('thickness_mm')))
+                    if k + 1 < len(order):
+                        cand.append((order[k + 1], (cu.get('diel_below') or {}).get('thickness_mm')))
+                refs[lname] = [{'ref_layer': a, 'h_mm': h} for (a, h) in cand if h]
+            band = _tlcalc.band_of(entry.get('freq_hz') or 0)
+            sized = (eng.get('nets') or {}).get(net) or {}
+            prim = (sized.get('per_layer') or {}).get(sized.get('primary_layer') or '') or {}
+            eps_eff = prim.get('eps_eff')
+            f_top = self._BAND_TOP_HZ.get(band, 3e9)
+            lam_top = _tlcalc.lambda_g_mm(eps_eff, f_top) if eps_eff else None
+            lam_f = _tlcalc.lambda_g_mm(eps_eff, entry['freq_hz']) if eps_eff and entry.get('freq_hz') else None
+            ceiling = self._BAND_CEILING_MM.get(band, 2.54)
+            pi = entry.get('pi') or {}
+            pi_refs = list(pi.get('radio') or []) + list(pi.get('antenna') or [])
+            spec['nets'][net] = {'gnd_net': 'GND', 'ceiling_mm': ceiling,
+                                 'refs': refs, 'pi_refs': pi_refs}
+            ctxs[net] = {
+                'band': band, 'freq_hz': entry.get('freq_hz'),
+                'stub_limit_mm': (lam_top / 20.0) if lam_top else None,
+                'return_ceiling_mm': ceiling,
+                'width_mm': sized.get('width_mm'),
+                'w_over_lambda_g': (round(sized['width_mm'] / lam_f, 4)
+                                    if lam_f and sized.get('width_mm') else None),
+                'est_loss_db': (round(prim['loss_db_per_mm'] * (info.get('length_mm') or 0.0), 3)
+                                if prim.get('loss_db_per_mm') is not None else None),
+                'length_mm': round(info.get('length_mm') or 0.0, 2),
+                'finish': su.get('copper_finish'), 'eps_eff': eps_eff,
+                'refs': {ln: {'ref_layer': rl[0]['ref_layer'],
+                              'pour_nets': by_name[rl[0]['ref_layer']].get('pour_nets') or []}
+                         for ln, rl in refs.items() if rl}}
+        return spec, ctxs
+
+    def _eng_gate_try(self, cmd, args, label, extra_ok=None):
+        """Run a worker command on a copy of the current board and adopt
+        the copy only if the acceptance key does not regress (and an
+        optional extra predicate on the after-gate holds)."""
+        before = self.last_gate if self.last_gate is not None else self.tool_gate()
+        kb = _accept_key(before)
+        outp = self._out(label)
+        shutil.copy(self.current, outp)
+        r = self._worker(cmd, '--board', outp, *args)
+        adopted = False
+        if os.path.exists(outp):
+            prev = self.current
+            self.current = outp
+            after = self.tool_gate()
+            bad = _accept_key(after) > kb or (extra_ok is not None and not extra_ok(before, after))
+            if bad:
+                self.current = prev
+                self.last_gate = before
+                r = dict(r); r['status'] = 'reverted_faults'
+            else:
+                self.last_gate = after
+                adopted = True
+        r = dict(r); r['adopted'] = adopted
+        return r
+
+    def tool_rf_treatments(self):
+        # #67 Step 2 treatments: return-path vias for every marked net,
+        # then GCPW ground-tying fences for coplanar nets that asked.
+        # Each command is admitted as a unit through the gate.
+        eng = getattr(self, '_eng', None)
+        if not isinstance(eng, dict) or eng.get('error') or _rfcheck is None:
+            return {'status': 'skipped'}
+        entries = eng.get('entries') or {}
+        if not entries:
+            return {'status': 'no_markings'}
+        spec, ctxs = self._eng_rf_spec(self.current)
+        out = {'status': 'ok'}
+        vspec = {'nets': {n: {'gnd_net': 'GND',
+                              'ceiling_mm': ctxs[n]['return_ceiling_mm']}
+                          for n in spec['nets']}}
+        p = os.path.join(self.workdir, 'rf_vias_spec.json')
+        with open(p, 'w') as fh:
+            json.dump(vspec, fh)
+        r = self._eng_gate_try('rf_vias', ['--spec', p], 'rf_vias')
+        out['return_vias'] = r
+        self._record('rf_vias', {'placed': len(r.get('placed') or []),
+                                 'unplaced': r.get('unplaced'),
+                                 'adopted': r.get('adopted')})
+        self.log('rf_vias: %d placed, %d unplaced, adopted=%s'
+                 % (len(r.get('placed') or []), len(r.get('unplaced') or []), r.get('adopted')))
+        fence_nets = {}
+        for n, e in entries.items():
+            if e.get('model') == 'coplanar' and e.get('fence') and ctxs.get(n, {}).get('eps_eff'):
+                band = ctxs[n]['band']
+                lam = _tlcalc.lambda_g_mm(ctxs[n]['eps_eff'], self._BAND_TOP_HZ.get(band, 3e9))
+                if lam:
+                    fence_nets[n] = {'gnd_net': 'GND',
+                                     'pitch_mm': round(lam / (10.0 if band == 'HIGH' else 20.0), 3),
+                                     'gap_mm': e.get('gap_mm')}
+        if fence_nets:
+            p = os.path.join(self.workdir, 'rf_fence_spec.json')
+            with open(p, 'w') as fh:
+                json.dump({'nets': fence_nets}, fh)
+            r = self._eng_gate_try('rf_fence', ['--spec', p], 'rf_fence')
+            out['fence'] = r
+            self._record('rf_fence', {'placed': len(r.get('placed') or []),
+                                      'adopted': r.get('adopted')})
+            self.log('rf_fence: %d placed, adopted=%s' % (len(r.get('placed') or []), r.get('adopted')))
+        return out
+
+    def tool_smooth_marked(self):
+        # #67 Step 2 smoothing: one net per gated call; a net is kept
+        # only if the acceptance key AND the clearance class both hold.
+        eng = getattr(self, '_eng', None)
+        if not isinstance(eng, dict) or eng.get('error'):
+            return {'status': 'skipped'}
+        entries = eng.get('entries') or {}
+        targets = [n for n, e in entries.items() if e.get('smooth')]
+        if not targets:
+            return {'status': 'no_marked_smooth'}
+        agg = {'status': 'ok', 'per_net': {}}
+        for net in targets:
+            def _clr_ok(b4, af):
+                return ((af.get('classes') or {}).get('clearance', 0)
+                        <= (b4.get('classes') or {}).get('clearance', 0))
+            r = self._eng_gate_try('smooth', ['--net', net], 'smooth', extra_ok=_clr_ok)
+            agg['per_net'][net] = r
+            self._record('rf_smooth', {'net': net,
+                                       'smoothed': len(r.get('smoothed') or []),
+                                       'skipped': len(r.get('skipped') or []),
+                                       'adopted': r.get('adopted')})
+            self.log('smooth[%s]: %d joints, adopted=%s'
+                     % (net, len(r.get('smoothed') or []), r.get('adopted')))
+        return agg
+
     def engineered_report(self, final_board):
         # #67 Step 1 per-net verification report.  Verifies geometry and
         # stackup math only -- it does not predict S11 (annex VER-2).
@@ -434,10 +606,37 @@ class Pipeline:
                    'A coupon verifies the fab process on coupon geometry; '
                    'it is not a measurement of the routed feed itself.'],
                'nets': {}}
+        rep['prefab_checklist'] = [
+            'Disposition every GATE failure in the per-net checks before '
+            'releasing the design to fab; corridor severances (GATE-1) and '
+            'return-via gaps (GATE-4/5) are layout defects - fix them in '
+            'the layout, not in the markings.',
+            'Warnings (WARN-*) are recorded dispositions: keep this report '
+            'with the fab package.',
+            'Archive the markings sidecar (%s) with the design: it is the '
+            'source of the RF intent these checks verify.' % eng.get('markings_file')]
+        treats = [e2.get('data') for e2 in self.ledger
+                  if e2.get('step') in ('rf_vias', 'rf_fence', 'rf_smooth')]
+        if treats:
+            rep['treatments'] = treats
         nets = list((eng.get('nets') or {}).keys()) or list(eng.get('first_nets') or [])
         if not nets:
             rep['note'] = 'sidecar present, no impedance markings'
             return rep
+        checks = {}
+        if _rfcheck is not None and (eng.get('entries') or {}):
+            try:
+                spec, ctxs = self._eng_rf_spec(final_board)
+                sp = os.path.join(self.workdir, 'rfgeom_spec.json')
+                with open(sp, 'w') as fh:
+                    json.dump(spec, fh)
+                facts = self._worker('rfgeom', '--board', final_board, '--spec', sp)
+                for n, f in (facts or {}).items():
+                    if n in ctxs:
+                        checks[n] = _rfcheck.evaluate_net(
+                            (eng.get('entries') or {}).get(n) or {}, ctxs[n], f)
+            except Exception as exc:
+                checks = {'error': str(exc)}
         su = self._worker('stackup', '--board', final_board, '--nets', ','.join(nets))
         copper = su.get('copper') or []
         order = [c['name'] for c in copper]
@@ -492,6 +691,11 @@ class Pipeline:
                     'loss_db_per_mm': prim.get('loss_db_per_mm'),
                     'est_feed_loss_db': (round(prim['loss_db_per_mm'] * (info.get('length_mm') or 0.0), 3)
                                          if prim.get('loss_db_per_mm') is not None else None)}
+            if isinstance(checks, dict) and net in checks:
+                e['checks'] = checks[net]
+                e['check_summary'] = {
+                    'fail': sum(1 for x in checks[net] if x['severity'] == 'fail'),
+                    'warn': sum(1 for x in checks[net] if x['severity'] == 'warn')}
             rep['nets'][net] = e
         self._record('engineered_report', {'nets': list(rep['nets'].keys())})
         return rep

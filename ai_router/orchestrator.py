@@ -377,6 +377,13 @@ def _run_auto_once(cfg, pipe, log):
                 try: pipe.tool_reroute_window(net, margin=float(cfg.get('reroute_margin', 6.0)))
                 except Exception as e: log('reroute_window %s failed: %s' % (net, e))
             gate = pipe.tool_gate()
+    # #67 Step 2 (branch-only): RF treatments + gate-verified smoothing
+    # for marked nets.  Both tools no-op without markings, so unmarked
+    # boards run exactly the pre-Step-2 sequence.
+    try: pipe.tool_rf_treatments()
+    except Exception as e: log('rf treatments failed: %s' % e)
+    try: pipe.tool_smooth_marked()
+    except Exception as e: log('rf smoothing failed: %s' % e)
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))
