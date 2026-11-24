@@ -413,6 +413,20 @@ reference document; this entry is its plan shape.
   order already puts user values first) and Step 1 is
   re-scoped on that basis — the spike's output is the verdict,
   not code we keep.
+  **Verdict (2026-11-24): PROVEN.** The netlist export carries
+  pin types + sheet paths (no .kicad_sch parsing needed);
+  instance counting proven on KiCad's multichannel demo; the
+  Nomad tree hand-verified end to end. Loads classify cleanly
+  (38/38 power_in pins are IC supply pins). The gap is sources:
+  only 2 power_out pins on the Nomad (its LDO and load switch) —
+  rails are fed by passive-typed connectors, the charger's VBAT
+  is a plain output, and power symbols leave no trace in the
+  export. Two rules join Step 1's model: output-typed pins on
+  power nets count as candidate sources, and a rail still
+  sourceless after that gets its root declared at marking time.
+  The full user-declared fallback is NOT needed — it narrows to
+  rail roots. Results filed as a comment on #68; full report
+  internal (agent-runs/nets-spike/REPORT.md).
 - **Step 1 — power-tree WCCA core** (pure, unit-tested). The
   tree is built from the schematic's pin electrical types
   (power_out = source, power_in = load, the rest conduits),
