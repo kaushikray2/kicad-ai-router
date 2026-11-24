@@ -8,7 +8,7 @@ import tarfile, threading, time, urllib.request, uuid, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-BACKEND_VERSION = '1.9.5'
+BACKEND_VERSION = '1.9.6'
 SCHEMA_VERSION = 1
 DATA = os.environ.get('AIR_DATA_DIR', '/data')
 PORT = int(os.environ.get('AIR_PORT', '8731'))
@@ -443,7 +443,7 @@ class Handler(BaseHTTPRequestHandler):
                 if llm.get('api_key'): cfg['llm']['api_key'] = llm['api_key']
                 if llm.get('clear_api_key'): cfg['llm']['api_key'] = ''
                 rt = upd.get('routing') or {}
-                for k in ('mode', 'max_passes', 'work', 'no_tracks_on', 'strip_existing'):
+                for k in ('mode', 'max_passes', 'work', 'no_tracks_on', 'strip_existing', 'engine_portfolio', 'layer_law_policy', 'reroute_window_cap', 'reroute_accept', 'reroute_margin', 'pass_advice', 'advice_regions', 'first_nets_policy', 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap', 'ilp_repair_cap', 'attempt_select'):  # v1.9.6 (#40): Phase 1 keys were silently dropped
                     if k in rt: cfg['routing'][k] = rt[k]
                 if 'allowed_hosts' in upd: cfg['allowed_hosts'] = upd['allowed_hosts']
                 if 'retention' in upd: cfg['retention'] = upd['retention']

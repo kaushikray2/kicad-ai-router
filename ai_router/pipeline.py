@@ -20,10 +20,10 @@ FAULT_CLASSES = ('shorting_items', 'clearance', 'items_not_allowed',
                  'tracks_crossing', 'hole_clearance', 'hole_to_hole',
                  'copper_edge_clearance', 'annular_width', 'via_diameter',
                  'drill_out_of_range', 'track_width', 'solder_mask_bridge',
-                 'track_dangling', 'via_dangling')
+                 'track_dangling', 'via_dangling', 'copper_sliver')  # v1.9.6 (#39): sliver added -- clean-pass counts it, so the accept key must see it
 # Copper-layer DRC classes for reporting (excludes silk/text/library
 # noise and unconnected_items, which is tracked separately).
-COPPER_CLASSES = FAULT_CLASSES + ('copper_sliver',)
+COPPER_CLASSES = FAULT_CLASSES  # v1.9.6 (#39): identical since sliver joined FAULT_CLASSES (kept as a name for reporting call sites)
 
 def _accept_key(g):
     # v1.8.2 (#16): step acceptance is lexicographic -- a step is kept
@@ -208,6 +208,7 @@ class Pipeline:
         except Exception:
             pass
         self.last_stuck = stuck
+        self.last_stuck_board = self.current  # v1.9.6 (#38): corridor validity is per-board-state
         if stuck['unrouted']:
             unrouted = [{'net': u['net'], 'from': u['from'], 'to': u['to'], 'note': u.get('reason') or ''} for u in stuck['unrouted']]
         else:
@@ -252,6 +253,12 @@ class Pipeline:
                 self.log('portfolio: %s produced no board (%s)' % (eng, (r or {}).get('status')))
                 continue
             g = self.tool_gate(outp)
+            # v1.9.6 (#37 note): candidate selection is FAULTS-first by
+            # design, while pass selection in the orchestrator is
+            # connectivity-first. The layering is deliberate: faults-
+            # first here is what kept KRT's 0-unconnected / 430-1142-
+            # copper candidates from winning the Phase 1 A/B. Do not
+            # 'unify' the keys without re-running that A/B.
             key = _accept_key(g)
             results.append({'engine': eng, 'key': list(key), 'board': outp,
                             'unconnected': g.get('unconnected_total'),
@@ -285,7 +292,9 @@ class Pipeline:
         cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
-            subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=2400)
+            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=2400).returncode
+        if _rc != 0:
+            self.log('TraceMaker variant %s exited with code %d (log: %s)' % (eng, _rc, log_path))  # v1.9.6 (#40)
         if not os.path.exists(outp):
             raise PipelineError('TraceMaker variant %s produced no board' % eng)
         try: self._worker('refill', '--board', outp, '--out', outp)
@@ -354,7 +363,7 @@ class Pipeline:
         # and a failed kicad-cli silently left the PREVIOUS board's
         # report to be parsed as this board's gate.
         total, unc, classes, pour, signal = self._drc_measure(board)
-        summ = self._worker('summary', '--board', board)
+        summ = self._worker('summary', '--board', board, '--fast')  # v1.9.6 (#40): the gate discards crossings/RUDY
         # v1.3.2 layer census: any track on a cfg-banned layer is a
         # layer-law fault, counted into fault_count via the gate dict.
         _tbl = summ.get('tracks_by_layer') or {}
@@ -402,7 +411,10 @@ class Pipeline:
         kb = _accept_key(before)
         locked = self._out('locked')
         args = ['--board', self.current, '--out', locked, '--net', net, '--margin', str(margin)]
-        for u in (getattr(self, 'last_stuck', None) or {}).get('unrouted') or []:
+        _stuck = getattr(self, 'last_stuck', None) or {}
+        if getattr(self, 'last_stuck_board', None) != self.current:
+            _stuck = {}  # v1.9.6 (#38): corridor was measured on another board state -- fall back to the net window
+        for u in _stuck.get('unrouted') or []:
             if u.get('net') == net: break
         else:
             u = None
@@ -415,7 +427,7 @@ class Pipeline:
             return {'status': 'lock_failed', 'net': net}
         outp = self._out('rerouted')
         advice = os.path.join(self.workdir, 'advice-rw-%d.json' % self._oseq)
-        with open(advice, 'w') as f: json.dump({'version': 1, 'first_nets': []}, f)
+        with open(advice, 'w') as f: json.dump({'version': 1, 'first_nets': [net]}, f)  # v1.9.6 (#38): protect the target net
         if getattr(self, '_copper_layers', None) is None:
             try: self._copper_layers = self._worker('summary', '--board', self.current).get('copper_layers') or []
             except Exception: self._copper_layers = []
@@ -609,10 +621,20 @@ class Pipeline:
 
     def finalize(self):
         final = os.path.join(self.workdir, 'final.kicad_pcb')
+        # v1.9.6 (#39): record what the final refill does to the fault
+        # count -- the caller gates the delivered file, but a refill-
+        # introduced delta was previously invisible in the ledger.
+        pre = self.last_gate if (self.last_gate and self.last_gate.get('board') == self.current) else None
         self._worker('refill', '--board', self.current, '--out', final)
         pro = os.path.join(self.workdir, 'input.kicad_pro')
         if os.path.exists(pro):
             shutil.copy(pro, os.path.join(self.workdir, 'final.kicad_pro'))
         self._sidecars(final)  # v1.8.2 (#17): also final.kicad_dru when present
-        self._record('finalize', {'final': final})
+        rec = {'final': final}
+        if pre is not None:
+            after = self.tool_gate(final)
+            rec['fault_delta'] = fault_count(after) - fault_count(pre)
+            if rec['fault_delta']:
+                self.log('finalize: refill changed the fault count by %+d' % rec['fault_delta'])
+        self._record('finalize', rec)
         return final

@@ -40,11 +40,11 @@ class RouterDialog(wx.Dialog):
         self.tm_ctrl = wx.TextCtrl(panel, value=self.cfg['tracemaker_path'])
         add('TraceMaker binary', self.tm_ctrl)
         self.mode_ctrl = wx.Choice(panel, choices=['llm', 'auto'])
-        self.mode_ctrl.SetStringSelection(self.cfg.get('mode', 'llm'))
+        self.mode_ctrl.SetStringSelection(self.cfg.get('mode', 'auto'))  # v1.9.6 (#40): fallback matches config DEFAULTS
         add('Mode (llm = model decides, auto = rule-based)', self.mode_ctrl)
         self.passes_ctrl = wx.SpinCtrl(panel, value=str(self.cfg.get('max_passes', 4)), min=1, max=8)
         add('Max route passes', self.passes_ctrl)
-        self.layers_ctrl = wx.TextCtrl(panel, value=self.cfg.get('no_tracks_on', 'In1.Cu,In2.Cu'))
+        self.layers_ctrl = wx.TextCtrl(panel, value=self.cfg.get('no_tracks_on', 'In1.Cu'))  # v1.9.6 (#40)
         add('No tracks on layers', self.layers_ctrl)
         self.strip_ctrl = wx.CheckBox(panel, label='Strip existing routing into the working copy first')
         self.strip_ctrl.SetValue(bool(self.cfg.get('strip_existing', True)))

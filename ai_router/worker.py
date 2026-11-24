@@ -53,7 +53,7 @@ def refill(b):
     f.Fill(b.Zones())
 
 # ---------------------------------------------------------------- summary
-def cmd_summary(board_path):
+def cmd_summary(board_path, fast=False):
     b = pcbnew.LoadBoard(board_path)
     refill(b)
     conn = b.GetConnectivity(); conn.Build(b)
@@ -92,7 +92,9 @@ def cmd_summary(board_path):
     tracks_by_layer_net = {}
     for t in tracks:
         if t.Type() == pcbnew.PCB_VIA_T: continue
-        _cn = copper_layers[_lidx[t.GetLayer()]]
+        _li = _lidx.get(t.GetLayer())
+        if _li is None: continue  # v1.9.6 (#40): off-stack layer (external-router boards) -- skip, do not KeyError
+        _cn = copper_layers[_li]
         tracks_by_layer[_cn] = tracks_by_layer.get(_cn, 0) + 1
         _d = tracks_by_layer_net.setdefault(_cn, {})
         _nn = t.GetNetname()
@@ -113,6 +115,16 @@ def cmd_summary(board_path):
             if _zl in _lidx:
                 pour_layers.setdefault(_zn, set()).add(copper_layers[_lidx[_zl]])
     pour_layers = {k: sorted(v) for k, v in pour_layers.items()}
+    if fast:
+        # v1.9.6 (#40): gate calls discard the congestion features --
+        # skip the O(N^2) MST crossings + RUDY computation entirely.
+        return {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers,
+                'crossings': None, 'rudy_peak': None, 'rudy_p95': None,
+                'tracks': len([t for t in tracks if t.Type() != pcbnew.PCB_VIA_T]),
+                'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
+                'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
+                'tracks_by_layer': tracks_by_layer, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
+                'footprints': len(list(b.GetFootprints()))}
     # v1.2.2 congestion features (for the strategy dataset): ratsnest
     # MST crossings between different nets + RUDY peak/p95 of net
     # bounding boxes on a 32x32 grid.
@@ -2468,7 +2480,7 @@ def cmd_freeroute(board_path, out_path, passes=50):
     # build crashes on KiCad-exported DSNs: GraalVM serialization
     # config gap, verified 2026-11-23), SES back in. This routes; it
     # does not judge -- the gate census stays the layer-law backstop.
-    import subprocess, tempfile, time
+    import shutil, subprocess, tempfile, time
     launcher = _freerouting_bin()
     if not launcher:
         return {'status': 'unavailable', 'detail': 'freerouting launcher not found'}
@@ -2477,20 +2489,25 @@ def cmd_freeroute(board_path, out_path, passes=50):
     dsn = os.path.join(d, 'board.dsn'); ses = os.path.join(d, 'board.ses')
     b = pcbnew.LoadBoard(board_path)
     if not pcbnew.ExportSpecctraDSN(b, dsn):
+        shutil.rmtree(d, ignore_errors=True)
         return {'status': 'dsn_failed'}
     try:
         p = subprocess.run([launcher, '-de', dsn, '-do', ses, '-mp', str(int(passes)), '-mt', '2'],
                            capture_output=True, text=True, timeout=2400)
         tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
     except Exception as e:
+        shutil.rmtree(d, ignore_errors=True)
         return {'status': 'run_failed', 'detail': str(e)[:200]}
     if not os.path.exists(ses):
+        shutil.rmtree(d, ignore_errors=True)
         return {'status': 'no_ses', 'detail': tail[-200:]}
     b2 = pcbnew.LoadBoard(board_path)
     if not pcbnew.ImportSpecctraSES(b2, ses):
+        shutil.rmtree(d, ignore_errors=True)
         return {'status': 'ses_failed'}
     refill(b2)
     pcbnew.SaveBoard(out_path, b2)
+    shutil.rmtree(d, ignore_errors=True)
     return {'status': 'routed', 'seconds': round(time.time() - t0, 1)}
 
 
@@ -2511,15 +2528,26 @@ def cmd_krt_route(board_path, out_path):
     pro = os.path.splitext(board_path)[0] + '.kicad_pro'
     if os.path.exists(pro):
         shutil.copy(pro, os.path.join(d, 'in.kicad_pro'))
+    dru = os.path.splitext(board_path)[0] + '.kicad_dru'
+    if os.path.exists(dru):
+        shutil.copy(dru, os.path.join(d, 'in.kicad_dru'))  # v1.9.6 (#40): cmd_freeroute parity
     try:
         p = subprocess.run([sys.executable, auto, inp, out_path],
                            capture_output=True, text=True, timeout=3600, cwd=d)
         tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
     except Exception as e:
+        shutil.rmtree(d, ignore_errors=True)
         return {'status': 'run_failed', 'detail': str(e)[:200]}
     if not os.path.exists(out_path):
+        shutil.rmtree(d, ignore_errors=True)
         return {'status': 'no_output', 'detail': tail[-200:]}
-    return {'status': 'routed', 'seconds': round(time.time() - t0, 1)}
+    refill_note = 'skipped'
+    try:
+        b2 = pcbnew.LoadBoard(out_path); refill(b2); pcbnew.SaveBoard(out_path, b2); refill_note = 'ok'
+    except Exception as e:
+        refill_note = 'failed: %s' % str(e)[:80]
+    shutil.rmtree(d, ignore_errors=True)
+    return {'status': 'routed', 'seconds': round(time.time() - t0, 1), 'refill': refill_note}
 
 
 def main():
@@ -2531,6 +2559,7 @@ def main():
     ap.add_argument('--nets')
     ap.add_argument('--victims')
     ap.add_argument('--attempt-select', action='store_true')
+    ap.add_argument('--fast', action='store_true')
     ap.add_argument('--margin', type=float, default=6.0)
     ap.add_argument('--fx', type=float); ap.add_argument('--fy', type=float)
     ap.add_argument('--tx', type=float); ap.add_argument('--ty', type=float)
@@ -2548,7 +2577,7 @@ def main():
             _i = _layer_id_from_name(_x)
             if _i is None: NO_TRACKS_ON_UNRESOLVED.append(_x.strip())
             else: BANNED_LAYER_IDS.add(_i)
-    if a.cmd == 'summary': res = cmd_summary(a.board)
+    if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
     elif a.cmd == 'finish_leg': res = cmd_finish_leg(a.board, a.out, a.net, attempt_select=bool(getattr(a, 'attempt_select', False)))

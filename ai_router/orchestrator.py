@@ -215,6 +215,7 @@ def _run_auto_once(cfg, pipe, log):
     gate = None
     best = None
     prev_sig = None
+    base_gate = pipe.tool_gate(pipe.base)  # v1.9.6 (#37): the portfolio skip guard needs the base fault count
     engines = [e.strip() for e in str(cfg.get('engine_portfolio', '')).split(',') if e.strip()]
     if engines:
         try:
@@ -223,10 +224,18 @@ def _run_auto_once(cfg, pipe, log):
             log('Portfolio stage failed (%s) -- continuing with TraceMaker passes' % e)
             pg = None
         if pg is not None:
+            if (pipe.last_gate or {}).get('board') != pipe.current:
+                pg = pipe.tool_gate(pipe.current)  # last_gate may hold a losing candidate's gate
             best = ((_unc_key(pg), len(pg.get('split_nets') or []), fault_count(pg)), pipe.current)
             gate = pg
-            if not (pg.get('split_nets') or []):
-                log('Portfolio board is fully connected -- skipping TraceMaker passes')
+            # v1.9.6 (#37): skip passes ONLY for a winner that is fully
+            # connected (any net kind -- split_nets excludes GND, so
+            # pour splits are checked explicitly) AND no dirtier than
+            # the base board. A dirty-but-connected --relax winner
+            # previously locked its copper faults in unseen.
+            splits_any = (pg.get('split_nets') or []) + (pg.get('split_pour_nets') or [])
+            if _unc_key(pg) == 0 and not splits_any and fault_count(pg) <= fault_count(base_gate):
+                log('Portfolio board is fully connected and no dirtier than base -- skipping TraceMaker passes')
                 max_passes = 0
     for pno in range(1, max_passes + 1):
         try:
