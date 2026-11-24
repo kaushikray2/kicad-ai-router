@@ -199,7 +199,12 @@ open item, and it supersedes the "plugin config" wording in Step 1
 below, which stands until the decision is taken.
 
 - **Step 1 — marking, width, priority, report.** Marked nets and
-  their target impedance live in the plugin config. Width per layer
+  their target impedance live in the plugin config; an RF marking
+  also carries the net's operating frequency. Marking a net RF
+  switches transmission-line treatment always ON — there is no
+  short-feed exemption (lambda/20 is 3.4 mm at 2.4 GHz; every real
+  feed is electrically long). Frequency scales severity only:
+  pitches, stub limits, the warning set. Width per layer
   from the board stackup via the IPC-2141 / Wadell closed forms (the
   equations KiCad's PCB Calculator uses), every assumption printed,
   placeholder stackups warned on, the computed width written into
@@ -207,19 +212,49 @@ below, which stands until the decision is taken.
   permanent user-declared first_nets set — and are protected from
   later re-route windows. The run report states, per marked net:
   target vs calculated width, layer(s) used, via count,
-  reference-plane check. Exit: computed widths match KiCad PCB
+  reference-plane check, and
+  for RF nets the three scaling quantities: lambda_g at f,
+  W/lambda_g, and estimated loss per unit length at f. The report
+  states plainly that the tool verifies geometry and stackup math;
+  it does not predict S11. Exit: computed widths match KiCad PCB
   Calculator within rounding on a defined-stackup fixture; a marked
   net routes first at the computed width; unmarked nets do not
   regress on the standing A/B set.
 - **Step 2 — EMC treatment + arc smoothing.** Keep marked nets on
   a layer with a solid reference; a gate check that the routed path
   crosses no split or gap in its reference pour; a GND return via
-  beside every layer-change via on a marked net; via fencing along
-  RF nets where clearance allows. Arc smoothing is a post-pass on
-  marked nets only (fitted arcs, radius ≥ 3× trace width),
-  accepted per net only if the exact gate proves zero clearance
+  beside every layer-change via on a marked net, within 2.54 mm,
+  tightening to 1.5 mm in the 3–6 GHz band (all pitches in
+  in-dielectric wavelength). Via fencing's job is GCPW ground
+  tying only, at lambda_d/10 pitch in the 3–6 GHz band — there
+  is no measured evidence it improves an open microstrip feed's
+  S11, and the tool does not claim it does; no guard traces are
+  auto-inserted, and floating copper alongside marked RF nets is
+  gated instead. Vendor-derived feed-structure gates apply at all
+  bands: vias in the feed gated where avoidable; branches and
+  stubs gated at lambda_g/20; pi-match footprint presence checked
+  (presence, not position); antenna keep-out intrusion checked;
+  no thermal-relief spokes on RF-adjacent ground pads.
+  Frequency-scaled warnings: feed loss computed and warned
+  against budget (FR-4 ~0.1 dB/cm at 2.4 GHz rising to ~0.2 dB/cm
+  at 5–6 GHz; GNSS/LNA paths warn above 0.2 dB); ENIG on the RF
+  path flagged above 1 GHz (never a precise number); copper
+  roughness warn-only. Arc smoothing is a post-pass on marked
+  nets only (fitted arcs, radius ≥ 3× trace width), accepted
+  per net only if the exact gate proves zero clearance
   regression, rolled back otherwise — the engine stays
-  straight-segment. Exit: each treatment gate-verified clean on the
+  straight-segment. Bends are generation, not gate theatre: the
+  gate checks only acute angles and width changes along the net,
+  and the tool never prints bend return-loss numbers (no
+  calibrating measurement exists). Where a mitre is generated
+  instead of an arc, it uses the Douville & James optimum,
+  M = 52 + 65 · e^(−1.35 · W/h) percent. Explicitly NOT encoded
+  (the research rules them out as over-treatment): back-drilling
+  at <= 6 GHz, bend return-loss quantification,
+  roughness-corrected impedance (Huray needs fab foil parameters
+  we will not have). Severity follows the comment's banded table
+  (sub-GHz / 1–3 GHz / 3–6 GHz); at mmWave the tool refuses to
+  present its checks as validation. Exit: each treatment gate-verified clean on the
   battery (zero added faults). Kill: a treatment that cannot place
   without gate regressions ships as a report-only warning instead —
   the gap-crossing check already is one.
@@ -228,7 +263,11 @@ below, which stands until the decision is taken.
   matching is explicitly out: a separate later item — length does
   not set impedance.
 
-**Implementation sketch** (design discussion, 2026-11-24). The plugin
+**Implementation sketch** (design discussion, 2026-11-24). Design
+reference: issue #67 itself and its "Research refinements
+(2026-11-24)" comment — the distilled RF-methods research pass;
+where the comment conflicts with the ticket's original proposal,
+the comment wins. The plugin
 encodes the math and the design rules as code; it never embeds the
 standard's text.
 
@@ -239,7 +278,12 @@ standard's text.
   by bisection on width. Every model carries its published validity
   range (e.g. microstrip ±5% only for 0.1 < W/H < 2.0, 1 < er < 15);
   outside range the tool reports it and falls back rather than
-  extrapolating silently. Fixtures: Saturn PCB Toolkit worked
+  extrapolating silently. Two corrections are modelled: Dk at the
+  operating frequency, using the fab's design Dk where published
+  (the wrong Dk choice alone is a ~2.5% systematic Z0 error); and
+  a solder-mask correction that switches on when dielectric height
+  h <= ~0.25 mm (modelled 50 -> 48.7 ohm at h = 0.21 mm) and off at
+  thick dielectrics. Fixtures: Saturn PCB Toolkit worked
   examples and KiCad PCB Calculator outputs (Step 1's exit).
 - **Stackup reader:** BOARD_STACKUP via pcbnew (dielectric
   thickness and er per layer pair, copper thickness). Each copper
