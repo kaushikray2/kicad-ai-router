@@ -147,6 +147,9 @@ class Markings:
         return None
 
     @property
+    def hv_domains(self):
+        return self.data.get('hv_domains', [])
+
     def length_groups(self):
         return self.data.get('length_groups', [])
 
@@ -189,6 +192,9 @@ def validate(data):
             out[name] = [_check_differential_entry(e, i) for i, e in enumerate(entries)]
         elif name == 'power':
             out[name] = [_check_power_entry(e, i) for i, e in enumerate(entries)]
+        elif name == 'hv_domains':
+            out[name] = [_check_hv_domain(e, i)
+                         for i, e in enumerate(entries)]
         elif name == 'length_groups':
             out[name] = [_check_length_group(e, i) for i, e in enumerate(entries)]
         else:
@@ -253,6 +259,35 @@ def _check_differential_entry(entry, idx):
 
 def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_hv_domain(entry, idx):
+    p = 'hv_domains[%d]' % idx
+    e = entry
+    if not isinstance(e, dict):
+        raise MarkingsError('%s: entry must be an object' % p)
+    if not isinstance(e.get('name'), str) or not e['name']:
+        raise MarkingsError('%s: needs a "name"' % p)
+    nets = e.get('nets')
+    if (not isinstance(nets, list) or not nets
+            or not all(isinstance(n, str) for n in nets)
+            or len(set(nets)) != len(nets)):
+        raise MarkingsError('%s: "nets" must be a non-empty list of '
+                            'distinct net names' % p)
+    if not _num(e.get('voltage_v')) or e['voltage_v'] < 0:
+        raise MarkingsError('%s: "voltage_v" (peak working voltage '
+                            'vs the 0 V reference) is required, >= 0' % p)
+    if e.get('coating', 'uncoated') not in ('uncoated', 'polymer'):
+        raise MarkingsError('%s: "coating" must be uncoated|polymer '
+                            '(solder mask alone is not a coating)' % p)
+    if 'altitude_m' in e and (not _num(e['altitude_m'])
+                              or e['altitude_m'] < 0):
+        raise MarkingsError('%s: "altitude_m" must be a number >= 0' % p)
+    if 'pollution_degree' in e and e['pollution_degree'] not in (1, 2, 3):
+        raise MarkingsError('%s: "pollution_degree" must be 1|2|3' % p)
+    if 'materialise' in e and not isinstance(e['materialise'], bool):
+        raise MarkingsError('%s: "materialise" must be a boolean' % p)
+    return dict(e)
 
 
 def _check_length_group(entry, idx):
