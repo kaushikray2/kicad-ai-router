@@ -44,6 +44,7 @@ try:
     from ai_router import kbclient as _kbclient
     from ai_router import library_rules as _library_rules
     from ai_router import placement_audit as _placement_audit
+    from ai_router import lengthmatch as _lengthmatch
 except Exception:
     try:
         import markings as _markings
@@ -55,6 +56,7 @@ except Exception:
         import kbclient as _kbclient
         import library_rules as _library_rules
         import placement_audit as _placement_audit
+        import lengthmatch as _lengthmatch
     except Exception:
         _markings = None
         _tlcalc = None
@@ -65,6 +67,7 @@ except Exception:
         _kbclient = None
         _library_rules = None
         _placement_audit = None
+        _lengthmatch = None
 
 # KiCad's built-in Default netclass values (what LoadBoard synthesises
 # when a board has no .kicad_pro); used as the clone source for an
@@ -813,6 +816,104 @@ class Pipeline:
                  % (len(rep['footprints']), bad, len(rep['gaps'])))
         return rep
 
+    def _eng_layer_delay_info(self):
+        su = self._worker('stackup', '--board', self.current)
+        layers = {}
+        for c in ((su or {}).get('copper') or []):
+            cls = c.get('class')
+            diel = (c.get('diel_below') if cls != 'surface_bottom'
+                    else c.get('diel_above')) or c.get('diel_above') or c.get('diel_below') or {}
+            layers[c['name']] = {'class': cls,
+                                 'er': diel.get('er') or 4.5,
+                                 'h_mm': diel.get('thickness_mm') or 0.2,
+                                 'thickness_mm': c.get('thickness_mm') or 0.035}
+        return layers
+
+    def _eng_member_stats(self, nets, layers):
+        facts = self._worker('powergeom', '--board', self.current,
+                             '--nets', ','.join(nets)) or {}
+        out = {}
+        for net in nets:
+            segs = []
+            for t in (facts.get(net) or {}).get('tracks', []):
+                if t.get('arc'):
+                    segs.append({'layer': t['layer'], 'length_mm': t['length_mm'],
+                                 'width_mm': t['w']})
+                else:
+                    import math as _m
+                    segs.append({'layer': t['layer'],
+                                 'length_mm': _m.hypot(t['x2'] - t['x1'], t['y2'] - t['y1']),
+                                 'width_mm': t['w']})
+            out[net] = _lengthmatch.member_stats(segs, layers)
+        return out
+
+    def tool_length_match(self):
+        # #69: length-matched groups -- evaluate, meander the short
+        # members through the exact-checker gate, re-evaluate, and
+        # report per member with shortfalls stated.
+        if _lengthmatch is None:
+            return {'status': 'unavailable'}
+        try:
+            mk = _markings.load_markings(self.board_path)
+        except Exception as e:
+            return {'status': 'markings_error', 'error': str(e)}
+        if mk is None or not mk.length_groups:
+            return {'status': 'no_length_groups'}
+        layers = self._eng_layer_delay_info()
+        diff_by_name = {p['name']: p for p in mk.differential}
+        groups = []
+        for entry in mk.length_groups:
+            nets = entry.get('nets')
+            if not nets and entry.get('pair'):
+                pair = diff_by_name.get(entry['pair'])
+                if pair is None:
+                    groups.append({'name': entry['name'], 'error':
+                                   'pair %r not in differential markings' % entry['pair']})
+                    continue
+                nets = pair['nets']
+            stats = self._eng_member_stats(nets, layers)
+            ev = _lengthmatch.evaluate_group(entry, stats)
+            ev['assumptions'] = [
+                'delay from geometry + stackup eps_eff (microstrip form on '
+                'surface layers, eps_r on inner layers); no field solver',
+                'meander self-coupling is not modelled',
+                'via barrel length is not counted in member length']
+            for net, m in ev['members'].items():
+                if m['within_tolerance']:
+                    continue
+                need = None
+                if m['delta_mm'] is not None and (entry.get('tolerance_mm') is not None):
+                    need = m['delta_mm'] - entry['tolerance_mm']
+                elif m['delta_ps'] is not None and entry.get('tolerance_ps') is not None:
+                    # convert the ps shortfall at this member's own
+                    # delay rate (its longest-layer eps dominates;
+                    # use its average ps/mm)
+                    st = stats[net]
+                    rate = (st['delay_ps'] / st['length_mm']) if st['length_mm'] else 6.0
+                    need = (m['delta_ps'] - entry['tolerance_ps']) / rate
+                if need is None or need <= 0:
+                    continue
+                r = self._eng_gate_try('meander', ['--net', net, '--add-mm', '%.3f' % need],
+                                       'meander')
+                m['meander'] = r
+                self._record('length_meander', {'group': entry['name'], 'net': net,
+                                                'requested_mm': round(need, 3),
+                                                'adopted': r.get('adopted')})
+                self.log('meander[%s/%s]: +%.2f mm requested, adopted=%s'
+                         % (entry['name'], net, need, r.get('adopted')))
+            stats2 = self._eng_member_stats(nets, layers)
+            ev['after'] = _lengthmatch.evaluate_group(entry, stats2)['members']
+            for net, m in ev['members'].items():
+                m['after'] = ev['after'].get(net)
+                if m['after'] and not m['after']['within_tolerance']:
+                    m['failed'] = True
+                    m['shortfall_mm'] = m['after']['delta_mm']
+                    m['shortfall_ps'] = m['after']['delta_ps']
+            groups.append(ev)
+        self._eng_length_plan = {'groups': groups}
+        self._record('length_match', {'groups': [g['name'] for g in groups]})
+        return {'status': 'ok', 'groups': len(groups)}
+
     def _eng_power_netlist(self):
         # #68 Step 2: the schematic netlist joins the run inputs.
         # Order: explicit config path, a sibling <board>.net export,
@@ -981,6 +1082,9 @@ class Pipeline:
         audit = getattr(self, '_audit', None)
         if audit is not None:
             rep['placement_audit'] = audit
+        lplan = getattr(self, '_eng_length_plan', None)
+        if lplan is not None:
+            rep['length_groups'] = lplan
         nets = list((eng.get('nets') or {}).keys())
         if not nets and not (eng.get('diff') or {}):
             if plan is None:

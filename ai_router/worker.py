@@ -3483,6 +3483,71 @@ def cmd_audit_zones(board_path, spec):
         pcbnew.SaveBoard(board_path, b)
     return {'added': added}
 
+
+def cmd_meander(board_path, net, add_mm):
+    # Length tuning (#69): replace the middle of the net's longest
+    # straight segment with an accordion of rectangular bumps on
+    # one side, adding ~add_mm of length.  Endpoints are preserved
+    # exactly, so connectivity cannot change; whether the result
+    # is legal is the exact checker's verdict (the pipeline rolls
+    # back on any regression).  Only the member net's own copper
+    # is touched -- marked/locked copper of other nets is never
+    # modified.
+    b = pcbnew.LoadBoard(board_path)
+    refill(b)
+    tracks = [t for t in b.GetTracks()
+              if t.GetNetname() == net and t.Type() == pcbnew.PCB_TRACE_T]
+    if not tracks:
+        return {'added_mm': 0.0, 'why': 'no straight tracks'}
+    def seg_len(t):
+        return math.hypot(mm(t.GetEnd().x) - mm(t.GetStart().x),
+                          mm(t.GetEnd().y) - mm(t.GetStart().y))
+    t = max(tracks, key=seg_len)
+    L = seg_len(t)
+    w = mm(t.GetWidth())
+    try:
+        clr = mm(b.GetDesignSettings().m_NetSettings
+                 .GetEffectiveNetClass(net).GetClearance())
+    except Exception:
+        clr = 0.2
+    ax, ay = mm(t.GetStart().x), mm(t.GetStart().y)
+    bx, by = mm(t.GetEnd().x), mm(t.GetEnd().y)
+    ux, uy = (bx - ax) / L, (by - ay) / L
+    px, py = -uy, ux  # perpendicular
+    h_max = 6.0
+    n = max(1, math.ceil(add_mm / (2 * h_max)))
+    h = add_mm / (2 * n)
+    span = L * 0.7
+    d = span / n * 0.55  # bump width along the segment
+    if d < w + 2 * clr + 0.2 or span / n < w + 2 * clr + 0.4:
+        return {'added_mm': 0.0, 'why': 'segment too short for a legal bump'}
+    start0 = (L - span) / 2
+    pts = [(ax, ay)]
+    cur = start0
+    for i in range(n):
+        x0 = ax + ux * cur; y0 = ay + uy * cur
+        x1 = ax + ux * (cur + d); y1 = ay + uy * (cur + d)
+        pts += [(x0, y0), (x0 + px * h, y0 + py * h),
+                (x1 + px * h, y1 + py * h), (x1, y1)]
+        cur += span / n
+    pts.append((bx, by))
+    layer = t.GetLayer()
+    netcode = t.GetNetCode()
+    width_nm = t.GetWidth()
+    b.Remove(t)
+    for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+        if math.hypot(x2 - x1, y2 - y1) < 1e-6:
+            continue
+        nt = pcbnew.PCB_TRACK(b)
+        nt.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1)))
+        nt.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
+        nt.SetWidth(width_nm); nt.SetLayer(layer); nt.SetNetCode(netcode)
+        b.Add(nt)
+    refill(b)
+    pcbnew.SaveBoard(board_path, b)
+    return {'added_mm': round(2 * h * n, 3), 'bumps': n, 'bump_h_mm': round(h, 3),
+            'segment_length_mm': round(L, 3)}
+
 def cmd_powergeom(board_path, nets_csv):
     # Per-net copper facts for the power planner (#68 Step 2): tracks,
     # vias, pads (with copper layers) and filled zone outlines.
@@ -3503,6 +3568,13 @@ def cmd_powergeom(board_path, nets_csv):
                                     'layer': b.GetLayerName(t.GetLayer()),
                                     'x1': mm(t.GetStart().x), 'y1': mm(t.GetStart().y),
                                     'x2': mm(t.GetEnd().x), 'y2': mm(t.GetEnd().y),
+                                    'w': mm(t.GetWidth())})
+            elif t.Type() == pcbnew.PCB_ARC_T:
+                f['tracks'].append({'uuid': t.m_Uuid.AsString(), 'arc': True,
+                                    'layer': b.GetLayerName(t.GetLayer()),
+                                    'x1': mm(t.GetStart().x), 'y1': mm(t.GetStart().y),
+                                    'x2': mm(t.GetEnd().x), 'y2': mm(t.GetEnd().y),
+                                    'length_mm': mm(t.GetLength()),
                                     'w': mm(t.GetWidth())})
         for fp in b.GetFootprints():
             for p in fp.Pads():
@@ -3686,6 +3758,7 @@ def main():
     ap.add_argument('--out')
     ap.add_argument('--net')
     ap.add_argument('--nets')
+    ap.add_argument('--add-mm')
     ap.add_argument('--victims')
     ap.add_argument('--attempt-select', action='store_true')
     ap.add_argument('--fast', action='store_true')
@@ -3716,6 +3789,7 @@ def main():
         with open(a.spec) as _f: res = cmd_rf_fence(a.board, json.load(_f))
     elif a.cmd == 'smooth': res = cmd_smooth(a.board, a.net)
     elif a.cmd == 'powergeom': res = cmd_powergeom(a.board, a.nets or '')
+    elif a.cmd == 'meander': res = cmd_meander(a.board, a.net, float(a.add_mm or 0))
     elif a.cmd == 'auditgeom': res = cmd_auditgeom(a.board)
     elif a.cmd == 'audit_zones':
         with open(a.spec) as _f: res = cmd_audit_zones(a.board, json.load(_f))
