@@ -2454,6 +2454,74 @@ def cmd_ilp_repair(board_path, out_path, nets):
             'routed': [n for n, s in results.items() if s == 'routed'], 'nets': results}
 
 
+
+def _freerouting_bin():
+    for cand in (os.environ.get('FREEROUTING_BIN'), '/opt/freerouting/bin/freerouting'):
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
+def cmd_freeroute(board_path, out_path, passes=50):
+    # v1.9.5 (Phase 1.2): Freerouting 2.5.0 as a portfolio engine --
+    # Specctra DSN out, the JVM distribution routes (the native CLI
+    # build crashes on KiCad-exported DSNs: GraalVM serialization
+    # config gap, verified 2026-11-23), SES back in. This routes; it
+    # does not judge -- the gate census stays the layer-law backstop.
+    import subprocess, tempfile, time
+    launcher = _freerouting_bin()
+    if not launcher:
+        return {'status': 'unavailable', 'detail': 'freerouting launcher not found'}
+    t0 = time.time()
+    d = tempfile.mkdtemp(prefix='fr-')
+    dsn = os.path.join(d, 'board.dsn'); ses = os.path.join(d, 'board.ses')
+    b = pcbnew.LoadBoard(board_path)
+    if not pcbnew.ExportSpecctraDSN(b, dsn):
+        return {'status': 'dsn_failed'}
+    try:
+        p = subprocess.run([launcher, '-de', dsn, '-do', ses, '-mp', str(int(passes)), '-mt', '2'],
+                           capture_output=True, text=True, timeout=2400)
+        tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
+    except Exception as e:
+        return {'status': 'run_failed', 'detail': str(e)[:200]}
+    if not os.path.exists(ses):
+        return {'status': 'no_ses', 'detail': tail[-200:]}
+    b2 = pcbnew.LoadBoard(board_path)
+    if not pcbnew.ImportSpecctraSES(b2, ses):
+        return {'status': 'ses_failed'}
+    refill(b2)
+    pcbnew.SaveBoard(out_path, b2)
+    return {'status': 'routed', 'seconds': round(time.time() - t0, 1)}
+
+
+def cmd_krt_route(board_path, out_path):
+    # v1.9.5 (Phase 1.2): KiCadRoutingTools as a portfolio engine --
+    # autoroute.py orchestrates the grid_router binary plus its own
+    # step chain and writes a routed board. Needs the KRT tree
+    # (AI_ROUTER_KRT env or /opt/krt) and shapely in this python.
+    import shutil, subprocess, tempfile, time
+    krt = os.environ.get('AI_ROUTER_KRT') or '/opt/krt'
+    auto = os.path.join(krt, 'py_router', 'autoroute.py')
+    if not os.path.exists(auto):
+        return {'status': 'unavailable', 'detail': 'krt not found at %s' % krt}
+    t0 = time.time()
+    d = tempfile.mkdtemp(prefix='krt-')
+    inp = os.path.join(d, 'in.kicad_pcb')
+    shutil.copy(board_path, inp)
+    pro = os.path.splitext(board_path)[0] + '.kicad_pro'
+    if os.path.exists(pro):
+        shutil.copy(pro, os.path.join(d, 'in.kicad_pro'))
+    try:
+        p = subprocess.run([sys.executable, auto, inp, out_path],
+                           capture_output=True, text=True, timeout=3600, cwd=d)
+        tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
+    except Exception as e:
+        return {'status': 'run_failed', 'detail': str(e)[:200]}
+    if not os.path.exists(out_path):
+        return {'status': 'no_output', 'detail': tail[-200:]}
+    return {'status': 'routed', 'seconds': round(time.time() - t0, 1)}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd')
@@ -2470,6 +2538,7 @@ def main():
     ap.add_argument('--dst')
     ap.add_argument('--result')
     ap.add_argument('--no-tracks-on')
+    ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
     if a.no_tracks_on:
         global BANNED_LAYER_IDS, NO_TRACKS_ON_RAW, NO_TRACKS_ON_UNRESOLVED
@@ -2495,6 +2564,8 @@ def main():
             ls, x, y = s.split(':'); return (tuple(int(v) for v in ls.split(',')), float(x), float(y))
         res = cmd_heal_attempt(a.board, a.out, a.net, _pt(a.frm), _pt(a.dst))
     elif a.cmd == 'lock_window': res = cmd_lock_window(a.board, a.out, a.net, margin=a.margin, fx=a.fx, fy=a.fy, tx=a.tx, ty=a.ty)
+    elif a.cmd == 'freeroute': res = cmd_freeroute(a.board, a.out, passes=a.passes)
+    elif a.cmd == 'krt_route': res = cmd_krt_route(a.board, a.out)
     elif a.cmd == 'prune': res = cmd_prune(a.board, a.out)
     elif a.cmd == 'refill': res = cmd_refill(a.board, a.out or a.board)
     else: res = {'status': 'error', 'detail': 'unknown cmd'}

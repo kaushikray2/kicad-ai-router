@@ -215,6 +215,19 @@ def _run_auto_once(cfg, pipe, log):
     gate = None
     best = None
     prev_sig = None
+    engines = [e.strip() for e in str(cfg.get('engine_portfolio', '')).split(',') if e.strip()]
+    if engines:
+        try:
+            pg = pipe.tool_portfolio(engines)
+        except Exception as e:
+            log('Portfolio stage failed (%s) -- continuing with TraceMaker passes' % e)
+            pg = None
+        if pg is not None:
+            best = ((_unc_key(pg), len(pg.get('split_nets') or []), fault_count(pg)), pipe.current)
+            gate = pg
+            if not (pg.get('split_nets') or []):
+                log('Portfolio board is fully connected -- skipping TraceMaker passes')
+                max_passes = 0
     for pno in range(1, max_passes + 1):
         try:
             pipe.tool_route(first_nets=first, priority=prio, regions=regs)

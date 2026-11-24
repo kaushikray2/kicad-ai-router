@@ -224,6 +224,75 @@ class Pipeline:
         self.log('Pass %d: routed %s/%s connections; %d unrouted' % (self.pass_no, routed[0], routed[1], len(unrouted)))
         return self.last_route
 
+    def tool_portfolio(self, engines):
+        # v1.9.5 (Phase 1.2): alternative engines run from the same
+        # stripped base; every candidate is gated and the winner by
+        # the acceptance key becomes the current board. A candidate
+        # that violates the layer law keys worse (banned tracks are
+        # faults), so selection cannot prefer a law-breaking board
+        # over a clean one at the same connectivity.
+        results = []
+        winner = None
+        for eng in engines:
+            outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
+            try:
+                if eng == 'freerouting':
+                    r = self._worker('freeroute', '--board', self.base, '--out', outp)
+                elif eng == 'krt':
+                    r = self._worker('krt_route', '--board', self.base, '--out', outp)
+                elif eng in ('tm_relax', 'tm_global', 'tm_escape'):
+                    r = self._route_variant(eng, outp)
+                else:
+                    self.log('portfolio: unknown engine %r skipped' % eng)
+                    continue
+            except Exception as e:
+                self.log('portfolio: %s failed (%s)' % (eng, e))
+                continue
+            if not os.path.exists(outp):
+                self.log('portfolio: %s produced no board (%s)' % (eng, (r or {}).get('status')))
+                continue
+            g = self.tool_gate(outp)
+            key = _accept_key(g)
+            results.append({'engine': eng, 'key': list(key), 'board': outp,
+                            'unconnected': g.get('unconnected_total'),
+                            'copper': g.get('copper_violations'),
+                            'banned': g.get('banned_layer_tracks'),
+                            'seconds': (r or {}).get('seconds')})
+            self.log('portfolio: %s key %s (unc %s, copper %s, banned %s)' %
+                     (eng, key, g.get('unconnected_total'), g.get('copper_violations'), g.get('banned_layer_tracks')))
+            if winner is None or key < winner[0]:
+                winner = (key, outp, g)
+        self._record('portfolio', {'engines': list(engines), 'results': results,
+                                   'winner': winner[1] if winner else None})
+        if winner:
+            self.current = winner[1]
+            return winner[2]
+        return None
+
+    def _route_variant(self, eng, outp):
+        # TraceMaker with a portfolio flag set and no advice -- the
+        # variant IS the experiment. Mirrors tool_route's law handling
+        # (ban names filtered to this board's copper layers).
+        flag = {'tm_relax': '--relax', 'tm_global': '--global', 'tm_escape': '--escape-plan'}[eng]
+        if getattr(self, '_copper_layers', None) is None:
+            try: self._copper_layers = self._worker('summary', '--board', self.base).get('copper_layers') or []
+            except Exception: self._copper_layers = []
+        banned = [b.strip() for b in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if b.strip()]
+        if self._copper_layers: banned = [b for b in banned if b in self._copper_layers]
+        cmdline = [self.cfg['tracemaker_path'], 'route', self.base, '-o', outp, flag,
+                   '--soft-zones', '--keep-vias-off-pads', '--diff-pairs', '--si-rules', '--critical-auto']
+        if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
+        cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
+        log_path = outp + '.tm.log'
+        with open(log_path, 'w') as lf:
+            subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=2400)
+        if not os.path.exists(outp):
+            raise PipelineError('TraceMaker variant %s produced no board' % eng)
+        try: self._worker('refill', '--board', outp, '--out', outp)
+        except Exception: pass
+        self._sidecars(outp)
+        return {'status': 'routed'}
+
     def _drc_measure(self, board):
         # v1.9: parse the JSON DRC report -- structured output instead
         # of regexes over the text report, whose layout is a KiCad
