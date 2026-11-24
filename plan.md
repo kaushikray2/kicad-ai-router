@@ -540,6 +540,18 @@ reference document; this entry is its plan shape.
   sizing claim) — the tool never invents a current. Exit: the
   ticket's acceptance on the fixture board; unmarked nets do not
   regress on the standing A/B set.
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented.** ai_router/powerplan.py attributes cornered
+  currents to routed segments per operating mode over the copper
+  graph (worker powergeom facts), sizes them, plans via arrays
+  by barrel capacity, computes full-loop drop at planned widths
+  (solid-plane return is a stated assumption when the return net
+  has a filled zone), detects pour-carried segments, and emits
+  the decoupling checklist per load.  Widths are applied
+  widen-only by track uuid and via arrays placed by the finisher
+  machinery, both admitted through the exact checker; failed
+  segments report their shortfall.  Incomplete rails get the
+  resistances-only report.
 - **Step 3 — KB estimation layer (separate service, ships
   last, blocks nothing).** Authority order: user-entered values,
   then KB values the user has confirmed, then nothing —
@@ -564,7 +576,13 @@ reference document; this entry is its plan shape.
   citation the user confirmed or a value the user typed.
   Deferral: this step can slip without blocking Steps 1–2 —
   user-entered currents are the authority and need no KB.
-- **Stated limitations** (from the ticket): thermal coupling
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented (plugin side).** ai_router/kbclient.py: versioned
+  interface (v1), confirmation cache keyed MPN + datasheet
+  revision, HTTP/Dict transports with confirm write-back, and
+  resolve_loads enforcing user > KB-confirmed > nothing.  The
+  confirmation-queue UI lives on the autorouter webpage
+  (deployment piece, not this repo).- **Stated limitations** (from the ticket): thermal coupling
   between adjacent power conductors is not modelled; drop
   verification is DC only (no pulsed-load droop, no decoupling
   dynamics).
