@@ -11,6 +11,34 @@ gated separately. Phase 2E (below) adds the WeaveEngine-derived
 feature block, plus #63
 riding as P2.1b's first step.
 
+## Parallel lane — engineered nets (branch `engineered-nets`)
+
+Created 2026-11-24 (owner's go) off main at c9e1223. The
+engineered-nets block — P2.8, P2.9, P2.10, P2.11, P2.12 — plus
+the placement audit preprocess (#42) is implemented on this
+branch while main continues the finisher programme below. The
+lanes run concurrently; neither waits for the other. Lane rules:
+
+- The branch never reaches the production backends, their
+  ledgers, or the self-test baselines; its runs use scratch
+  backends with their own data dirs, and its A/Bs use the items'
+  own fixtures — never the 49 held-out boards.
+- **Merge gate:** the branch merges to main only after the final
+  exam has run, or at a deliberate re-scope checkpoint that
+  redefines the exam. Merging early voids the reason the branch
+  exists.
+- Rebase onto main after each finisher release; feature code
+  stays additive (new modules, stages, report sections). A
+  shared-code change a feature needs is proposed to main first
+  as its own small item.
+- One item in flight at a time, in this order: the persistence
+  decision (P2.9 Step 0 — the owner's ruling; it blocks all
+  marking), then P2.8 Step 1 (which builds the shared framework:
+  marking, the stackup reader, the report), the P2.9
+  schematic-extraction spike, then #42's materialisation layer
+  (designed once for its three consumers: itself, P2.11, P2.12),
+  then the remaining items and steps.
+
 ## Done
 
 ### Step 0 — v1.9.6 hotfix (3–5 h) — shipped 2026-11-23
@@ -548,8 +576,8 @@ routing-caused-DRC nothing-worse gate alongside CP_delta.
   (above).
 - **Issue #54 remainder:** commit the PCBWorld-Bench harness —
   discharged by Phase 2E item #62 (above).
-- **Placement audit preprocess** (issue #42): future feature, not in
-  Phase 2 scope.
+- **Placement audit preprocess** (issue #42): moved into the
+  engineered-nets branch lane (see Parallel lane, above).
 - **Engine adoption:** the plugin runs the pinned TraceMaker release.
   Trying newer engine builds is parked until the TraceMaker programme's
   own Phase 2 finishes.
@@ -603,7 +631,9 @@ earlier would mean sizing workstreams against numbers nobody has.
 - **Placement audit preprocess (issue #42).** Materialise library
   rules on the working copy and report placement-shaped faults before
   routing — the census showed placement geometry is the dominant fault
-  source, and no router release fixes it.
+  source, and no router release fixes it. (Since moved into the
+  engineered-nets branch lane — Phase 3 inherits its results
+  rather than planning it fresh.)
 
 ### How it gets written
 
