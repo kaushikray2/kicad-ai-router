@@ -384,6 +384,8 @@ def _run_auto_once(cfg, pipe, log):
     except Exception as e: log('rf treatments failed: %s' % e)
     try: pipe.tool_smooth_marked()
     except Exception as e: log('rf smoothing failed: %s' % e)
+    try: pipe.tool_power()
+    except Exception as e: log('power stage failed: %s' % e)
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))

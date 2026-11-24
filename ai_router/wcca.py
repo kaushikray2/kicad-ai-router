@@ -146,6 +146,12 @@ def round_up_increment(width_mm, increment_mm=0.05):
     return math.ceil(width_mm / increment_mm - 1e-9) * increment_mm
 
 
+DEFAULT_CORNERS = {'ambient_c': 40.0, 'delta_t_c': 20.0,
+                   'drop_budget_v': 0.1, 'width_increment_mm': 0.05,
+                   'etch_tol_mm': 0.02, 'foil_tol_frac': 0.10,
+                   'plating_um': 25.0}
+
+
 def size_segment(current_peak_a, current_sustained_a, length_mm, thick_mm,
                  internal, corners):
     """The ticket's sizing rule for one segment.  `corners` carries

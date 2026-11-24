@@ -38,15 +38,24 @@ try:
     from ai_router import markings as _markings
     from ai_router import tlcalc as _tlcalc
     from ai_router import rfcheck as _rfcheck
+    from ai_router import powertree as _powertree
+    from ai_router import powerplan as _powerplan
+    from ai_router import wcca as _wcca
 except Exception:
     try:
         import markings as _markings
         import tlcalc as _tlcalc
         import rfcheck as _rfcheck
+        import powertree as _powertree
+        import powerplan as _powerplan
+        import wcca as _wcca
     except Exception:
         _markings = None
         _tlcalc = None
         _rfcheck = None
+        _powertree = None
+        _powerplan = None
+        _wcca = None
 
 # KiCad's built-in Default netclass values (what LoadBoard synthesises
 # when a board has no .kicad_pro); used as the clone source for an
@@ -727,6 +736,113 @@ class Pipeline:
                      % (net, len(r.get('smoothed') or []), r.get('adopted')))
         return agg
 
+    def _eng_power_netlist(self):
+        # #68 Step 2: the schematic netlist joins the run inputs.
+        # Order: explicit config path, a sibling <board>.net export,
+        # then kicad-cli export from a sibling .kicad_sch.  Returns a
+        # path or None (the power stage then reports unavailable --
+        # it never guesses a tree).
+        p = self.cfg.get('power_netlist')
+        if p and os.path.exists(p):
+            return p
+        root = os.path.splitext(self.board_path)[0]
+        if os.path.exists(root + '.net'):
+            return root + '.net'
+        sch = root + '.kicad_sch'
+        cli = shutil.which('kicad-cli')
+        if os.path.exists(sch) and cli:
+            out = os.path.join(self.workdir, 'power_netlist.net')
+            try:
+                subprocess.run([cli, 'sch', 'export', 'netlist', '--format',
+                                'kicadsexpr', '-o', out, sch],
+                               capture_output=True, timeout=180)
+            except Exception as e:
+                self.log('power: netlist export failed: %s' % e)
+                return None
+            if os.path.exists(out):
+                return out
+        return None
+
+    def tool_power(self):
+        # #68 Step 2: per-segment WCCA sizing on the routed board.
+        # Plan first (pure), then widen-only + via arrays, each
+        # admitted through the exact checker like every other
+        # engineered stage; the plan is kept for the report.
+        if _powertree is None or _powerplan is None:
+            return {'status': 'unavailable'}
+        try:
+            mk = _markings.load_markings(self.board_path)
+        except Exception as e:
+            return {'status': 'markings_error', 'error': str(e)}
+        if mk is None or not mk.power:
+            return {'status': 'no_power_markings'}
+        netlist = self._eng_power_netlist()
+        if netlist is None:
+            self._eng_power_plan = {'status': 'netlist_unavailable',
+                                    'note': 'no schematic netlist found beside '
+                                            'the board and kicad-cli export '
+                                            'unavailable; power analysis skipped'}
+            self._record('power', {'status': 'netlist_unavailable'})
+            return self._eng_power_plan
+        try:
+            parsed = _powertree.parse_netlist(open(netlist).read())
+            entries = mk.power
+            tree = _powertree.compute_currents(
+                _powertree.build_tree(parsed, entries))
+        except Exception as e:
+            self._eng_power_plan = {'status': 'tree_failed', 'error': str(e)}
+            self._record('power', {'status': 'tree_failed', 'error': str(e)})
+            return self._eng_power_plan
+        su = self._worker('stackup', '--board', self.current)
+        layers = {}
+        cu_total = 0.0
+        for c in ((su or {}).get('copper') or []):
+            t = c.get('thickness_mm') or 0.035
+            layers[c['name']] = {'type': 'copper', 'thickness_mm': t}
+            cu_total += t
+        bt = (su or {}).get('board_thickness_mm') or 0.0
+        if bt > cu_total:
+            layers['__dielectric__'] = {'type': 'dielectric',
+                                        'thickness_mm': bt - cu_total}
+        corners = dict(_wcca.DEFAULT_CORNERS)
+        corners.update(mk.power_corners())
+        nets_wanted = sorted(set(tree['rails']) | {tree['return_net']})
+        facts = self._worker('powergeom', '--board', self.current,
+                             '--nets', ','.join(nets_wanted)) or {}
+        entries_by_net = {e['net']: e for e in entries}
+        plan = _powerplan.plan_power(tree, parsed, facts, layers, corners,
+                                     entries_by_net)
+        plan['status'] = 'ok'
+        plan['netlist'] = os.path.basename(netlist)
+        self._eng_power_plan = plan
+        applied = {}
+        if plan.get('widen'):
+            p = os.path.join(self.workdir, 'power_widen.json')
+            with open(p, 'w') as fh:
+                json.dump(plan['widen'], fh)
+            r = self._eng_gate_try('power_widen', ['--spec', p], 'power_widen')
+            applied['widen'] = r
+            self._record('power_widen', {'applied': len(r.get('applied') or []),
+                                         'adopted': r.get('adopted')})
+            self.log('power_widen: %d applied, adopted=%s'
+                     % (len(r.get('applied') or []), r.get('adopted')))
+        if plan.get('via_adds'):
+            p = os.path.join(self.workdir, 'power_vias.json')
+            with open(p, 'w') as fh:
+                json.dump(plan['via_adds'], fh)
+            r = self._eng_gate_try('power_vias', ['--spec', p], 'power_vias')
+            applied['vias'] = r
+            self._record('power_vias', {'placed': len(r.get('placed') or []),
+                                        'adopted': r.get('adopted')})
+            self.log('power_vias: %d placed, adopted=%s'
+                     % (len(r.get('placed') or []), r.get('adopted')))
+        plan['applied'] = applied
+        self._record('power', {'status': 'ok',
+                               'rails': sorted(plan['rails']),
+                               'widen_segments': sum(len(v) for v in plan['widen'].values()),
+                               'via_adds': len(plan['via_adds'])})
+        return {'status': 'ok', 'applied': applied}
+
     def engineered_report(self, final_board):
         # #67 Step 1 per-net verification report.  Verifies geometry and
         # stackup math only -- it does not predict S11 (annex VER-2).
@@ -766,9 +882,13 @@ class Pipeline:
                   if e2.get('step') in ('rf_vias', 'rf_fence', 'rf_smooth')]
         if treats:
             rep['treatments'] = treats
+        plan = getattr(self, '_eng_power_plan', None)
+        if plan is not None:
+            rep['power'] = plan
         nets = list((eng.get('nets') or {}).keys())
         if not nets and not (eng.get('diff') or {}):
-            rep['note'] = 'sidecar present, no impedance markings'
+            if plan is None:
+                rep['note'] = 'sidecar present, no impedance markings'
             return rep
         all_marked = nets + [l for r in (eng.get('diff') or {}).values()
                              for l in r['nets'] if l not in nets]
