@@ -429,7 +429,11 @@ reference document; this entry is its plan shape.
   actual lengths and widths; the report states design currents
   with each load's contribution and its source, the corner set,
   thermal and drop results per segment, via counts and
-  violations, and every assumption. A segment that cannot meet
+  violations, and every assumption. The report also carries a
+  decoupling checklist per load — cap present on the rail local
+  to the load, pin-to-cap distance against the stated budget,
+  via-path sharing note — a geometric checklist, not a PDN
+  simulation (rider comment on #68, 2026-11-24). A segment that cannot meet
   its budget in the available space is reported failed with its
   shortfall — never silently widened into clearance
   violations. Fallback: with no currents available, a
@@ -465,6 +469,67 @@ reference document; this entry is its plan shape.
   between adjacent power conductors is not modelled; drop
   verification is DC only (no pulsed-load droop, no decoupling
   dynamics).
+
+### P2.10 — Length-matched groups (issue #69)
+The third sizing model of the engineered-nets block: delay.
+Sequenced after P2.8 — it reuses that item's per-layer delay
+math (effective permittivity from the stackup) and its
+post-pass pattern. The user declares a match group (member nets
+or one differential pair), a target (longest member / absolute
+length / absolute delay) and a tolerance in mm or ps. Generation
+is a post-pass on finished nets: meander / trombone length added
+in available space, per member, accepted only if the exact
+checker proves zero clearance regression and connectivity is
+unchanged, rolled back otherwise; marked and locked copper is
+respected. The report states per member: routed length, computed
+delay, delta to target, in/out of tolerance. Exit: on a fixture
+pair with a known delta, skew lands within tolerance at zero
+added gate faults and unmarked nets do not regress; reported
+lengths/delays match hand measurement within rounding; a member
+that cannot fit reports its shortfall — never silently
+accepted. Stated limitation: no field solver, no meander
+self-coupling model; the report says so.
+
+### P2.11 — High-voltage domains (issue #70)
+The safety axis of the engineered-nets block. The user assigns
+nets to voltage domains (working voltage plus the assumptions
+the tables need: pollution degree, material group / CTI, coating
+or altitude where applicable — all printed in the report).
+Required creepage and clearance are computed from the published
+standard tables (IPC-2221B / IEC 62368-1 family) as code, under
+#67's licensing discipline. Gate checks on the routed board:
+clearance in air between domains, and creepage as a surface
+path — measured around slots, grooves and board edges, not as
+a straight-line distance; under-component paths only where
+footprint body data exists, otherwise reported as unmodelled.
+Pre-route option: materialise domain clearances as keepouts the
+engines respect (interplay with #42). The tool reports
+violations with the limiting geometry located; it does not move
+copper to fix them. Exit: table outputs match published worked
+examples within rounding; on a fixture with a slot and known
+spacings, measured creepage/clearance match hand computation
+and a planted violation is caught and located. Stated
+limitation: a design aid, not a certification.
+
+### P2.12 — Quiet nets (issue #71)
+The GATE-family extension of the engineered-nets block — no new
+math engine, so it is the cheapest item here and may pull
+forward ahead of P2.10/P2.11 without disturbing them. The user
+marks nets (or a component's pins, e.g. a crystal's) as quiet,
+with an isolation distance; a small profile set (crystal,
+analog, reference) supplies stated, overridable defaults.
+Post-route gates: no foreign tracks or vias inside the quiet
+corridor except the net's own connections; no aggressor
+crossings over/under on adjacent layers within the corridor;
+crystal land-pattern keepout respected; load-cap ground-return
+continuity; guard continuity under #67's termination rule.
+Optional pre-route keepout materialisation (interplay with
+#42). The report lists intrusions with locations, per quiet
+net. Exit: a planted intrusion on the fixture is caught and
+located; a clean fixture passes; with materialisation on, the
+engines produce no copper inside the generated keepout and
+unmarked nets do not regress. Stated limitation: geometric
+isolation only — no coupling simulation, no dB claims.
 
 ### P2.5 — Push-and-shove spike (15–20 h, hard stop, gated behind P2.3)
 Runs only if P2.3 leaves a shove-shaped residual class behind. Default
