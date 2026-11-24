@@ -2747,6 +2747,27 @@ def _stackup_entries(board_path):
     return entries
 
 
+def _stackup_finish(board_path):
+    # (copper_finish "...") is a direct child of the (stackup ...) block,
+    # beside the (layer ...) entries _stackup_entries collects.
+    try:
+        with open(board_path, encoding='utf-8', errors='replace') as f:
+            text = f.read()
+    except OSError:
+        return None
+    i = text.find('(stackup')
+    if i < 0:
+        return None
+    try:
+        tree, _end = _sexpr_at(text, i)
+    except Exception:
+        return None
+    for node in tree[1:]:
+        if isinstance(node, list) and node and node[0] == 'copper_finish' and len(node) > 1:
+            return node[1]
+    return None
+
+
 def _is_dielectric(e):
     return (e['type'] in ('core', 'prepreg')) or e['name'].startswith('dielectric')
 
@@ -2851,10 +2872,315 @@ def cmd_stackup(board_path, nets=None):
                 if c:
                     net_info[n]['track_layers'][c] = net_info[n]['track_layers'].get(c, 0) + 1
                     net_info[n]['length_mm'] += mm(t.GetLength())
-    return {'defined': defined, 'placeholder': bool(reasons),
+    return {'defined': defined, 'copper_finish': _stackup_finish(board_path),
+            'placeholder': bool(reasons),
             'placeholder_reasons': reasons,
             'board_thickness_mm': mm(b.GetDesignSettings().GetBoardThickness()),
             'copper_layers': canon, 'copper': copper, 'nets': net_info}
+
+
+
+# ---------------------------------------------------------------- rfgeom
+# #67 Step 2 fact extraction: everything ai_router.rfcheck needs, measured
+# with pcbnew so the rule module stays pure.  The spec (JSON, --spec)
+# carries, per marked net: the reference layer + dielectric height for
+# each routed layer (the corridor is +/-3h, annex GATE-1), the ground
+# net name, the return-via ceiling (for the `within` count) and the
+# declared pi-match footprint references (GATE-7 presence).
+
+def _canon_layers(b):
+    stack = copper_stack(b)
+    ncu = len(stack)
+    canon = ((['F.Cu'] + ['In%d.Cu' % i for i in range(1, ncu - 1)] + ['B.Cu'])
+             if ncu > 1 else ['F.Cu'])
+    return {lid: canon[k] for k, lid in enumerate(stack)}, canon
+
+
+def _split_segments(segs, pts):
+    # Planarise: split segments at junction points lying on them (a stub
+    # landing mid-segment is a T-junction in KiCad connectivity, but a
+    # graph built from endpoints alone sees two dangling ends).
+    # pts: [(x, y, canonical_layer)] candidate junction points.
+    out = []
+    for s in segs:
+        cuts = []
+        dx, dy = s['x2'] - s['x1'], s['y2'] - s['y1']
+        L2 = dx * dx + dy * dy
+        if L2 > 0:
+            for (px, py, pl) in pts:
+                if pl != s['layer']:
+                    continue
+                if (px, py) in ((s['x1'], s['y1']), (s['x2'], s['y2'])):
+                    continue
+                if seg_pt(px, py, s['x1'], s['y1'], s['x2'], s['y2']) > 0.002:
+                    continue
+                u = ((px - s['x1']) * dx + (py - s['y1']) * dy) / L2
+                if 0.001 < u < 0.999:
+                    cuts.append((u, px, py))
+        if not cuts:
+            out.append(s)
+            continue
+        cuts.sort()
+        chain = [(s['x1'], s['y1'])] + [(px, py) for (_u, px, py) in cuts] + [(s['x2'], s['y2'])]
+        for (ax, ay), (bx, by) in zip(chain, chain[1:]):
+            ns = dict(s)
+            ns['x1'], ns['y1'], ns['x2'], ns['y2'] = ax, ay, bx, by
+            ns['len'] = math.hypot(bx - ax, by - ay)
+            out.append(ns)
+    return out
+
+
+def cmd_rfgeom(board_path, spec):
+    b = pcbnew.LoadBoard(board_path)
+    refill(b)
+    lid2canon, canon = _canon_layers(b)
+    canon2lid = {v: k for k, v in lid2canon.items()}
+    # zone fills per (canonical layer, net): [(SHAPE_POLY_SET, [outline idx])]
+    fills = {}
+    for z in b.Zones():
+        zn = z.GetNetname() or ''
+        if not zn:
+            continue
+        for lid in z.GetLayerSet().CuStack():
+            c = lid2canon.get(lid)
+            if not c:
+                continue
+            try:
+                ps = z.GetFilledPolysList(lid)
+            except Exception:
+                continue
+            if ps and ps.OutlineCount():
+                fills.setdefault((c, zn), []).append(ps)
+    all_pads = []   # (netname, ref, num, pad, sdf params)
+    for fp in b.GetFootprints():
+        for p in fp.Pads():
+            all_pads.append((p.GetNetname(), fp.GetReference(), p.GetNumber(), p, _pad_sdf_params(p)))
+    all_tracks = list(b.GetTracks())
+
+    def covered(x, y, layer_c, net):
+        pt = pcbnew.VECTOR2I(nm(x), nm(y))
+        for ps in fills.get((layer_c, net), []):
+            for oi in range(ps.OutlineCount()):
+                if ps.Contains(pt, oi):
+                    return True
+        for (n, _r, _num, _p, prm) in all_pads:
+            if n == net and _pad_sdf_dist(prm, x, y) <= 0.0:
+                # pad counts only if it has copper on this layer
+                if layer_c in [lid2canon.get(l) for l in _p.GetLayerSet().CuStack()]:
+                    return True
+        for t in all_tracks:
+            if t.GetNetname() == net and t.Type() != pcbnew.PCB_VIA_T                     and lid2canon.get(t.GetLayer()) == layer_c:
+                if seg_pt(x, y, mm(t.GetStart().x), mm(t.GetStart().y),
+                          mm(t.GetEnd().x), mm(t.GetEnd().y)) <= mm(t.GetWidth()) / 2:
+                    return True
+        return False
+
+    out = {}
+    for net, ns in (spec.get('nets') or {}).items():
+        gnd = ns.get('gnd_net') or 'GND'
+        refs = ns.get('refs') or {}
+        segs, arcs, vias, pads = [], [], [], []
+        for t in all_tracks:
+            if t.GetNetname() != net:
+                continue
+            c = lid2canon.get(t.GetLayer())
+            if t.Type() == pcbnew.PCB_VIA_T:
+                vias.append({'x': mm(t.GetPosition().x), 'y': mm(t.GetPosition().y)})
+            elif t.Type() == pcbnew.PCB_ARC_T:
+                arcs.append({'layer': c, 'sx': mm(t.GetStart().x), 'sy': mm(t.GetStart().y),
+                             'ex': mm(t.GetEnd().x), 'ey': mm(t.GetEnd().y),
+                             'w': mm(t.GetWidth()), 'len': mm(t.GetLength())})
+            else:
+                segs.append({'layer': c, 'x1': mm(t.GetStart().x), 'y1': mm(t.GetStart().y),
+                             'x2': mm(t.GetEnd().x), 'y2': mm(t.GetEnd().y),
+                             'w': mm(t.GetWidth()), 'len': mm(t.GetLength())})
+        for (n, ref, num, p, _prm) in all_pads:
+            if n != net:
+                continue
+            layers = [lid2canon[l] for l in p.GetLayerSet().CuStack() if l in lid2canon]
+            pads.append({'ref': ref, 'num': num, 'x': mm(p.GetPosition().x),
+                         'y': mm(p.GetPosition().y), 'layers': layers,
+                         'thru': p.GetDrillSize().x > 0})
+        _pts = []
+        for _s in segs:
+            _pts += [(_s['x1'], _s['y1'], _s['layer']), (_s['x2'], _s['y2'], _s['layer'])]
+        for _a in arcs:
+            _pts += [(_a['sx'], _a['sy'], _a['layer']), (_a['ex'], _a['ey'], _a['layer'])]
+        for _v in vias:
+            _pts += [(_v['x'], _v['y'], _L) for _L in canon]
+        for _p in pads:
+            _pts += [(_p['x'], _p['y'], _L) for _L in _p['layers']]
+        segs = _split_segments(segs, _pts)
+        # --- return-via facts: nearest ground via / ground PTH pad
+        gnd_pts = [(mm(t.GetPosition().x), mm(t.GetPosition().y))
+                   for t in all_tracks if t.GetNetname() == gnd and t.Type() == pcbnew.PCB_VIA_T]
+        gnd_pts += [(prm[0], prm[1]) for (n, _r, _num, p, prm) in all_pads
+                    if n == gnd and p.GetDrillSize().x > 0]
+        ceiling = ns.get('ceiling_mm') or 2.54
+        return_vias = []
+        for v in vias:
+            ds = [math.hypot(v['x'] - gx, v['y'] - gy) for (gx, gy) in gnd_pts]
+            return_vias.append({'nearest_mm': round(min(ds), 3) if ds else None,
+                                'within': sum(1 for d in ds if d <= ceiling)})
+        # --- corridor sampling (GATE-1) + foreign copper (GATE-11)
+        corridor, foreign = {}, []
+        own_vias = [(v['x'], v['y']) for v in vias]
+        for layer, rlist in refs.items():
+            layer_segs = [s for s in segs if s['layer'] == layer]
+            if not layer_segs:
+                continue
+            for rent in rlist:
+                ref_layer, h = rent['ref_layer'], rent['h_mm']
+                half = 3.0 * h
+                pitch = max(0.1, h / 4.0)
+                offs = [-half, -2 * half / 3, -half / 3, 0.0, half / 3, 2 * half / 3, half]
+                sev_runs, gap_runs = [], []
+                for s in layer_segs:
+                    dx, dy = s['x2'] - s['x1'], s['y2'] - s['y1']
+                    L = math.hypot(dx, dy)
+                    if L < 1e-9:
+                        continue
+                    ux, uy = dx / L, dy / L
+                    px, py = -uy, ux
+                    nsteps = max(1, int(L / pitch))
+                    run_sev, run_gap = None, None
+                    for k in range(nsteps + 1):
+                        cx = s['x1'] + ux * (L * k / nsteps)
+                        cy = s['y1'] + uy * (L * k / nsteps)
+                        if any(math.hypot(cx - vx, cy - vy) < 0.6 for (vx, vy) in own_vias):
+                            continue  # the feed's own via antipads are by design
+                        cov = [covered(cx + px * o, cy + py * o, ref_layer, gnd) for o in offs]
+                        if not any(cov):
+                            run_sev = run_sev or [cx, cy, 0]
+                            run_sev[2] += pitch
+                        elif run_sev:
+                            sev_runs.append({'x': round(run_sev[0], 2), 'y': round(run_sev[1], 2),
+                                             'len_mm': round(run_sev[2], 2)}); run_sev = None
+                        if not cov[3]:
+                            run_gap = run_gap or [cx, cy, 0]
+                            run_gap[2] += pitch
+                        elif run_gap:
+                            gap_runs.append({'x': round(run_gap[0], 2), 'y': round(run_gap[1], 2),
+                                             'len_mm': round(run_gap[2], 2)}); run_gap = None
+                    if run_sev:
+                        sev_runs.append({'x': round(run_sev[0], 2), 'y': round(run_sev[1], 2), 'len_mm': round(run_sev[2], 2)})
+                    if run_gap:
+                        gap_runs.append({'x': round(run_gap[0], 2), 'y': round(run_gap[1], 2), 'len_mm': round(run_gap[2], 2)})
+                key = layer if len(rlist) == 1 else '%s->%s' % (layer, ref_layer)
+                corridor[key] = {'severed': sev_runs, 'centre_gaps': gap_runs,
+                                 'ref_layer': ref_layer, 'h_mm': h}
+                # foreign tracks on the reference layer inside the band
+                for t in all_tracks:
+                    if t.GetNetname() == net or lid2canon.get(t.GetLayer()) != ref_layer:
+                        continue
+                    if t.Type() == pcbnew.PCB_VIA_T:
+                        vx, vy = mm(t.GetPosition().x), mm(t.GetPosition().y)
+                        if any(seg_pt(vx, vy, s['x1'], s['y1'], s['x2'], s['y2']) < half + mm(t.GetWidth()) / 2 for s in layer_segs):
+                            foreign.append({'net': t.GetNetname(), 'layer': ref_layer, 'kind': 'via',
+                                            'x': round(vx, 2), 'y': round(vy, 2)})
+                    else:
+                        fx1, fy1 = mm(t.GetStart().x), mm(t.GetStart().y)
+                        fx2, fy2 = mm(t.GetEnd().x), mm(t.GetEnd().y)
+                        if any(seg_seg_dist((fx1, fy1, fx2, fy2), (s['x1'], s['y1'], s['x2'], s['y2'])) < half + mm(t.GetWidth()) / 2 for s in layer_segs):
+                            foreign.append({'net': t.GetNetname(), 'layer': ref_layer, 'kind': 'track',
+                                            'x': round((fx1 + fx2) / 2, 2), 'y': round((fy1 + fy2) / 2, 2)})
+        # --- floating pour islands on the feed's own layers (GATE-6)
+        islands = []
+        net_layers = {s['layer'] for s in segs} | {a['layer'] for a in arcs}
+        for (layer_c, zn), pss in fills.items():
+            if layer_c not in net_layers:
+                continue
+            h = (refs.get(layer_c) or [{}])[0].get('h_mm') or 1.0
+            reach = 3.0 * h + 1.0
+            own = [(prm[0], prm[1]) for (n, _r, _num, _p, prm) in all_pads if n == zn]
+            for ps in pss:
+                for oi in range(ps.OutlineCount()):
+                    o = ps.Outline(oi)
+                    pts = [(mm(o.CPoint(k).x), mm(o.CPoint(k).y)) for k in range(o.PointCount())]
+                    if not pts:
+                        continue
+                    cx = sum(p[0] for p in pts) / len(pts); cy = sum(p[1] for p in pts) / len(pts)
+                    centre = pcbnew.VECTOR2I(nm(cx), nm(cy))
+                    has_pad = any(ps.Contains(pcbnew.VECTOR2I(nm(px), nm(py)), oi) for (px, py) in own)
+                    near = any(seg_pt(cx, cy, s['x1'], s['y1'], s['x2'], s['y2']) < reach
+                               for s in segs if s['layer'] == layer_c)
+                    if near and not has_pad:
+                        islands.append({'net': zn, 'layer': layer_c,
+                                        'x': round(cx, 2), 'y': round(cy, 2)})
+        # --- antenna keep-out intrusion (GATE-2): rule areas of the
+        # footprints this net terminates on, vs other nets' copper.
+        intrusions = []
+        net_refs = {p['ref'] for p in pads}
+        for fp in b.GetFootprints():
+            if fp.GetReference() not in net_refs:
+                continue
+            for z in fp.Zones():
+                if not z.GetIsRuleArea():
+                    continue
+                ps = z.Outline()
+                def _inside(x, y):
+                    pt = pcbnew.VECTOR2I(nm(x), nm(y))
+                    return any(ps.Contains(pt, oi) for oi in range(ps.OutlineCount()))
+                for t in all_tracks:
+                    if t.GetNetname() == net:
+                        continue
+                    if t.Type() == pcbnew.PCB_VIA_T:
+                        vx, vy = mm(t.GetPosition().x), mm(t.GetPosition().y)
+                        if _inside(vx, vy):
+                            intrusions.append({'net': t.GetNetname(), 'kind': 'via', 'x': round(vx, 2), 'y': round(vy, 2), 'footprint': fp.GetReference()})
+                    else:
+                        for (qx, qy) in [(mm(t.GetStart().x), mm(t.GetStart().y)), (mm(t.GetEnd().x), mm(t.GetEnd().y))]:
+                            if _inside(qx, qy):
+                                intrusions.append({'net': t.GetNetname(), 'kind': 'track', 'x': round(qx, 2), 'y': round(qy, 2), 'footprint': fp.GetReference()})
+                                break
+                for (n, ref, num, p, _prm) in all_pads:
+                    if n == net or ref == fp.GetReference():
+                        continue
+                    if _inside(mm(p.GetPosition().x), mm(p.GetPosition().y)):
+                        intrusions.append({'net': n, 'kind': 'pad', 'x': round(mm(p.GetPosition().x), 2), 'y': round(mm(p.GetPosition().y), 2), 'footprint': fp.GetReference()})
+        # --- ground-pad zone connections on connected footprints (GATE-8)
+        gnd_conns = []
+        zones_by_net = {}
+        for z in b.Zones():
+            zones_by_net.setdefault(z.GetNetname() or '', []).append(z)
+        for fp in b.GetFootprints():
+            if fp.GetReference() not in net_refs:
+                continue
+            for p in fp.Pads():
+                if p.GetNetname() != gnd:
+                    continue
+                conn = 'unknown'
+                try:
+                    local = p.GetLocalZoneConnection()
+                    if local != pcbnew.ZONE_CONNECTION_INHERITED:
+                        eff = local
+                    else:
+                        eff = None
+                        for z in zones_by_net.get(gnd, []):
+                            eff = z.GetPadConnection()
+                            break
+                    if eff in (pcbnew.ZONE_CONNECTION_THERMAL, pcbnew.ZONE_CONNECTION_THT_THERMAL):
+                        conn = 'thermal'
+                    elif eff == pcbnew.ZONE_CONNECTION_FULL:
+                        conn = 'solid'
+                    elif eff == pcbnew.ZONE_CONNECTION_NONE:
+                        conn = 'none'
+                except Exception:
+                    conn = 'unknown'
+                gnd_conns.append({'ref': fp.GetReference(), 'num': p.GetNumber(), 'connection': conn})
+        # --- pi-match presence (GATE-7)
+        pi_presence = {}
+        fp_by_ref = {fp.GetReference(): fp for fp in b.GetFootprints()}
+        for ref in ns.get('pi_refs') or []:
+            fp = fp_by_ref.get(ref)
+            pi_presence[ref] = {'exists': fp is not None,
+                                'on_net': bool(fp) and any(p.GetNetname() == net for p in fp.Pads())}
+        out[net] = {'segments': segs, 'arcs': arcs, 'vias': vias, 'pads': pads,
+                    'return_vias': return_vias, 'corridor': corridor,
+                    'foreign_under': foreign, 'floating_islands': islands,
+                    'keepout_intrusions': intrusions,
+                    'gnd_pad_connections': gnd_conns, 'pi_presence': pi_presence}
+    return out
 
 
 def main():
@@ -2874,6 +3200,7 @@ def main():
     ap.add_argument('--frm')
     ap.add_argument('--dst')
     ap.add_argument('--result')
+    ap.add_argument('--spec')
     ap.add_argument('--no-tracks-on')
     ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
@@ -2887,6 +3214,8 @@ def main():
             else: BANNED_LAYER_IDS.add(_i)
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'stackup': res = cmd_stackup(a.board, [n for n in (a.nets or '').split(',') if n])
+    elif a.cmd == 'rfgeom':
+        with open(a.spec) as _f: res = cmd_rfgeom(a.board, json.load(_f))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
     elif a.cmd == 'finish_leg': res = cmd_finish_leg(a.board, a.out, a.net, attempt_select=bool(getattr(a, 'attempt_select', False)))

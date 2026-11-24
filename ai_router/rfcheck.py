@@ -331,7 +331,10 @@ def evaluate_net(marking, ctx, facts):
             out.append(_f('GATE-1', 'fail',
                           'reference corridor fully severed under the feed on %s (run %.2f mm)'
                           % (layer, run['len_mm']), (run['x'], run['y'])))
+        sev_at = [(run['x'], run['y']) for run in cor.get('severed') or []]
         for run in cor.get('centre_gaps') or []:
+            if any(abs(run['x'] - sx) < 0.51 and abs(run['y'] - sy) < 0.51 for (sx, sy) in sev_at):
+                continue  # already reported as a full severance above
             if run['len_mm'] > 2.0:
                 out.append(_f('GATE-1', 'fail',
                               'feed crosses a %.2f mm gap in its reference plane on %s'
