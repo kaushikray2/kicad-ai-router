@@ -7,7 +7,9 @@ a same-code A/B on the standing evaluation set (the 7-board A/B set +
 PCBWorld-Bench tiers + named fixtures).
 
 Programme totals: hotfix 3–5 h; core path roughly 105–170 h; spikes
-gated separately.
+gated separately. Phase 2E (below) adds the WeaveEngine-derived
+feature block: 8–15 d by the issues' own estimates, plus #63 (3–5 d)
+riding as P2.1b's first step.
 
 ## Done
 
@@ -64,12 +66,25 @@ zorinbox backend container moved to a 16-CPU host the same day.
 
 ## In progress
 
-- **P2.1b** (below) is next up. The fair engine A/B follows it, per
-  the owner's sequencing.
+- **P2.1b** (below) is next up, with #63 as its first step. Phase 2E
+  (below) follows P2.7a; the fair engine A/B sits inside it, per the
+  owner's sequencing.
 
 ## Remaining (in sequence)
 
 ### P2.1b — tool_fix_violations (12–20 h)
+**Step 0 — #63, pour skeleton reservation pre-check (3–5 d by the
+issue's estimate).** Compute each pour's pad spanning tree (width =
+zone min-thickness + slack + clearance deltas, confined to the pour
+region) before routing/repair and reserve it: severing the skeleton is
+a first-class cost, the reservation is inserted last and yields first
+under congestion. On the dataset-v3 grid, 22 of 47 failures were
+pour-split-only; the skeleton is prevention, and the tool below is the
+cure for what still gets through. The same skeleton defines, for the
+diff below, which pour faults count as router-added. Exit for step 0:
+split-only failures drop measurably on the bench, no completion or
+copper regression.
+
 Repair copper faults on already-connected nets: diff the board's DRC
 violations against the base board's; for each router-added fault, rip
 only the offending net's copper within ±3 mm and re-close with the
@@ -88,6 +103,50 @@ final is gated by finalize and again by both callers; the portfolio
 winner is re-gated — ~2 gate cycles saved per run, ~4 on escalation);
 a persistent worker process or batched gate calls; profile one AUTO run
 end to end and attack the top fixed cost.
+
+### Phase 2E — engine & measurement block (8–15 d by the issues' estimates)
+Six features adapted from the WeaveEngine review (2026-11-24; ideas
+reimplemented, no code taken). The block sits here — after P2.7a,
+before P2.7b — because its verdicts multiply: the harness and the
+deterministic portfolio are preconditions for a fair engine A/B, and
+that A/B's battery is where #64/#65 are judged. #63 is not here; it
+rides as P2.1b's step 0 (above), because P2.1b's pour-side fault
+definition comes from it.
+
+1. **#62 — bench harness: prepared-input caching + nothing-worse
+   gate (2–4 d).** Cache prepared inputs keyed by a hash of the
+   source board files (re-prep on unchanged sources is byte-stable);
+   score "worse" on routing-caused DRC — per board, per violation
+   kind, DRC after routing minus DRC of the stripped input — never
+   on raw counts. Committing the harness this way also discharges
+   #54's remainder. First because every later verdict in this block,
+   and the final exam, rides on it.
+2. **#66 — portfolio racing, fixed-order selection (2–3 d).** Race
+   whole engine passes at varied parameter sets, in heats; selection
+   keeps the first COMPLETE variant in a fixed priority order, never
+   the first to finish — the chosen result is independent of worker
+   count and finish order, preserving the no-deadline determinism
+   contract. Discharges #52's reproducibility defect in the portfolio
+   stage. Before the A/B, so the A/B measures engines rather than a
+   timing race.
+3. **Fair engine A/B — #45, #46, #52.** The queued slot, now here:
+   KRT design-invariance gate + `--keep-placement`; Freerouting
+   `-mt 1` and power-type DSN layer export; tm_relax bounded by
+   rounds, on #66's deterministic selection. Report faults /
+   wirelength / vias alongside unconnected.
+4. **#64 — severance penalty in finisher candidate scoring
+   (2–4 d)** and **#65 — regret-order sequencing for multi-net
+   repair (1–2 d).** Implemented against the finisher and judged
+   on this block's A/B battery, per their acceptance criteria: keep
+   each only if the A/B says it earns its cost.
+5. **#61 — best-so-far output + shared time-limit semantics
+   (1–2 d).** Atomic artifact writes; a checkpoint hook rewrites
+   the output whenever a pass beats the best-so-far acceptance key;
+   one wall-clock deadline shared by every worker in a backend run,
+   after which the run finishes with the best so far. Results
+   produced under a deadline are labelled non-deterministic.
+   Independent of the A/B; placed last in the block, and
+   pull-forwardable if a lost long run hurts first.
 
 ### P2.7b — C/C++ A* kernel (6–10 h)
 A small ctypes 3D grid A* so the P2.2 / P2.3 searches are not
@@ -130,15 +189,16 @@ verdict NO unless it produces a closure nothing else has.
 ### Final exam
 The 49 held-out dataset-v3 boards have never been run. At the end of
 Phase 2: run once, Phase 2 stack vs v1.9.6 stack, both numbers reported
-whatever they say. Do not tune against them.
+whatever they say. Do not tune against them. The exam runs on the
+Phase 2E harness (#62): cached prepared inputs, scored by the
+routing-caused-DRC nothing-worse gate alongside CP_delta.
 
 ## Queued outside Phase 2
 
-- **Fair engine A/B** (issues #45, #46, #52): KRT design-invariance gate
-  + `--keep-placement`; Freerouting `-mt 1` and power-type DSN layer
-  export; tm_relax bounded by rounds; report faults / wirelength / vias
-  alongside unconnected.
-- **Issue #54 remainder:** commit the PCBWorld-Bench harness.
+- **Fair engine A/B** (issues #45, #46, #52): moved into Phase 2E
+  (above).
+- **Issue #54 remainder:** commit the PCBWorld-Bench harness —
+  discharged by Phase 2E item #62 (above).
 - **Placement audit preprocess** (issue #42): future feature, not in
   Phase 2 scope.
 - **Engine adoption:** the plugin runs the pinned TraceMaker release.
