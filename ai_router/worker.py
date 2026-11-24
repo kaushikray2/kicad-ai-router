@@ -3196,9 +3196,18 @@ def cmd_rfgeom(board_path, spec):
 # acceptance gate, so a treatment can never silently degrade a board.
 
 class _ViaSites:
-    def __init__(self, b, gnd):
+    def __init__(self, b, gnd, contain_net='__same__'):
+        # legality core for placing vias of net `gnd` (the parameter
+        # name is historical): foreign-copper clearance with the
+        # net's own class via size, no-via rule areas, and -- when
+        # contain_net is a net name -- containment in that net's
+        # filled pours on every layer that carries one (the stitch
+        # rule for ground vias).  contain_net=None skips containment
+        # (power-net vias: the antipad in a crossed plane is the
+        # standard layer transition, and the DRC gate arbitrates).
         self.b = b
         self.gnd = gnd
+        self.contain_net = gnd if contain_net == '__same__' else contain_net
         vw, vd = net_class_via(b, gnd)
         self.vw, self.vd = vw, vd
         try:
@@ -3206,10 +3215,10 @@ class _ViaSites:
         except Exception:
             self.clr = 0.2
         self.fills = {}        # layer id -> [(poly_set, [outline idx])]
-        self.inner = []        # inner layer ids carrying a GND zone
+        self.inner = []        # inner layer ids carrying a zone of contain_net
         stack = copper_stack(b)
         for z in b.Zones():
-            if z.GetNetname() != gnd:
+            if self.contain_net is None or z.GetNetname() != self.contain_net:
                 continue
             for lid in z.GetLayerSet().CuStack():
                 try:
@@ -3257,9 +3266,10 @@ class _ViaSites:
             for oi in range(ps.OutlineCount()):
                 if ps.Contains(pt, oi):
                     return False
-        for lid in self.outer + self.inner:
-            if lid in self.fills and not self._inside_gnd(lid, x, y):
-                return False
+        if self.contain_net is not None:
+            for lid in self.outer + self.inner:
+                if lid in self.fills and not self._inside_gnd(lid, x, y):
+                    return False
         return True
 
     def place(self, x, y):
@@ -3368,6 +3378,124 @@ def cmd_rf_fence(board_path, spec):
     refill(b)
     pcbnew.SaveBoard(board_path, b)
     return {'placed': placed}
+
+
+
+def cmd_powergeom(board_path, nets_csv):
+    # Per-net copper facts for the power planner (#68 Step 2): tracks,
+    # vias, pads (with copper layers) and filled zone outlines.
+    b = pcbnew.LoadBoard(board_path)
+    refill(b)
+    want = [n for n in nets_csv.split(',') if n]
+    out = {}
+    for net in want:
+        f = {'tracks': [], 'vias': [], 'pads': [], 'zones': []}
+        for t in b.GetTracks():
+            if t.GetNetname() != net:
+                continue
+            if t.Type() == pcbnew.PCB_VIA_T:
+                f['vias'].append({'x': mm(t.GetPosition().x), 'y': mm(t.GetPosition().y),
+                                  'drill': mm(t.GetDrill()), 'uuid': t.m_Uuid.AsString()})
+            elif t.Type() == pcbnew.PCB_TRACE_T:
+                f['tracks'].append({'uuid': t.m_Uuid.AsString(),
+                                    'layer': b.GetLayerName(t.GetLayer()),
+                                    'x1': mm(t.GetStart().x), 'y1': mm(t.GetStart().y),
+                                    'x2': mm(t.GetEnd().x), 'y2': mm(t.GetEnd().y),
+                                    'w': mm(t.GetWidth())})
+        for fp in b.GetFootprints():
+            for p in fp.Pads():
+                if p.GetNetname() != net:
+                    continue
+                layers = []
+                for lid in p.GetLayerSet().Seq():
+                    nm_ = b.GetLayerName(lid)
+                    if nm_.endswith('.Cu'):
+                        layers.append(nm_)
+                f['pads'].append({'ref': fp.GetReference(), 'pin': p.GetNumber(),
+                                  'x': mm(p.GetPosition().x), 'y': mm(p.GetPosition().y),
+                                  'layers': layers})
+        for z in b.Zones():
+            if z.GetNetname() != net or z.GetIsRuleArea():
+                continue
+            for lid in z.GetLayerSet().CuStack():
+                try:
+                    ps = z.GetFilledPolysList(lid)
+                except Exception:
+                    continue
+                if not ps:
+                    continue
+                polys = []
+                for oi in range(ps.OutlineCount()):
+                    ch = ps.Outline(oi)
+                    pts = [[mm(ch.CPoint(i).x), mm(ch.CPoint(i).y)]
+                           for i in range(ch.PointCount())]
+                    if len(pts) >= 3:
+                        polys.append(pts)
+                if polys:
+                    f['zones'].append({'layer': b.GetLayerName(lid), 'polys': polys})
+        out[net] = f
+    return out
+
+
+def cmd_power_widen(board_path, spec):
+    # Widen-only per-segment widths by track uuid (#68 Step 2).  A
+    # request narrower than the routed width is refused per segment
+    # and reported, never applied.
+    b = pcbnew.LoadBoard(board_path)
+    by_uuid = {}
+    for t in b.GetTracks():
+        if t.Type() == pcbnew.PCB_TRACE_T:
+            by_uuid[t.m_Uuid.AsString()] = t
+    applied, refused = [], []
+    for net, m in (spec or {}).items():
+        for uuid, w in (m or {}).items():
+            t = by_uuid.get(uuid)
+            if t is None or t.GetNetname() != net:
+                refused.append({'uuid': uuid, 'why': 'not found'})
+                continue
+            if w <= mm(t.GetWidth()) + 1e-9:
+                refused.append({'uuid': uuid, 'why': 'not wider'})
+                continue
+            t.SetWidth(nm(w))
+            applied.append({'uuid': uuid, 'net': net, 'width_mm': w})
+    if applied:
+        refill(b)
+        pcbnew.SaveBoard(board_path, b)
+    return {'applied': applied, 'refused': refused}
+
+
+def cmd_power_vias(board_path, spec):
+    # Via arrays for power nets (#68 Step 2): place `add` vias of the
+    # net near the anchor via, on expanding rings, at sites legal
+    # under the shared _ViaSites core without pour containment.
+    b = pcbnew.LoadBoard(board_path)
+    refill(b)
+    placed, unplaced = [], []
+    for item in (spec or []):
+        net = item['net']
+        sites = _ViaSites(b, net, contain_net=None)
+        ax, ay = item['x'], item['y']
+        got = 0
+        for ring in range(1, 13):
+            if got >= item['add']:
+                break
+            r = ring * (sites.vw + sites.clr)
+            for k in range(16):
+                if got >= item['add']:
+                    break
+                x = ax + r * math.cos(k * math.pi / 8)
+                y = ay + r * math.sin(k * math.pi / 8)
+                if sites.ok(x, y):
+                    sites.place(x, y)
+                    placed.append({'net': net, 'x': round(x, 3), 'y': round(y, 3)})
+                    got += 1
+        if got < item['add']:
+            unplaced.append({'net': net, 'x': ax, 'y': ay,
+                             'wanted': item['add'], 'placed': got})
+    if placed:
+        refill(b)
+        pcbnew.SaveBoard(board_path, b)
+    return {'placed': placed, 'unplaced': unplaced}
 
 
 def cmd_smooth(board_path, net):
@@ -3485,6 +3613,11 @@ def main():
     elif a.cmd == 'rf_fence':
         with open(a.spec) as _f: res = cmd_rf_fence(a.board, json.load(_f))
     elif a.cmd == 'smooth': res = cmd_smooth(a.board, a.net)
+    elif a.cmd == 'powergeom': res = cmd_powergeom(a.board, a.nets or '')
+    elif a.cmd == 'power_widen':
+        with open(a.spec) as _f: res = cmd_power_widen(a.board, json.load(_f))
+    elif a.cmd == 'power_vias':
+        with open(a.spec) as _f: res = cmd_power_vias(a.board, json.load(_f))
     elif a.cmd == 'rfgeom':
         with open(a.spec) as _f: res = cmd_rfgeom(a.board, json.load(_f))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
