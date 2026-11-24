@@ -444,6 +444,10 @@ regression during development was a phantom baseline (v1.2.5
 control run reproduced the identical 15). Fixtures: heal bridges
 2, finish /RAM_A14 rolled back, stitch clean no-op.
 
+## License change -- 2026-11-24
+
+The project is relicensed from MIT to **GPL-3.0-or-later** (SPDX: GPL-3.0-or-later), matching KiCad's own licensing. The change applies from this commit forward; releases through v1.10.2 were distributed under MIT, and copies already out there keep those terms. Sample boards in `docker/selftest/` remain under their original licenses.
+
 ## v1.10.2 -- 2026-11-24
 
 Hotfix for a defect in v1.10.1's #50 fix, found by the fix's own

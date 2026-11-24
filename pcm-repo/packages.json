@@ -19,15 +19,15 @@
           "email": "ray@siliconbrane.com"
         }
       },
-      "license": "MIT",
+      "license": "GPL-3.0-or-later",
       "url": "https://www.siliconbrane.com",
       "versions": [
         {
           "version": "1.10.2",
           "status": "stable",
           "kicad_version": "10.0",
-          "download_sha256": "ec1361b342c9fd146a92fb0bdbbca1a5a9605832185ebcb2262c0c83b7a79fba",
-          "download_size": 67332,
+          "download_sha256": "e59fde17c37e83f1e24ab8f35fe3753554aa705ffa72571f2f38cb06a1882b48",
+          "download_size": 67342,
           "download_url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/ai-router-1.10.2.zip",
           "install_size": 230918
         }

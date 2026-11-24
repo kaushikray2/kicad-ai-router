@@ -21,7 +21,7 @@ METADATA = {
     'type': 'plugin',
     'author': {'name': 'SiliconBrane Inc', 'contact': {'email': 'ray@siliconbrane.com'}},
     'maintainer': {'name': 'SiliconBrane Inc', 'contact': {'email': 'ray@siliconbrane.com'}},
-    'license': 'MIT',
+    'license': 'GPL-3.0-or-later',
     'url': 'https://www.siliconbrane.com',
     'versions': [{'version': VERSION, 'status': 'stable', 'kicad_version': '10.0'}],
 }

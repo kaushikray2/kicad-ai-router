@@ -2,7 +2,7 @@
 
 Developed by [SiliconBrane Inc](https://www.siliconbrane.com).
 
-![version](https://img.shields.io/badge/version-v1.10.2-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+![version](https://img.shields.io/badge/version-v1.10.2-blue) ![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 
 A KiCad 10 plugin + routing backend that finishes PCB layouts with
 deterministic tools under an exact-geometry gate -- and, optionally, an LLM
@@ -92,6 +92,6 @@ from the status page or `POST /api/selftest/run`.
 
 ## License
 
-MIT (see `LICENSE`). Sample boards in `docker/selftest/` are public
+GPL-3.0-or-later (see `LICENSE`). Copyright (c) 2026 SiliconBrane Inc. Sample boards in `docker/selftest/` are public
 open-hardware designs, included for testing; their original licenses
 apply.
