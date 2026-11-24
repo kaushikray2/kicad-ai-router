@@ -190,6 +190,14 @@ a funded work package takes it (the NLnet application names it),
 decided at a re-scope checkpoint. Three steps, in the issue's own
 staging:
 
+**Paired with P2.9.** P2.8 and P2.9 are one framework — engineered
+nets: shared marking, permanent first_nets, locking, and the per-net
+verification report. P2.8 is the impedance sizing model; P2.9
+(next) is the power sizing model. One framework decision precedes
+both: where marks live (sidecar vs project file) — #68 names it an
+open item, and it supersedes the "plugin config" wording in Step 1
+below, which stands until the decision is taken.
+
 - **Step 1 — marking, width, priority, report.** Marked nets and
   their target impedance live in the plugin config. Width per layer
   from the board stackup via the IPC-2141 / Wadell closed forms (the
@@ -268,6 +276,101 @@ standard's text.
   Semiconductor AN-905 (via TI) for the differential-microstrip
   forms. Designation correction: the RF/microwave guide is
   IPC-2252, not IPC-2251 (2251 is high-speed packaging).
+
+### P2.9 — Power nets: worst-case current sizing (issue #68)
+The second sizing model of the engineered-nets framework (paired
+with P2.8, above): user-marked power nets sized by worst-case
+circuit analysis instead of netclass defaults — per segment,
+width = max(IPC-2152 thermal width, voltage-drop width) at stacked
+corners. Sequenced after P2.8 because it builds on the shared
+framework (marking, first_nets, locking, report); its sizing core
+is independent of P2.8's impedance math. The ticket is the
+reference document; this entry is its plan shape.
+
+- **Step 0 — persistence decision (framework-level, before
+  build).** Where marks, currents, mode tags, and corner settings
+  live — sidecar vs project file — decides whether they travel
+  when a project is shared. One answer for both P2.8 and P2.9.
+- **Step 1 — power-tree WCCA core** (pure, unit-tested). The
+  tree is built from the schematic's pin electrical types
+  (power_out = source, power_in = load, the rest conduits),
+  hierarchical sheets instance-counted — a new input surface:
+  the pipeline today consumes boards only, so the schematic
+  netlist (kicad-cli sch export) joins the run inputs. A segment's
+  design current is the sum of its downstream load maxima
+  (Extreme Value Analysis; RSS is explicitly wrong for
+  simultaneous rail loads), with operating-mode/duty tags so
+  mutually exclusive branches are not summed. Node types: loads
+  (resistive / constant-current / constant-power; each carries a
+  peak current for drop and a sustained current for thermal),
+  conduits (rating CHECK only — a conduit's rating never sizes
+  a trace; the downstream load sum does), protective devices
+  (their rating is a FLOOR for the segments they guard, so the
+  device stays the weakest link in a fault), regulators as
+  transformer nodes (buck: input power = output power / eta_min,
+  input current at minimum input voltage; LDO: Iin = Iout + Iq).
+  Sizing: IPC-2152 thermal (Saturn PCB Toolkit as the fixture
+  reference; the IPC-2221 closed form kept as a cross-check only)
+  and drop V = I · rho(T) · L / (W · t) over the full current
+  loop, rho at maximum operating temperature; corners are minimum
+  manufactured cross-section, maximum ambient plus the user's
+  delta-T budget, and the user's drop budget. Exit: sizing math
+  matches Saturn outputs on the fixture set within rounding, and
+  per-segment design currents match a hand-worked WCCA table
+  exactly on the fixture schematic (one buck, one LDO, one
+  FET-switched branch with mutually exclusive loads, one fused
+  input, one hierarchical repeated load).
+- **Step 2 — run integration + verification.** Per-segment
+  widths applied to the routed board; via arrays placed by the
+  finisher (barrel cross-section matching, IPC-2152; via
+  violations reported per segment). One friction to design
+  around: the pipeline sets width per net through the netclass,
+  while the tree sizes per segment — where a tree segment is
+  its own net they coincide; the rest needs a widen-only post-pass
+  on finished copper under the exact checker. Drop is computed on
+  the full loop (a return trace's or fragmented pour's resistance
+  included; a solid-plane return is stated as an assumption);
+  pour-carried segments are reported as such (interplay with the
+  #63 skeleton). Post-route, every segment is recomputed with
+  actual lengths and widths; the report states design currents
+  with each load's contribution and its source, the corner set,
+  thermal and drop results per segment, via counts and
+  violations, and every assumption. A segment that cannot meet
+  its budget in the available space is reported failed with its
+  shortfall — never silently widened into clearance
+  violations. Fallback: with no currents available, a
+  resistances-only report (loop resistance per rail pair, no
+  sizing claim) — the tool never invents a current. Exit: the
+  ticket's acceptance on the fixture board; unmarked nets do not
+  regress on the standing A/B set.
+- **Step 3 — KB estimation layer (separate service, ships
+  last, blocks nothing).** Authority order: user-entered values,
+  then KB values the user has confirmed, then nothing —
+  unconfirmed estimates are never applied to sizing. The KB is a
+  separate service behind a small versioned interface (the
+  kb-mcp shape: query by MPN + condition → structured values
+  with citation and confirmed flag; write-back for
+  confirmations). Extraction returns value + type (peak/
+  sustained) + conditions + citation (datasheet document and
+  revision, table, page); the user confirms once per part in a
+  review queue; confirmed values cache under MPN + datasheet
+  revision (MPN alone is an incorrect key). Deployment modes:
+  hosted central corpus / optional bundled compose profile /
+  bring-your-own endpoint. Setup lives on the autorouter
+  webpage (endpoint status, datasheet upload, confirmation
+  queue, corpus view — not LibreChat); hosted deployments pin
+  the endpoint — custom endpoints are self-hosted-only (SSRF).
+  This narrows, and does not revive, the ditched KB-to-router
+  idea: the KB supplies structured electrical values to a
+  deterministic calculator, never layout prose or routing
+  advice. Exit: every estimated current in a report traces to a
+  citation the user confirmed or a value the user typed.
+  Deferral: this step can slip without blocking Steps 1–2 —
+  user-entered currents are the authority and need no KB.
+- **Stated limitations** (from the ticket): thermal coupling
+  between adjacent power conductors is not modelled; drop
+  verification is DC only (no pulsed-load droop, no decoupling
+  dynamics).
 
 ### P2.5 — Push-and-shove spike (15–20 h, hard stop, gated behind P2.3)
 Runs only if P2.3 leaves a shove-shaped residual class behind. Default
