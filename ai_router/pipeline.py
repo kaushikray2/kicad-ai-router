@@ -25,6 +25,26 @@ FAULT_CLASSES = ('shorting_items', 'clearance', 'items_not_allowed',
 # noise and unconnected_items, which is tracked separately).
 COPPER_CLASSES = FAULT_CLASSES  # v1.9.6 (#39): identical since sliver joined FAULT_CLASSES (kept as a name for reporting call sites)
 
+try:
+    from config import DEFAULTS as _CFG_DEFAULTS
+except Exception:
+    _CFG_DEFAULTS = {}
+
+def resolve_ban_names(raw, aliases):
+    # v1.10.1 (#49): the ONE layer-law resolution point. raw config
+    # names (canonical, board-specific, any case) -> canonical names
+    # via the board's alias map from the worker summary; anything else
+    # comes back as unknown so the caller can fail loudly instead of
+    # each consumer silently dropping the name (the finisher resolved
+    # names since v1.9, but TraceMaker's command line, the gate census
+    # and the law policy string-matched the raw config).
+    out, unknown = [], []
+    for n in raw:
+        c = (aliases or {}).get(str(n).strip().lower())
+        if c is None: unknown.append(n)
+        elif c not in out: out.append(c)
+    return out, unknown
+
 def _accept_key(g):
     # v1.8.2 (#16): step acceptance is lexicographic -- a step is kept
     # only if it is no worse in (copper faults, unconnected items,
@@ -32,7 +52,10 @@ def _accept_key(g):
     # steps that left the board LESS connected (e.g. a refill that
     # isolates another net's pour fragment), and prune was not gated
     # at all.
-    return (fault_count(g), int((g or {}).get('unconnected_total') or 0),
+    # v1.10.1 (#59): None-is-worst, matching _unc_key -- the old
+    # 'or 0' mapped a MISSING unconnected_total to 0, the best value
+    # (the mirror image of C1).
+    return (fault_count(g), 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
             len((g or {}).get('split_nets') or []))
 
 def fault_count(g):
@@ -103,7 +126,7 @@ class Pipeline:
         self._oseq += 1
         return os.path.join(self.workdir, '%s-%d.kicad_pcb' % (name, self._oseq))
 
-    def _worker(self, cmd, *args):
+    def _worker(self, cmd, *args, timeout=1800):
         py = shutil.which('python3') or sys.executable
         self._wseq = getattr(self, '_wseq', 0) + 1
         result_path = os.path.join(self.workdir, 'worker-%s-%d.json' % (cmd, self._wseq))
@@ -112,7 +135,7 @@ class Pipeline:
                 try: self._sidecars(args[_i + 1])
                 except Exception: pass
         cmdline = [py, WORKER, cmd] + list(args) + ['--result', result_path]
-        p = subprocess.run(cmdline, capture_output=True, text=True, timeout=1800)
+        p = subprocess.run(cmdline, capture_output=True, text=True, timeout=timeout)  # v1.10.1 (#55): per-command -- engine commands pass 3900 so the worker outlives the engines' own 2400/3600 s timeouts
         if os.path.exists(result_path):
             try:
                 with open(result_path) as f: return json.load(f)
@@ -158,8 +181,7 @@ class Pipeline:
         if getattr(self, '_copper_layers', None) is None:
             try: self._copper_layers = self._worker('summary', '--board', inp).get('copper_layers') or []
             except Exception: self._copper_layers = []
-        banned = [b.strip() for b in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if b.strip()]  # v1.9 (M4): the fallback was 'In1.Cu,In2.Cu' here alone -- with no cfg value the engine banned In2 while every finisher banned only In1
-        if self._copper_layers: banned = [b for b in banned if b in self._copper_layers]  # TraceMaker rejects ban names that are not copper layers of THIS board (a 2-layer board has no In1.Cu); the worker's canonical stack is the authority
+        banned = self._banned_for(inp)  # v1.10.1 (#49): resolved once against this board's stack; unmatched names warn loudly instead of being silently dropped (TraceMaker still receives canonical names only, which it requires)
         cmdline = [self.cfg['tracemaker_path'], 'route', inp, '-o', outp,
                    '--json', os.path.join(self.workdir, 'route%d.json' % self.pass_no),
                    '--stuck-report', os.path.join(self.workdir, 'stuck%d.json' % self.pass_no),
@@ -208,7 +230,7 @@ class Pipeline:
         except Exception:
             pass
         self.last_stuck = stuck
-        self.last_stuck_board = self.current  # v1.9.6 (#38): corridor validity is per-board-state
+        self.last_stuck_board = outp  # v1.10.1 (#48): the stuck report describes the route OUTPUT; v1.9.6 tagged the pre-route board, so valid corridors were discarded and a restored earlier board could receive a newer pass's corridor
         if stuck['unrouted']:
             unrouted = [{'net': u['net'], 'from': u['from'], 'to': u['to'], 'note': u.get('reason') or ''} for u in stuck['unrouted']]
         else:
@@ -238,9 +260,9 @@ class Pipeline:
             outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
             try:
                 if eng == 'freerouting':
-                    r = self._worker('freeroute', '--board', self.base, '--out', outp)
+                    r = self._worker('freeroute', '--board', self.base, '--out', outp, timeout=3900)
                 elif eng == 'krt':
-                    r = self._worker('krt_route', '--board', self.base, '--out', outp)
+                    r = self._worker('krt_route', '--board', self.base, '--out', outp, timeout=3900)
                 elif eng in ('tm_relax', 'tm_global', 'tm_escape'):
                     r = self._route_variant(eng, outp)
                 else:
@@ -284,8 +306,7 @@ class Pipeline:
         if getattr(self, '_copper_layers', None) is None:
             try: self._copper_layers = self._worker('summary', '--board', self.base).get('copper_layers') or []
             except Exception: self._copper_layers = []
-        banned = [b.strip() for b in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if b.strip()]
-        if self._copper_layers: banned = [b for b in banned if b in self._copper_layers]
+        banned = self._banned_for(self.base)  # v1.10.1 (#49)
         cmdline = [self.cfg['tracemaker_path'], 'route', self.base, '-o', outp, flag,
                    '--soft-zones', '--keep-vias-off-pads', '--diff-pairs', '--si-rules', '--critical-auto']
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
@@ -355,6 +376,33 @@ class Pipeline:
                 signal.append({'nets': sorted(set(n for _k, n in items)), 'text': ' '.join(block.split())[:200]})
         return total, unc, classes, pour, signal
 
+    def _layer_info(self, board):
+        # v1.10.1 (#49): one cached summary per board for layer data.
+        cache = getattr(self, '_layer_info_cache', None)
+        if cache is None: cache = self._layer_info_cache = {}
+        if board not in cache:
+            summ = self._worker('summary', '--board', board, '--fast')
+            aliases = summ.get('layer_aliases') or {c.lower(): c for c in (summ.get('copper_layers') or [])}
+            cache[board] = {'copper_layers': summ.get('copper_layers') or [], 'layer_aliases': aliases}
+        return cache[board]
+
+    def _banned_for(self, board):
+        # v1.10.1 (#49): the layer law, resolved against THIS board.
+        # A name that resolves (board spelling or canonical, any case)
+        # bans that layer for every consumer. A name matching no layer
+        # on this board bans nothing here -- the standing server config
+        # names the 4-layer GND plane, and a 2-layer board must not fail
+        # for it -- but it is logged loudly, exactly as the gate census
+        # warns, never silently dropped. (First cut raised instead of
+        # warning; the scratch-backend smoke caught it failing every route on
+        # 2-layer boards under the standing config.)
+        info = self._layer_info(board)
+        raw = [x.strip() for x in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if x.strip()]
+        canon, unknown = resolve_ban_names(raw, info['layer_aliases'])
+        if unknown:
+            self.log('WARNING: no_tracks_on names not on this board (ban vacuous here): %s (board layers: %s)' % (unknown, info['copper_layers']))
+        return canon
+
     def tool_gate(self, board=None):
         board = board or self.current
         self._sidecars(board)
@@ -367,7 +415,12 @@ class Pipeline:
         # v1.3.2 layer census: any track on a cfg-banned layer is a
         # layer-law fault, counted into fault_count via the gate dict.
         _tbl = summ.get('tracks_by_layer') or {}
-        _banned_names = [x.strip() for x in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if x.strip()]
+        # v1.10.1 (#49): census against the board-resolved canonical
+        # names; unknown names warn here (a gate must always measure)
+        # -- the route path fails loudly on them via _banned_for.
+        _raw_bans = [x.strip() for x in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if x.strip()]
+        _banned_names, _unknown_bans = resolve_ban_names(_raw_bans, summ.get('layer_aliases') or {c.lower(): c for c in (summ.get('copper_layers') or [])})
+        if _unknown_bans: self.log('WARNING: no_tracks_on names not on this board (census ignores them): %s' % _unknown_bans)
         banned_layer_tracks = sum(v for k, v in _tbl.items() if k in _banned_names)
         # v1.5.1: exempt a pour net's tracks on its OWN plane layer(s)
         # (heal bridges there are legal by design); count the rest.
@@ -431,8 +484,7 @@ class Pipeline:
         if getattr(self, '_copper_layers', None) is None:
             try: self._copper_layers = self._worker('summary', '--board', self.current).get('copper_layers') or []
             except Exception: self._copper_layers = []
-        banned = [x.strip() for x in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if x.strip()]
-        if self._copper_layers: banned = [x for x in banned if x in self._copper_layers]
+        banned = self._banned_for(self.current)  # v1.10.1 (#49)
         cmdline = [self.cfg['tracemaker_path'], 'route', locked, '-o', outp, '--reroute',
                    '--json', os.path.join(self.workdir, 'route-rw-%d.json' % self._oseq),
                    '--stuck-report', os.path.join(self.workdir, 'stuck-rw-%d.json' % self._oseq),
@@ -452,9 +504,12 @@ class Pipeline:
             return {'status': 'no_output', 'net': net}
         try: self._worker('refill', '--board', outp, '--out', outp)
         except Exception: pass
+        if res.get('locks_file'):  # v1.10.1 (#50): restore the original lock flags before this board can be delivered
+            try: self._worker('restore_locks', '--board', outp, '--out', outp, '--locks', res['locks_file'])
+            except Exception as e: self.log('WARNING: lock restore failed (%s)' % e)
         self._sidecars(outp)
         after = self.tool_gate(outp)
-        if str(self.cfg.get('reroute_accept', 'faults')) == 'connectivity':
+        if str(self.cfg.get('reroute_accept', _CFG_DEFAULTS.get('reroute_accept', 'faults'))) == 'connectivity':
             ck = lambda g: (10**9 if g.get('unconnected_total') is None else int(g['unconnected_total']), len(g.get('split_nets') or []), fault_count(g))
             kb, ka = ck(before), ck(after)
         else:
@@ -465,7 +520,7 @@ class Pipeline:
         else:
             self.last_gate = before
             st = 'reverted'
-        self._record('reroute_window', {'net': net, 'status': st, 'key_before': kb, 'key_after': ka, 'window': res.get('window'), 'accept': str(self.cfg.get('reroute_accept', 'faults'))})
+        self._record('reroute_window', {'net': net, 'status': st, 'key_before': kb, 'key_after': ka, 'window': res.get('window'), 'accept': str(self.cfg.get('reroute_accept', _CFG_DEFAULTS.get('reroute_accept', 'faults')))})
         self.log('reroute_window %s: %s (key %s -> %s)' % (net, st, kb, ka))
         return {'status': st, 'net': net, 'gate': after}
 

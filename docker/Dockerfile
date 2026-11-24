@@ -18,8 +18,8 @@ RUN curl -sL -o /tmp/fr.zip https://github.com/freerouting/freerouting/releases/
  && unzip -q /tmp/fr.zip -d /opt && mv /opt/freerouting-2.5.0-linux-x64 /opt/freerouting && rm /tmp/fr.zip
 RUN git clone -q https://github.com/drandyhaas/KiCadRoutingTools.git /opt/krt \
  && cd /opt/krt && git checkout -q 61565f35053aeeb3a005fafc9f137f9c026e04df \
- && python3 build_router.py \
- && python3 -m pip install --break-system-packages -q "shapely>=2.0"
+ && python3 build_router.py --tag v0.24.2 \
+ && python3 -m pip install --break-system-packages -q "shapely==2.2.0"
 COPY ai_router /opt/ai-router/ai_router
 COPY docker/server.py docker/run_job.py docker/config_page.html /opt/ai-router/
 COPY docker/selftest /opt/ai-router/selftest

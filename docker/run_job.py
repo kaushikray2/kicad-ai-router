@@ -13,6 +13,55 @@ def find_plugin():
             return c
     raise RuntimeError('ai_router package not found in %s' % cands)
 
+_ENGINES = ('freerouting', 'krt', 'tm_relax', 'tm_global', 'tm_escape')
+
+def _int_or(rt, k, d):
+    try: return int(rt.get(k, d))
+    except Exception: return d
+
+def _engines_or(rt, d):
+    # v1.10.1 (#56): whitelist + dedupe + cap -- a job could previously
+    # list tm_relax fifty times at up to 30 min per candidate.
+    raw = rt.get('engine_portfolio', d)
+    items = [str(x) for x in raw] if isinstance(raw, (list, tuple)) else [x.strip() for x in str(raw).split(',')]
+    out = []
+    for e in items:
+        if e in _ENGINES and e not in out: out.append(e)
+    return ','.join(out[:4])
+
+def build_cfg(rt, llm, tm_exe):
+    # v1.10.1 (#43): ONE source of defaults. The old constructor
+    # hardcoded a subset, and the forwarding loop below copied a
+    # plugin DEFAULTS key only if the merged config already contained
+    # it -- so backend jobs silently ran without engine_portfolio
+    # (the shipped default since v1.9.5) and with reroute_accept's
+    # dead 'faults' fallback. Order: plugin DEFAULTS, then the
+    # server-owned keys, then the job's routing values, parsed
+    # defensively (a non-numeric max_passes used to crash the job
+    # before the S6 clamps could drop it).
+    cfg = {}
+    try:
+        for _p in (find_plugin(), os.path.join(find_plugin(), 'ai_router')):
+            if _p not in sys.path: sys.path.insert(0, _p)
+        import config as _cm
+        cfg.update(_cm.DEFAULTS)
+    except Exception:
+        pass
+    cfg.update({'endpoint': llm.get('endpoint', ''), 'model': llm.get('model', ''),
+                'api_key': llm.get('api_key', ''), 'tracemaker_path': tm_exe, 'kicad_cli': 'kicad-cli'})
+    cfg['mode'] = rt.get('mode', cfg.get('mode', 'auto'))
+    cfg['max_passes'] = _int_or(rt, 'max_passes', cfg.get('max_passes', 4))
+    cfg['work'] = _int_or(rt, 'work', cfg.get('work', 20000000))
+    cfg['no_tracks_on'] = rt.get('no_tracks_on', cfg.get('no_tracks_on', 'In1.Cu'))
+    cfg['strip_existing'] = bool(rt.get('strip_existing', cfg.get('strip_existing', True)))
+    for _k, _d in (('finish_signal_cap', 8), ('finish_pour_cap', 4), ('long_finish_cap', 6), ('ilp_repair_cap', 0)):
+        cfg[_k] = _int_or(rt, _k, cfg.get(_k, _d))
+    cfg['attempt_select'] = bool(rt.get('attempt_select', cfg.get('attempt_select', False)))
+    cfg['layer_law_policy'] = rt.get('layer_law_policy', cfg.get('layer_law_policy', 'auto'))
+    cfg['first_nets_policy'] = rt.get('first_nets_policy', cfg.get('first_nets_policy', 'auto'))
+    cfg['engine_portfolio'] = _engines_or(rt, cfg.get('engine_portfolio', ''))
+    return cfg
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', required=True)
@@ -42,17 +91,7 @@ def main():
         kc = subprocess.run(['kicad-cli', '--version'], capture_output=True, text=True, timeout=30).stdout.strip()
         # pinning: the resolved absolute path + versions are fixed for this run
         write_status(tracemaker_version=tm_ver, tracemaker_path=tm_exe, kicad_cli=kc)
-        cfg = {'endpoint': llm.get('endpoint', ''), 'model': llm.get('model', ''),
-               'api_key': llm.get('api_key', ''), 'tracemaker_path': tm_exe,
-               'mode': rt.get('mode', 'auto'), 'max_passes': int(rt.get('max_passes', 4)),
-               'work': int(rt.get('work', 20000000)), 'no_tracks_on': rt.get('no_tracks_on', 'In1.Cu'),
-               'strip_existing': bool(rt.get('strip_existing', True)), 'kicad_cli': 'kicad-cli',
-               'finish_signal_cap': int(rt.get('finish_signal_cap', 8)),
-               'finish_pour_cap': int(rt.get('finish_pour_cap', 4)),
-               'long_finish_cap': int(rt.get('long_finish_cap', 6)),
-               'ilp_repair_cap': int(rt.get('ilp_repair_cap', 0)), 'attempt_select': bool(rt.get('attempt_select', False)),
-               'layer_law_policy': rt.get('layer_law_policy', 'auto'),
-               'first_nets_policy': rt.get('first_nets_policy', 'auto')}
+        cfg = build_cfg(rt, llm, tm_exe)
         sys.path.insert(0, find_plugin())
         sys.path.insert(0, os.path.join(find_plugin(), 'ai_router'))
         # v1.8.2 (#20): forward any other key the plugin's config

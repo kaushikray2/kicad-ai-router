@@ -23,13 +23,13 @@
       "url": "https://www.siliconbrane.com",
       "versions": [
         {
-          "version": "1.10.0",
+          "version": "1.10.1",
           "status": "stable",
           "kicad_version": "10.0",
-          "download_sha256": "159eaea7ee1f43178daacba7ea81034ee8fb225218bd2b545eaadb82dfaf8ce7",
-          "download_size": 64932,
-          "download_url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/ai-router-1.10.0.zip",
-          "install_size": 223492
+          "download_sha256": "c7ca30657220d993279554a5a35c6adff03593979bcde0cd182f34d6484b560c",
+          "download_size": 67326,
+          "download_url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/ai-router-1.10.1.zip",
+          "install_size": 230906
         }
       ]
     }

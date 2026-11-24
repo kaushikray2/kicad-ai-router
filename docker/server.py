@@ -8,7 +8,7 @@ import tarfile, threading, time, urllib.request, uuid, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-BACKEND_VERSION = '1.10.0'
+BACKEND_VERSION = '1.10.1'
 SCHEMA_VERSION = 1
 DATA = os.environ.get('AIR_DATA_DIR', '/data')
 PORT = int(os.environ.get('AIR_PORT', '8731'))
@@ -85,7 +85,7 @@ def tm_smoke(exe):
     if p.returncode != 0 or not m: raise RuntimeError('tracemaker version failed: %s' % (p.stdout + p.stderr)[:200])
     return m.group(1)
 
-def tm_install_from_archive(archive_path, sha):
+def tm_install_from_archive(archive_path, sha, expected=None):
     staging = os.path.join(tm_root(), '.staging-%s' % uuid.uuid4().hex[:8])
     os.makedirs(staging)
     try:
@@ -100,9 +100,22 @@ def tm_install_from_archive(archive_path, sha):
         if not exe: raise RuntimeError('archive contains no bin/tracemaker')
         os.chmod(exe, 0o755)
         version = tm_smoke(exe)
+        # v1.10.1 (#44): the binary must agree with the layout version
+        # that the pre-install TOFU check used -- before, the version
+        # came from attacker-controlled file names for the check but
+        # from the binary for the install, and the install (which
+        # executes the binary and replaces the trusted tree) happened
+        # BEFORE the hash comparison for the reported version.
+        if expected and version != expected:
+            raise RuntimeError('archive layout version %s != binary version %s -- refused before install' % (expected, version))
         root_dir = os.path.dirname(os.path.dirname(exe))
         dest = os.path.join(tm_root(), version)
-        if os.path.exists(dest): shutil.rmtree(dest)
+        # v1.10.1 (#44): never delete the trusted install -- move it
+        # aside for rollback; the new tree takes its place only after
+        # every check above has passed.
+        if os.path.exists(dest):
+            bak = dest + '.bak-' + time.strftime('%Y%m%d-%H%M%S')
+            shutil.move(dest, bak)
         shutil.move(root_dir, dest)
         return version
     finally:
@@ -145,10 +158,11 @@ def tm_update(url):
         # by definition; a KNOWN version with a different hash is
         # refused here, untouched.
         ver_hint = tm_archive_version(tmp)
+        if not ver_hint: raise RuntimeError('archive layout names no TraceMaker version -- refused (TOFU: the version must be readable from the layout, without executing the archive)')  # v1.10.1 (#44)
         known0 = (load_config().get('tracemaker') or {}).get('sha256') or {}
         if ver_hint and ver_hint in known0 and known0[ver_hint] != sha:
             raise RuntimeError('TOFU mismatch for %s: recorded %s, downloaded %s -- refused before install' % (ver_hint, known0[ver_hint][:12], sha[:12]))
-        version = tm_install_from_archive(tmp, sha)
+        version = tm_install_from_archive(tmp, sha, ver_hint)
         with _lock:
             cfg = load_config()
             known = cfg.setdefault('tracemaker', {}).setdefault('sha256', {})
@@ -272,6 +286,13 @@ def selftest_status():
             g = (last[b].get('gate') or {})
             cur = {'unconnected_total': g.get('unconnected_total'), 'split_nets': len(g.get('split_nets') or []), 'banned_layer_tracks': g.get('banned_layer_tracks'), 'copper_violations': g.get('copper_violations')}  # v1.9 (M11): copper joins the recorded baseline
             row['last'] = cur
+            try:  # v1.10.1 (#43): flag self-test jobs whose recorded cfg_effective lacks the shipped defaults (pre-v1.10.1 backends ran self-tests without the engine portfolio)
+                _sj = json.load(open(os.path.join(DATA, 'runs', last[b]['id'], 'status.json')))
+                _ce = _sj.get('cfg_effective') or {}
+                if _ce and 'engine_portfolio' not in _ce:
+                    row['defaults_warning'] = 'job ran without the plugin defaults (no engine_portfolio in cfg_effective)'
+            except Exception:
+                pass
             if b in base:
                 # TraceMaker is nondeterministic (seeded variant racing),
                 # so exact equality is the wrong test for variance-prone

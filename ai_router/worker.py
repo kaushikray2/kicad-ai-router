@@ -88,6 +88,14 @@ def cmd_summary(board_path, fast=False):
     # this into banned_layer_tracks -- DRC alone cannot see a track
     # drawn on a plane layer (the pour refills around it).
     _stack = copper_stack(b); _lidx = {lay: k for k, lay in enumerate(_stack)}
+    # v1.10.1 (#49): alias map (board layer name / canonical name,
+    # lowercased -> canonical) so the pipeline resolves the layer law
+    # ONCE against this board instead of each consumer string-matching
+    # the config and silently dropping non-canonical names.
+    layer_aliases = {}
+    for _k, _lid in enumerate(_stack):
+        layer_aliases[b.GetLayerName(_lid).strip().lower()] = copper_layers[_k]
+        layer_aliases[copper_layers[_k].lower()] = copper_layers[_k]
     tracks_by_layer = {}
     tracks_by_layer_net = {}
     for t in tracks:
@@ -118,7 +126,7 @@ def cmd_summary(board_path, fast=False):
     if fast:
         # v1.9.6 (#40): gate calls discard the congestion features --
         # skip the O(N^2) MST crossings + RUDY computation entirely.
-        return {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers,
+        return {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers, 'layer_aliases': layer_aliases,
                 'crossings': None, 'rudy_peak': None, 'rudy_p95': None,
                 'tracks': len([t for t in tracks if t.Type() != pcbnew.PCB_VIA_T]),
                 'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
@@ -169,7 +177,7 @@ def cmd_summary(board_path, fast=False):
             j0 = max(0, int((y0 - gy0) / max(gy1 - gy0, 1e-6) * 31)); j1 = min(31, int((y1 - gy0) / max(gy1 - gy0, 1e-6) * 31))
             grid[j0:j1 + 1, i0:i1 + 1] += dens
         rudy_peak = round(float(grid.max()), 3); rudy_p95 = round(float(np.percentile(grid, 95)), 3)
-    return {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers,
+    return {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers, 'layer_aliases': layer_aliases,
             'crossings': crossings, 'rudy_peak': rudy_peak, 'rudy_p95': rudy_p95,
             'tracks': len([t for t in tracks if t.Type() != pcbnew.PCB_VIA_T]),
             'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
@@ -2040,7 +2048,26 @@ def _bridge_island(b, conn, netname, pad):
     # skip the grid build entirely (dense boards carry many host-less
     # floating pads; building a grid per hopeless pad dominated
     # cmd_stitch's runtime there).
-    if min(pt_poly_dist(px, py, _pts) for (_l, _ps, _oi, _pts) in goals) > 8.0: return False
+    def _goal_dist(_l, _ps, _oi, _pts):
+        # v1.10.1 (#47): the pre-filter measured distance to the OUTER
+        # RING only, so a pad sitting over its own net's inner plane
+        # (true distance 0) or inside a pour cutout (~1 mm to the hole
+        # edge) was rejected whenever the board-edge outline was more
+        # than 8 mm away -- the 1-via plane drop #12 built in v1.8.1
+        # never got to run on exactly the pads it was built for.
+        try:
+            if _ps.Contains(pcbnew.VECTOR2I(nm(px), nm(py)), _oi): return 0.0
+        except Exception: pass
+        d = pt_poly_dist(px, py, _pts)
+        try:
+            _o = _ps.Outline(_oi)
+            for _h in range(_o.HoleCount()):
+                _hc = _o.Hole(_h)
+                _hpts = [(mm(_hc.CPoint(k).x), mm(_hc.CPoint(k).y)) for k in range(_hc.PointCount())]
+                if len(_hpts) >= 2: d = min(d, pt_poly_dist(px, py, _hpts))
+        except Exception: pass
+        return d
+    if min(_goal_dist(_l, _ps, _oi, _pts) for (_l, _ps, _oi, _pts) in goals) > 8.0: return False
     def padset():
         return set((round(mm(it.GetPosition().x), 2), round(mm(it.GetPosition().y), 2)) for it in conn.GetConnectedItems(pad) if it.Type() == pcbnew.PCB_PAD_T)
     before = padset()
@@ -2126,16 +2153,43 @@ def cmd_lock_window(board_path, out_path, net, margin=6.0, fx=None, fy=None, tx=
                     p = pad.GetPosition(); xs.append(pcbnew.ToMM(p.x)); ys.append(pcbnew.ToMM(p.y))
     if not xs: return {'status': 'error', 'detail': 'net has no geometry'}
     win = (min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
-    locked = unlocked = 0
+    # v1.10.1 (#50): record every item's original lock state (restored
+    # on the re-route output by cmd_restore_locks) and NEVER unlock an
+    # item the user locked -- with strip_existing=False the old loop
+    # unlocked the user's own locked copper inside the window and
+    # --reroute then ripped it.
+    states = {}
+    for t in list(b.GetTracks()):
+        try: states[str(t.m_Uuid)] = bool(t.IsLocked())
+        except Exception: pass
+    locked = unlocked = kept = 0
     for t in list(b.GetTracks()):
         bb = t.GetBoundingBox()
         l, tp, r, bt = pcbnew.ToMM(bb.GetLeft()), pcbnew.ToMM(bb.GetTop()), pcbnew.ToMM(bb.GetRight()), pcbnew.ToMM(bb.GetBottom())
         inside = not (r < win[0] or l > win[2] or bt < win[1] or tp > win[3])
+        if inside and t.IsLocked(): kept += 1; continue
         t.SetLocked(not inside)
         if inside: unlocked += 1
         else: locked += 1
     pcbnew.SaveBoard(out_path, b)
-    return {'status': 'locked', 'window': [round(v, 2) for v in win], 'locked': locked, 'unlocked': unlocked}
+    locks_file = out_path + '.locks.json'
+    with open(locks_file, 'w') as f: json.dump(states, f)
+    return {'status': 'locked', 'window': [round(v, 2) for v in win], 'locked': locked, 'unlocked': unlocked, 'kept_user_locked': kept, 'locks_file': locks_file}
+
+def cmd_restore_locks(board_path, out_path, locks_file):
+    # v1.10.1 (#50): reapply the lock states cmd_lock_window recorded,
+    # by UUID, to a re-route output -- the delivered board must not
+    # arrive with nearly every track locked.
+    with open(locks_file) as f: states = json.load(f)
+    b = pcbnew.LoadBoard(board_path)
+    n = 0
+    for t in list(b.GetTracks()):
+        try: u = str(t.m_Uuid)
+        except Exception: continue
+        if u in states and bool(t.IsLocked()) != states[u]:
+            t.SetLocked(states[u]); n += 1
+    pcbnew.SaveBoard(out_path, b)
+    return {'status': 'restored', 'changed': n}
 
 def cmd_stitch(board_path, out_path):
     b = pcbnew.LoadBoard(board_path)
@@ -2522,6 +2576,21 @@ def _freerouting_bin():
     return None
 
 
+def _run_group(cmd, timeout, cwd=None):
+    # v1.10.1 (#55): engines run in their own process group so a
+    # timeout kills the whole tree (the Freerouting JVM, KRT's native
+    # children) instead of orphaning them in the container.
+    import signal as _signal
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd, start_new_session=True)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try: os.killpg(os.getpgid(p.pid), _signal.SIGKILL)
+        except Exception: pass
+        out, err = p.communicate()
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
 def cmd_freeroute(board_path, out_path, passes=50):
     # v1.9.5 (Phase 1.2): Freerouting 2.5.0 as a portfolio engine --
     # Specctra DSN out, the JVM distribution routes (the native CLI
@@ -2540,8 +2609,7 @@ def cmd_freeroute(board_path, out_path, passes=50):
         shutil.rmtree(d, ignore_errors=True)
         return {'status': 'dsn_failed'}
     try:
-        p = subprocess.run([launcher, '-de', dsn, '-do', ses, '-mp', str(int(passes)), '-mt', '2'],
-                           capture_output=True, text=True, timeout=2400)
+        p = _run_group([launcher, '-de', dsn, '-do', ses, '-mp', str(int(passes)), '-mt', '2'], 2400)
         tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
     except Exception as e:
         shutil.rmtree(d, ignore_errors=True)
@@ -2580,8 +2648,7 @@ def cmd_krt_route(board_path, out_path):
     if os.path.exists(dru):
         shutil.copy(dru, os.path.join(d, 'in.kicad_dru'))  # v1.9.6 (#40): cmd_freeroute parity
     try:
-        p = subprocess.run([sys.executable, auto, inp, out_path],
-                           capture_output=True, text=True, timeout=3600, cwd=d)
+        p = _run_group([sys.executable, auto, inp, out_path], 3600, cwd=d)
         tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
     except Exception as e:
         shutil.rmtree(d, ignore_errors=True)
@@ -2609,6 +2676,7 @@ def main():
     ap.add_argument('--attempt-select', action='store_true')
     ap.add_argument('--fast', action='store_true')
     ap.add_argument('--margin', type=float, default=6.0)
+    ap.add_argument('--locks')
     ap.add_argument('--fx', type=float); ap.add_argument('--fy', type=float)
     ap.add_argument('--tx', type=float); ap.add_argument('--ty', type=float)
     ap.add_argument('--frm')
@@ -2641,6 +2709,7 @@ def main():
             ls, x, y = s.split(':'); return (tuple(int(v) for v in ls.split(',')), float(x), float(y))
         res = cmd_heal_attempt(a.board, a.out, a.net, _pt(a.frm), _pt(a.dst))
     elif a.cmd == 'lock_window': res = cmd_lock_window(a.board, a.out, a.net, margin=a.margin, fx=a.fx, fy=a.fy, tx=a.tx, ty=a.ty)
+    elif a.cmd == 'restore_locks': res = cmd_restore_locks(a.board, a.out, a.locks)
     elif a.cmd == 'freeroute': res = cmd_freeroute(a.board, a.out, passes=a.passes)
     elif a.cmd == 'krt_route': res = cmd_krt_route(a.board, a.out)
     elif a.cmd == 'prune': res = cmd_prune(a.board, a.out)

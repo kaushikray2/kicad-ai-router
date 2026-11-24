@@ -13,6 +13,10 @@ try:
     from .pipeline import Pipeline, fault_count
 except ImportError:
     from pipeline import Pipeline, fault_count
+try:
+    from config import DEFAULTS as _CFG_DEFAULTS
+except Exception:
+    _CFG_DEFAULTS = {}
 
 PLAYBOOK = """You are the strategy layer of a PCB routing pipeline. Read the
 board's actual stackup from board_summary (copper_layers, pour_nets): on the
@@ -167,9 +171,17 @@ def run_auto(cfg, pipe, log):
     # grid: policy total 309 vs A-fixed 334 / B-fixed 340 (oracle 290),
     # escalating on 21 of 54 boards. An explicit non-default law or
     # layer_law_policy='off' disables it.
-    _law = {x.strip() for x in str(cfg.get('no_tracks_on') or 'In1.Cu').split(',') if x.strip()}  # v1.9 (M4): set compare -- the old string equality misread 'In1.Cu ' / spacing variants as a non-default law and skipped the policy
+    _law_raw = [x.strip() for x in str(cfg.get('no_tracks_on') or 'In1.Cu').split(',') if x.strip()]  # v1.9 (M4): set compare -- the old string equality misread 'In1.Cu ' / spacing variants as a non-default law and skipped the policy
+    _law = set(_law_raw); _summ0 = None
+    if cfg.get('layer_law_policy', 'auto') == 'auto':
+        # v1.10.1 (#49): resolve the law against the board's own layer
+        # names before comparing -- 'GND' or 'in1.cu' in the config IS
+        # the default law on a board that names In1.Cu 'GND'.
+        _summ0 = pipe.tool_board_summary()
+        _aliases = _summ0.get('layer_aliases') or {}
+        _law = {_aliases.get(x.lower(), x) for x in _law_raw}
     if cfg.get('layer_law_policy', 'auto') == 'auto' and _law == {'In1.Cu'}:
-        summ = pipe.tool_board_summary()
+        summ = _summ0
         layers = summ.get('copper_layers') or []
         pour_layers = summ.get('pour_layers') or {}
         if len(layers) >= 4 and any('In2.Cu' in (ls or []) for ls in pour_layers.values()):
@@ -216,7 +228,7 @@ def _run_auto_once(cfg, pipe, log):
     best = None
     prev_sig = None
     base_gate = pipe.tool_gate(pipe.base)  # v1.9.6 (#37): the portfolio skip guard needs the base fault count
-    engines = [e.strip() for e in str(cfg.get('engine_portfolio', '')).split(',') if e.strip()]
+    engines = [e.strip() for e in str(cfg.get('engine_portfolio', _CFG_DEFAULTS.get('engine_portfolio', ''))).split(',') if e.strip()]
     if engines:
         try:
             pg = pipe.tool_portfolio(engines)

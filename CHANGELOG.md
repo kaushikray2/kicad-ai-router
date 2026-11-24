@@ -444,6 +444,69 @@ regression during development was a phantom baseline (v1.2.5
 control run reproduced the identical 15). Fixtures: heal bridges
 2, finish /RAM_A14 rolled back, stitch clean no-op.
 
+## v1.10.1 -- 2026-11-24
+
+Hygiene batch from the fourteenth external review (a follow-up audit of
+v1.8.0..v1.9.6; findings filed as issues #43-#60, each verified against
+the code before filing). Ten are fixed here; the engine-fairness items
+(#45, #46, #51, #52, #57, #58, #60) stay open as their own batch.
+
+- #43 Backend jobs now build their config from the plugin DEFAULTS --
+  one source of defaults. Since v1.9.5, backend runs (self-tests
+  included) silently ran WITHOUT the default engine portfolio, and
+  with reroute_accept's dead 'faults' fallback, because the server
+  template, the dialog overrides and run_job's forwarding never
+  carried the keys. cfg_effective records the full effective config,
+  and the self-test status flags jobs recorded without the defaults.
+  Verified live: self-test jobs on the new code record
+  engine_portfolio=tm_relax, reroute_accept=connectivity.
+- #44 TraceMaker TOFU hardened. Version-less archives are refused;
+  the binary's reported version must equal the layout version the
+  pre-install hash check used (before, a crafted archive replaced the
+  trusted install BEFORE the mismatch raised -- reproduced against
+  the old code with the reviewer's recipe; the patched code refuses
+  before install with the trusted tree intact); the existing install
+  is moved aside for rollback, never deleted first.
+- #47 The stitch-bridge 8 mm pre-filter measured distance to a goal
+  polygon's OUTER RING only, rejecting a pad sitting over its own
+  net's inner plane (true distance 0) whenever the plane outline was
+  >8 mm away -- the exact case the v1.8.1 1-via drop was built for.
+  The filter is now containment- and hole-aware. Fixture test: the
+  old worker returns False on the synthetic board, the new one
+  bridges (tests/test_bridge_filter.py).
+- #48 tool_route tags the stuck corridor with the route OUTPUT board;
+  v1.9.6's #38 fix tagged the pre-route board, discarding valid
+  corridors and risking a mismatched one after a restore.
+- #49 Layer-law names are resolved ONCE per board: the worker summary
+  carries a layer-alias map (board names + canonical, case-insensitive)
+  and TraceMaker's command line, the gate census and the layer-law
+  policy all consume the resolved canonical names. A name matching
+  no layer on the board is vacuous there -- the standing server
+  config names the 4-layer GND plane, and a 2-layer board must not
+  fail for it -- and every consumer logs it loudly, instead of the
+  old behaviour where three of the four silently dropped it (a ban
+  written 'GND' or 'in1.cu' previously banned the layer only in the
+  finisher).
+- #50 A windowed re-route no longer leaves its lock flags in the
+  delivered board: cmd_lock_window records original states by UUID
+  and never unlocks user-locked copper; the output's locks are
+  restored before gating.
+- #53 The backend image pins the KiCadRoutingTools native router to
+  release v0.24.2 (it was fetched from the LATEST release against a
+  pinned Python commit, unhashed) and shapely to 2.2.0.
+- #55 Engine subprocesses run in their own process groups (a timeout
+  kills the tree, not just the worker's direct child), and the
+  pipeline's worker timeout for engine commands (3900 s) now exceeds
+  the engines' own timeouts (2400/3600 s) instead of firing first.
+- #56 engine_portfolio job overrides are whitelisted, de-duplicated
+  and capped at 4; non-numeric routing values are dropped at config
+  construction instead of crashing the job before the clamps run.
+- #59 _accept_key treats a missing unconnected count as worst, not
+  perfect (the mirror image of C1).
+- #54 First committed test suite (tests/): layer-name resolution,
+  the backend config build, the stuck-corridor tag (the real
+  tool_route against stubs), and the stitch-bridge fixture.
+
 ## v1.10.0 (2026-11-24) -- Phase 2 begins: fault census + exact finisher checking (issue #41)
 
 Phase 2 opened with a measurement, not a mechanism. The P2.0 fault census decomposed 60 production run ledgers (all 43 copper-only PCBWorld-Bench losses, the one connectivity loss, and 16 clean controls) at three gates -- base (the stripped input), routed (the restored best), and final (the delivered board). The finding: the pipeline added zero net copper faults on every sampled job. The 43 losses' 416 faults were already present on the stripped inputs and are placement geometry that routing cannot change (solder-mask bridges 221, copper edge clearance 137, annular width 56, drill out of range 2). Re-scored against each board's own base (connected and no dirtier than the base), the bench reads easy 1.00, medium 1.00, hard 0.90, against the raw clean-pass 0.68 / 0.50 / 0.30 -- so the v1.9.5 entry's attribution of clean-pass losses to the repair layer was wrong, and this entry corrects it. Router-owned copper is real but located elsewhere: re-route trades, engine-stage dangling tracks, and the graze band below.
