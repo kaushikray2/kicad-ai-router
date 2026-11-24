@@ -92,3 +92,20 @@ def test_impedance_step2_fields():
             raise AssertionError('expected MarkingsError for %r' % (data,))
         except markings.MarkingsError:
             pass
+
+
+def test_differential_section():
+    m = markings.validate({'version': 1, 'differential': [
+        {'name': 'USB', 'nets': ['USB_P', 'USB_N'], 'zdiff_ohm': 90}]})
+    assert m.differential[0]['zdiff_ohm'] == 90.0
+    assert m.differential_legs() == ['USB_P', 'USB_N']
+    for bad in ({'name': 'X', 'nets': ['A'], 'zdiff_ohm': 90},
+                {'name': 'X', 'nets': ['A', 'A'], 'zdiff_ohm': 90},
+                {'name': 'X', 'nets': ['A', 'B'], 'zdiff_ohm': -1},
+                {'nets': ['A', 'B'], 'zdiff_ohm': 90},
+                {'name': 'X', 'nets': ['A', 'B'], 'zdiff_ohm': 90, 'gap_mm': 0}):
+        try:
+            markings.validate({'version': 1, 'differential': [bad]})
+        except markings.MarkingsError:
+            continue
+        raise AssertionError('accepted bad differential entry: %r' % (bad,))

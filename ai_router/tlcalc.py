@@ -561,6 +561,104 @@ def solve_width(z0_of_w, target, lo=0.005, hi=25.0, tol=1e-4):
     return 0.5 * (lo + hi)
 
 
+def _bisect(fn, target, lo, hi, tol=1e-4):
+    """Bisect a monotonic fn for target on [lo, hi]; direction is read
+    off the endpoints.  None when the target is out of range.
+    Endpoints outside the model's domain (the IPC forms raise there)
+    shrink the bracket inward before giving up."""
+    def _safe(x):
+        try:
+            return fn(x)
+        except Exception:
+            return None
+    f_lo = _safe(lo)
+    for _ in range(40):
+        if f_lo is not None:
+            break
+        lo = lo + (hi - lo) * 0.25
+        f_lo = _safe(lo)
+    f_hi = _safe(hi)
+    for _ in range(40):
+        if f_hi is not None:
+            break
+        hi = hi - (hi - lo) * 0.25
+        f_hi = _safe(hi)
+    if f_lo is None or f_hi is None or min(f_lo, f_hi) > target or target > max(f_lo, f_hi):
+        return None
+    increasing = f_hi > f_lo
+    for _ in range(200):
+        if hi - lo < tol:
+            break
+        mid = 0.5 * (lo + hi)
+        fm = _safe(mid)
+        if fm is None:
+            return None
+        if (fm > target) == increasing:
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+def solve_diff_geometry(diff_of, single_of, zdiff_target, gap_mm=None, width_mm=None):
+    """Solve a differential pair's (width, gap) for one layer.
+
+    diff_of(w, s) -> TLResult with zdiff; single_of(w) -> TLResult with
+    z0.  Designer pins win: with gap_mm given, width is solved at that
+    gap; with width_mm given, gap is solved at that width; with both,
+    the geometry is evaluated as declared; with neither, each leg is
+    first solved along the gap == width line (the usual default
+    geometry rule; a designer who wants a different coupling regime
+    pins the gap or the width instead).  Returns a dict with the
+    geometry and the impedances AT
+    the solution, or {'error': ...} -- never an extrapolated guess.
+    """
+    if gap_mm is not None and width_mm is not None:
+        w, s, mode = width_mm, gap_mm, 'as_declared'
+    elif gap_mm is not None:
+        s = gap_mm
+        w = _bisect(lambda ww: diff_of(ww, s).zdiff, zdiff_target, 0.02, 5.0)
+        mode = 'width_at_declared_gap'
+        if w is None:
+            return {'error': 'zdiff unreachable at the declared gap'}
+    elif width_mm is not None:
+        w = width_mm
+        s = _bisect(lambda ss: diff_of(w, ss).zdiff, zdiff_target, 0.02, 5.0)
+        mode = 'gap_at_declared_width'
+        if s is None:
+            return {'error': 'zdiff unreachable at the declared width'}
+    else:
+        # zdiff along gap == width is NOT monotonic for stripline (it
+        # rises, then falls as the widening gap decouples the pair), so
+        # scan for the first crossing and bisect inside that bracket.
+        w = None
+        prev = None
+        grid = [0.03 * (1.12 ** k) for k in range(60)]
+        for gx in grid:
+            try:
+                gz = diff_of(gx, gx).zdiff
+            except Exception:
+                gz = None
+            if gz is not None and prev is not None:
+                (px, pz) = prev
+                if (pz - zdiff_target) * (gz - zdiff_target) <= 0 and pz != gz:
+                    w = _bisect(lambda ww: diff_of(ww, ww).zdiff, zdiff_target, px, gx)
+                    if w is not None:
+                        break
+            if gz is not None:
+                prev = (gx, gz)
+        if w is None:
+            return {'error': 'zdiff unreachable along gap == width'}
+        s = w
+        mode = 'gap_equals_width'
+    res = diff_of(w, s)
+    return {'width_mm': round(w, 4), 'gap_mm': round(s, 4), 'mode': mode,
+            'zdiff': round(res.zdiff, 3), 'zodd': round(res.zodd, 3),
+            'zeven': round(res.zeven, 3), 'z0_single': round(res.z0, 3),
+            'eps_eff': round(res.eps_eff, 4), 'in_range': res.in_range,
+            'flags': list(res.flags)}
+
+
 def band_of(f_hz):
     """Annex frequency bands.  Above 6 GHz the tool makes no validation
     claims (NO-11): callers must refuse, not extrapolate."""

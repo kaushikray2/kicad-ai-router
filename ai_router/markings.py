@@ -38,7 +38,7 @@ import os
 
 SCHEMA_VERSION = 1
 SIDECAR_SUFFIX = '.ai-router-markings.json'
-SECTIONS = ('impedance', 'power', 'length_groups', 'hv_domains', 'quiet')
+SECTIONS = ('impedance', 'differential', 'power', 'length_groups', 'hv_domains', 'quiet')
 
 
 class MarkingsError(ValueError):
@@ -133,6 +133,13 @@ class Markings:
     def impedance_nets(self):
         return [e['net'] for e in self.impedance]
 
+    @property
+    def differential(self):
+        return self.data.get('differential', [])
+
+    def differential_legs(self):
+        return [n for p in self.differential for n in p['nets']]
+
     def impedance_for(self, net):
         for e in self.impedance:
             if e['net'] == net:
@@ -161,11 +168,53 @@ def validate(data):
             raise MarkingsError('"%s" must be a list' % name)
         if name == 'impedance':
             out[name] = [_check_impedance_entry(e, i) for i, e in enumerate(entries)]
+        elif name == 'differential':
+            out[name] = [_check_differential_entry(e, i) for i, e in enumerate(entries)]
         else:
             for e in entries:
                 if not isinstance(e, dict):
                     raise MarkingsError('"%s" entries must be objects' % name)
             out[name] = entries
+    return out
+
+
+def _check_differential_entry(entry, idx):
+    # #67 Step 3: a differential pair marking.  The pair is two nets and
+    # a target differential impedance; width and gap are solved from
+    # the stackup unless the designer pins one of them.  Length
+    # matching is NOT part of this section (it is a separate item).
+    where = 'differential[%d]' % idx
+    if not isinstance(entry, dict):
+        raise MarkingsError('%s: entry must be an object' % where)
+    name = entry.get('name')
+    if not isinstance(name, str) or not name:
+        raise MarkingsError('%s: "name" must be a non-empty string' % where)
+    nets = entry.get('nets')
+    if (not isinstance(nets, list) or len(nets) != 2
+            or not all(isinstance(n, str) and n for n in nets)
+            or nets[0] == nets[1]):
+        raise MarkingsError('%s: "nets" must be two distinct net names' % where)
+    zd = entry.get('zdiff_ohm')
+    if not isinstance(zd, (int, float)) or isinstance(zd, bool) or zd <= 0:
+        raise MarkingsError('%s: "zdiff_ohm" must be a positive number' % where)
+    out = dict(entry)
+    out['zdiff_ohm'] = float(zd)
+    for key in ('freq_hz', 'gap_mm', 'width_mm'):
+        if entry.get(key) is not None:
+            v = entry[key]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                raise MarkingsError('%s: "%s" must be a positive number' % (where, key))
+            out[key] = float(v)
+    if entry.get('dk') is not None:
+        dk = entry['dk']
+        if not isinstance(dk, (int, float)) or isinstance(dk, bool) or dk < 1.0:
+            raise MarkingsError('%s: "dk" must be a number >= 1' % where)
+        out['dk'] = float(dk)
+    if entry.get('layers') is not None:
+        layers = entry['layers']
+        if (not isinstance(layers, list)
+                or not all(isinstance(x, str) for x in layers)):
+            raise MarkingsError('%s: "layers" must be a list of layer names' % where)
     return out
 
 
