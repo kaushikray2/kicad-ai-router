@@ -362,6 +362,29 @@ reference document; this entry is its plan shape.
   build).** Where marks, currents, mode tags, and corner settings
   live — sidecar vs project file — decides whether they travel
   when a project is shared. One answer for both P2.8 and P2.9.
+- **Spike — schematic extraction (before Step 1).** Step 1's
+  tree presupposes an input nothing in the stack has ever read:
+  a schematic. This time-boxed probe proves or breaks that
+  input on real schematics (the Nomad's, plus two or three from
+  the open-schematics corpus) before the WCCA core is built —
+  or estimated — on top of it. Three questions: (1) does
+  kicad-cli's netlist export carry per-pin electrical types
+  (they live in the symbol definitions), or must the .kicad_sch
+  be parsed directly — either route is acceptable, the spike
+  establishes which is real; (2) does the tree skeleton
+  (sources / loads / conduits per power net, hierarchical
+  sheets instance-counted) reconstruct correctly, hand-checked
+  end to end on one real board; (3) what breaks — power
+  symbols (a rail's root must resolve to the regulator or
+  connector feeding it, or be recorded honestly as an external
+  input), pins typed passive/unspecified in real libraries,
+  multi-unit parts. Exit: extraction proven on the test set
+  with one hand-verified tree, and Step 1 proceeds as written.
+  Redirect: if pin types prove too sparse in practice, node
+  types become user-declared in the marking step (the authority
+  order already puts user values first) and Step 1 is
+  re-scoped on that basis — the spike's output is the verdict,
+  not code we keep.
 - **Step 1 — power-tree WCCA core** (pure, unit-tested). The
   tree is built from the schematic's pin electrical types
   (power_out = source, power_in = load, the rest conduits),
