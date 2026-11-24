@@ -3381,6 +3381,108 @@ def cmd_rf_fence(board_path, spec):
 
 
 
+
+def cmd_auditgeom(board_path):
+    # Per-footprint facts for the placement audit (#42): identity,
+    # transform, courtyard bbox, pads, embedded rule-area zones
+    # (absolute outlines) and AIRule* fields; plus board outline
+    # segments for edge-clearance checks.
+    import math as _math
+    b = pcbnew.LoadBoard(board_path)
+    out = {'footprints': [], 'outline_segments': []}
+    for d in b.GetDrawings():
+        if d.GetLayer() != pcbnew.Edge_Cuts:
+            continue
+        try:
+            out['outline_segments'].append(
+                [mm(d.GetStart().x), mm(d.GetStart().y),
+                 mm(d.GetEnd().x), mm(d.GetEnd().y)])
+        except Exception:
+            continue
+    for fp in b.GetFootprints():
+        item = {'ref': fp.GetReference(), 'fpid': fp.GetFPIDAsString(),
+                'value': fp.GetValue(),
+                'x': mm(fp.GetPosition().x), 'y': mm(fp.GetPosition().y),
+                'rot': fp.GetOrientationDegrees(),
+                'pads': [], 'zones': [], 'properties': {}, 'courtyard': None}
+        for name in ('AIRuleDecapMm', 'AIRuleEdgeClearanceMm', 'AIRuleClass'):
+            try:
+                if fp.HasField(name):
+                    item['properties'][name] = fp.GetField(name).GetText()
+            except Exception:
+                pass
+        for p in fp.Pads():
+            item['pads'].append({'num': p.GetNumber(), 'net': p.GetNetname(),
+                                 'x': mm(p.GetPosition().x), 'y': mm(p.GetPosition().y)})
+        try:
+            cy = fp.GetCourtyard(pcbnew.F_CrtYd)
+            if cy and cy.OutlineCount():
+                bb = cy.BBox()
+                item['courtyard'] = [mm(bb.GetLeft()), mm(bb.GetTop()),
+                                     mm(bb.GetRight()), mm(bb.GetBottom())]
+        except Exception:
+            pass
+        if item['courtyard'] is None and item['pads']:
+            xs = [p['x'] for p in item['pads']]
+            ys = [p['y'] for p in item['pads']]
+            item['courtyard'] = [min(xs) - 0.5, min(ys) - 0.5, max(xs) + 0.5, max(ys) + 0.5]
+        for z in fp.Zones():
+            if not z.GetIsRuleArea():
+                continue
+            layers = [b.GetLayerName(lid) for lid in z.GetLayerSet().CuStack()]
+            poly = []
+            ol = z.Outline()
+            if ol and ol.OutlineCount():
+                ch = ol.Outline(0)
+                # a placed footprint reports its zone outlines in
+                # board coordinates already (verified on KiCad 10)
+                for i in range(ch.PointCount()):
+                    poly.append([mm(ch.CPoint(i).x), mm(ch.CPoint(i).y)])
+            item['zones'].append({
+                'layers': layers,
+                'keepout': {'tracks': bool(z.GetDoNotAllowTracks()),
+                            'vias': bool(z.GetDoNotAllowVias()),
+                            'copperpour': bool(z.GetDoNotAllowZoneFills())},
+                'outline': poly})
+        out['footprints'].append(item)
+    return out
+
+
+def cmd_audit_zones(board_path, spec):
+    # Materialise library rule-area zones onto the working copy
+    # (#42): board-level rule areas with the library keepout flags,
+    # recorded with footprint provenance by the caller.
+    b = pcbnew.LoadBoard(board_path)
+    name2lid = {}
+    for lid in range(pcbnew.PCB_LAYER_ID_COUNT):
+        try:
+            name2lid[b.GetLayerName(lid)] = lid
+        except Exception:
+            pass
+    added = []
+    for item in (spec or []):
+        z = pcbnew.ZONE(b)
+        ls = pcbnew.LSET()
+        for ln in item.get('layers') or []:
+            if ln in name2lid:
+                ls.AddLayer(name2lid[ln])
+        z.SetLayerSet(ls)
+        z.SetIsRuleArea(True)
+        ko = item.get('keepout') or {}
+        z.SetDoNotAllowTracks(bool(ko.get('tracks')))
+        z.SetDoNotAllowVias(bool(ko.get('vias')))
+        z.SetDoNotAllowZoneFills(bool(ko.get('copperpour')))
+        out = z.Outline()
+        out.NewOutline()
+        chain = out.Outline(0)
+        for (x, y) in item.get('outline') or []:
+            chain.Append(nm(x), nm(y))
+        b.Add(z)
+        added.append({'ref': item.get('ref'), 'layers': item.get('layers')})
+    if added:
+        pcbnew.SaveBoard(board_path, b)
+    return {'added': added}
+
 def cmd_powergeom(board_path, nets_csv):
     # Per-net copper facts for the power planner (#68 Step 2): tracks,
     # vias, pads (with copper layers) and filled zone outlines.
@@ -3614,6 +3716,9 @@ def main():
         with open(a.spec) as _f: res = cmd_rf_fence(a.board, json.load(_f))
     elif a.cmd == 'smooth': res = cmd_smooth(a.board, a.net)
     elif a.cmd == 'powergeom': res = cmd_powergeom(a.board, a.nets or '')
+    elif a.cmd == 'auditgeom': res = cmd_auditgeom(a.board)
+    elif a.cmd == 'audit_zones':
+        with open(a.spec) as _f: res = cmd_audit_zones(a.board, json.load(_f))
     elif a.cmd == 'power_widen':
         with open(a.spec) as _f: res = cmd_power_widen(a.board, json.load(_f))
     elif a.cmd == 'power_vias':
