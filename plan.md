@@ -216,40 +216,57 @@ below, which stands until the decision is taken.
   for RF nets the three scaling quantities: lambda_g at f,
   W/lambda_g, and estimated loss per unit length at f. The report
   states plainly that the tool verifies geometry and stackup math;
-  it does not predict S11. Exit: computed widths match KiCad PCB
+  it does not predict S11.
+  Verification follows the annex's VER-1..5: the run generates fab
+  notes (coupon request, Dk basis, finish/mask assumptions) with
+  the coupon-is-not-the-feed disclaimer, and a pre-fab checklist
+  gate mirroring vendor layout reviews; kicad-rfsim is a future EM
+  bridge, explicitly not P2.8 scope. Exit: computed widths match KiCad PCB
   Calculator within rounding on a defined-stackup fixture; a marked
   net routes first at the computed width; unmarked nets do not
   regress on the standing A/B set.
 - **Step 2 — EMC treatment + arc smoothing.** Keep marked nets on
   a layer with a solid reference; a gate check that the routed path
-  crosses no split or gap in its reference pour; a GND return via
+  crosses no split or gap in its reference pour — in the annex's
+  form, reference-corridor severance within ±3h of the path is
+  the strongest gate in the set (GATE-1..12); a GND return via
   beside every layer-change via on a marked net, within 2.54 mm,
   tightening to 1.5 mm in the 3–6 GHz band (all pitches in
   in-dielectric wavelength). Via fencing's job is GCPW ground
-  tying only, at lambda_d/10 pitch in the 3–6 GHz band — there
+  tying only, at banded pitch (lambda_d/20 sub-GHz and 1–3 GHz,
+  lambda_d/10 default at 3–6 GHz) — there
   is no measured evidence it improves an open microstrip feed's
   S11, and the tool does not claim it does; no guard traces are
   auto-inserted, and floating copper alongside marked RF nets is
-  gated instead. Vendor-derived feed-structure gates apply at all
+  gated instead (a guard counts only if stitched at both ends). Vendor-derived feed-structure gates apply at all
   bands: vias in the feed gated where avoidable; branches and
-  stubs gated at lambda_g/20; pi-match footprint presence checked
-  (presence, not position); antenna keep-out intrusion checked;
+  stubs gated at lambda_g/20; pi-match presence and the 50-ohm
+  segment between the radio and antenna matches gated (GATE-7;
+  displacement from the correct end is WARN-6) — superseding the
+  refinements comment's presence-only wording; antenna keep-out
+  intrusion checked;
   no thermal-relief spokes on RF-adjacent ground pads.
   Frequency-scaled warnings: feed loss computed and warned
-  against budget (FR-4 ~0.1 dB/cm at 2.4 GHz rising to ~0.2 dB/cm
-  at 5–6 GHz; GNSS/LNA paths warn above 0.2 dB); ENIG on the RF
-  path flagged above 1 GHz (never a precise number); copper
-  roughness warn-only. Arc smoothing is a post-pass on marked
+  against budget (WARN-1..8: warn at 0.3 dB, GNSS/LNA at 0.2 dB,
+  0.5 dB default budget; FR-4 ~0.1 dB/cm at 2.4 GHz rising to
+  ~0.2 dB/cm at 5–6 GHz); ENIG on the RF path flagged above
+  1 GHz, gate-visible at 3–6 GHz or on feeds over 20 mm (never
+  a fail, never a precise number); copper roughness warn-only. Arc smoothing is a post-pass on marked
   nets only (fitted arcs, radius ≥ 3× trace width), accepted
   per net only if the exact gate proves zero clearance
   regression, rolled back otherwise — the engine stays
-  straight-segment. Bends are generation, not gate theatre: the
-  gate checks only acute angles and width changes along the net,
-  and the tool never prints bend return-loss numbers (no
+  straight-segment. Generation follows the annex's GEN-1..8
+  (arcs R ≥ 3W or double-45, constant finished width, no feed vias
+  by default, manufacturer land patterns treated as RF geometry).
+  Bends are generation, not gate theatre: the gate checks only
+  acute angles and width variation along the net (square corners
+  are not a gate failure), and the tool never prints bend
+  return-loss numbers (no
   calibrating measurement exists). Where a mitre is generated
   instead of an arc, it uses the Douville & James optimum,
   M = 52 + 65 · e^(−1.35 · W/h) percent. Explicitly NOT encoded
-  (the research rules them out as over-treatment): back-drilling
+  (the research rules them out as over-treatment; annex
+  NO-1..12): back-drilling
   at <= 6 GHz, bend return-loss quantification,
   roughness-corrected impedance (Huray needs fab foil parameters
   we will not have). Severity follows the comment's banded table
@@ -264,10 +281,18 @@ below, which stands until the decision is taken.
   not set impedance.
 
 **Implementation sketch** (design discussion, 2026-11-24). Design
-reference: issue #67 itself and its "Research refinements
-(2026-11-24)" comment — the distilled RF-methods research pass;
-where the comment conflicts with the ticket's original proposal,
-the comment wins. The plugin
+reference: issue #67 itself, its "Research refinements
+(2026-11-24)" comment, and above all the ticket's design-rules
+annex (two comments on #67, 2026-11-24) — the normative rule
+set for this item, cited below by rule family: CALC-1..6,
+GEN-1..8, GATE-1..12, WARN-1..8, NO-1..12, VER-1..5. Where the
+annex differs in detail from the refinements comment, the annex
+wins. Annex part 1 (CALC / GEN / GATE):
+https://github.com/kaushikray2/kicad-ai-router/issues/67#issuecomment-7144947253
+— part 2 (WARN / NO / VER, vendor quantified values, the banded
+table, sources, open questions):
+https://github.com/kaushikray2/kicad-ai-router/issues/67#issuecomment-7144971963
+The plugin
 encodes the math and the design rules as code; it never embeds the
 standard's text.
 
@@ -278,7 +303,9 @@ standard's text.
   by bisection on width. Every model carries its published validity
   range (e.g. microstrip ±5% only for 0.1 < W/H < 2.0, 1 < er < 15);
   outside range the tool reports it and falls back rather than
-  extrapolating silently. Two corrections are modelled: Dk at the
+  extrapolating silently. Two corrections are modelled (the annex's CALC-1..6 also fix
+  band evaluation — thresholds at band top, loss at band centre
+  — and keep any roughness term out of the calculator): Dk at the
   operating frequency, using the fab's design Dk where published
   (the wrong Dk choice alone is a ~2.5% systematic Z0 error); and
   a solder-mask correction that switches on when dielectric height
