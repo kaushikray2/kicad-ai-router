@@ -134,6 +134,19 @@ reviews (#74-#109) is fixed; #80 closed the range on the
 engineered-nets branch as net-selective Grid enforcement (it
 carries no version of its own until the branch merges).
 
+### Off-plan -- layer cost reaches the decision sites, v1.11.4 (2026-11-25)
+
+#114 and #115 fixed: the v1.11.0 layer-cost feature priced every
+search but no keep/discard decision consulted the price.
+_accept_key and the orchestrator's _final_key now carry
+cost-weighted wirelength as a lexicographic tail (tie-break only;
+constant when uncosted, so uncosted runs are unchanged), the
+worker gate census reports per-layer track length, and every gate
+ledger record carries track_length_by_layer +
+cost_weighted_wirelength_mm (null when uncosted) -- a layer-cost
+run is now measurable from its own ledger. Basis: layer-cost
+research report candidates 1-2 (2026-11-25).
+
 ## In progress
 
 - **P2.1b** (below) is next up, with #63 as its first step. Phase 2E

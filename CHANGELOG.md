@@ -448,6 +448,32 @@ control run reproduced the identical 15). Fixtures: heal bridges
 
 The project is relicensed from MIT to **GPL-3.0-or-later** (SPDX: GPL-3.0-or-later), matching KiCad's own licensing. The change applies from this commit forward; releases through v1.10.2 were distributed under MIT, and copies already out there keep those terms. Sample boards in `docker/selftest/` remain under their original licenses.
 
+## v1.11.4 -- 2026-11-25
+
+- #114: layer cost reached every search site in v1.11.0 but no
+  decision site: _accept_key compared only (faults, unconnected,
+  splits), so a finisher leg could displace priced-layer copper
+  and be kept whenever the gate numbers tied (NAS layer-cost run:
+  engine passes placed In1.Cu segments, the delivered board had
+  none). The worker gate census now reports per-layer track
+  length, tool_gate derives cost-weighted wirelength from the
+  run's resolved spec, and _accept_key carries it as its last
+  term -- tie-break only, never above faults/unconnected/splits.
+  With no layer_cost configured the weighted figure is absent and
+  the term is a constant, so uncosted acceptance is unchanged.
+  Regression: tests/test_accept_cost_tail.py (fails on v1.11.3,
+  passes here).
+- #115: pass/variant selection was cost-blind the same way, and
+  the run ledger recorded the layer_policy but nothing it did.
+  The orchestrator's _final_key gains the same cost tail (its
+  (unconnected, splits, faults) order is unchanged) and the pass
+  loop's two inline copies of that key now call it; every gate
+  record carries track_length_by_layer and
+  cost_weighted_wirelength_mm (null when no layer_cost is in
+  force), so a layer-cost run is measurable from its ledger
+  alone. Regression: tests/test_selection_cost_ledger.py (fails
+  on v1.11.3, passes here).
+
 ## v1.11.3 -- 2026-11-25
 
 - #109: the portfolio silently mis-scored opt-in freerouting/krt
