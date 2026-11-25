@@ -171,6 +171,9 @@ def build_tree(parsed, power_entries, return_net='GND'):
     for e in power_entries or []:
         for sect in ('regulators', 'conduits', 'protective'):
             declared_edge_refs.update((e.get(sect) or {}).keys())
+    declared_reg_refs = set()
+    for e in power_entries or []:
+        declared_reg_refs.update((e.get('regulators') or {}).keys())
     changed = True
     while changed:
         changed = False
@@ -178,12 +181,25 @@ def build_tree(parsed, power_entries, return_net='GND'):
         for n, pins in net_pins.items():
             if n in members or n == return_net:
                 continue
-            refs_here = {r for (r, _p, _t) in pins}
-            if any(r in declared_edge_refs
-                   and any(m in members for m in
-                           {nn for nn, pp in net_pins.items()
-                            if any(rr == r for (rr, _pp, _tt) in pp)})
-                   for r in refs_here):
+            join = False
+            for (r, _p, t) in pins:
+                if r not in declared_edge_refs:
+                    continue
+                # #135 (B10): a declared regulator must not pull a net
+                # into the power set through a NON-power pin (FB, EN,
+                # SW, BOOT, PG) -- those nets are not rails, and once
+                # they joined, the regulator spanned 3+ 'rails' and
+                # got no edge at all.  Declared conduits/protective
+                # keep the old behaviour: their pins are passive by
+                # nature (the unfused input stub this closure is for).
+                if r in declared_reg_refs and t not in ('power_in', 'power_out'):
+                    continue
+                if any(m in members for m in
+                       {nn for nn, pp in net_pins.items()
+                        if any(rr == r for (rr, _pp, _tt) in pp)}):
+                    join = True
+                    break
+            if join:
                 power_nets.append(n)
                 changed = True
     flags = []
@@ -246,7 +262,37 @@ def build_tree(parsed, power_entries, return_net='GND'):
         for (r, _p, _t) in net_pins[n]:
             comp_nets.setdefault(r, set()).add(n)
     edges = []
+    # #135 (B10): a DECLARED regulator's edge is built from its input
+    # and output rails ONLY -- the nets where it has power_in /
+    # power_out pins.  Its other nets (FB, EN, SW, BOOT, PG) never
+    # take part.  A declared regulator that yields no unique in->out
+    # pair is a fail-closed flag, and every rail it was expected to
+    # feed or draw from is marked incomplete: before this, such a
+    # regulator silently vanished from the tree while its input rail
+    # still reported complete with the input current missing.
+    reg_handled = set()
+    for ref in sorted(declared_reg_refs):
+        spec = _declared(ref, 'regulators')
+        in_rails = [n for n in power_nets
+                    if any(r == ref and t == 'power_in'
+                           for (r, _p, t) in net_pins[n])]
+        out_rails = [n for n in power_nets
+                     if any(r == ref and t == 'power_out'
+                            for (r, _p, t) in net_pins[n])]
+        pairs = [(a, b) for a in in_rails for b in out_rails if a != b]
+        if len(pairs) == 1:
+            a, b = pairs[0]
+            edges.append({'ref': ref, 'kind': spec['type'], 'spec': spec,
+                          'between': sorted([a, b]), 'from': a, 'to': b})
+        else:
+            flags.append({'kind': 'regulator_without_edge', 'ref': ref,
+                          'in_rails': in_rails, 'out_rails': out_rails})
+            for n in set(in_rails) | set(out_rails):
+                rails[n]['complete'] = False
+        reg_handled.add(ref)
     for ref, ns in sorted(comp_nets.items()):
+        if ref in reg_handled:
+            continue
         if len(ns) != 2:
             continue
         a, b = sorted(ns)
