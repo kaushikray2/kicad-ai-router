@@ -148,3 +148,31 @@ def test_unreachable_stub_load_is_unreachable():
     ec, paths = powerplan._attribute(G(), {5: 0.0}, {}, [
         {'id': 'U8', 'node': 5, 'currents': {'BASE': (1.0, 0.5)}}])
     assert paths['U8'] == [], paths
+
+
+def test_declared_root_seeds_the_rail():
+    # #81: a rail whose only source is the declared root (external
+    # input connector, no power_out/output pins) must still plan:
+    # the root ref's pads on the net are the Dijkstra sources.
+    rail = _rail({'U2': _load(2.0, 2.0)}, {'U2': [('U2', '1')]})
+    rail['source_pins'] = {}
+    rail['root'] = {'kind': 'external', 'ref': 'U1'}
+    plan = powerplan.plan_power(_tree(rail), _parsed(), _facts(), LAYERS,
+                                CORNERS, {'V5': {}})
+    segs = {s['uuid']: s for s in plan['rails']['V5']['segments']}
+    assert segs['t1']['i_peak_a'] == 2.0, segs['t1']
+    assert segs['t2']['i_peak_a'] == 2.0, segs['t2']
+
+def test_incoming_edge_outpins_seed_the_rail():
+    # #81: a rail fed through a passive-pin device (fuse/switch) is
+    # sourced at that device's out-pins on this net.
+    rail = _rail({'U2': _load(2.0, 2.0)}, {'U2': [('U2', '1')]})
+    rail['source_pins'] = {}
+    tree = _tree(rail)
+    tree['edges'] = [{'from': 'VIN', 'to': 'V5', 'ref': 'U1',
+                      'in_pins': [('U1', '9')], 'out_pins': [('U1', '2')],
+                      'by_mode': None, 'kind': 'protective'}]
+    plan = powerplan.plan_power(tree, _parsed(), _facts(), LAYERS,
+                                CORNERS, {'V5': {}})
+    segs = {s['uuid']: s for s in plan['rails']['V5']['segments']}
+    assert segs['t1']['i_peak_a'] == 2.0, segs['t1']

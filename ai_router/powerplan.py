@@ -265,6 +265,23 @@ def _plan_rail(net, rail, entry, facts, tree, parsed, copper, surface,
     for ref, pins in rail['source_pins'].items():
         for pin in pins:
             sources += pad_nodes.get((pin[0], str(pin[1])), [])
+    # #81: two more source kinds source_pins cannot see -- the
+    # declared rail root (the external-input connector named in the
+    # marking) and the out-pins of incoming tree edges (a fuse, FET
+    # switch or passive-pin regulator feeding this rail).  Neither
+    # is necessarily a power_out/output-typed pin; without seeding
+    # them the rail plans with zero sources and every load on it
+    # silently attributes 0 A.
+    _root = rail.get('root') or {}
+    if _root.get('ref'):
+        for (r, _p), ns in pad_nodes.items():
+            if r == _root['ref']:
+                sources += ns
+    for e in tree['edges']:
+        if e.get('to') == net:
+            for (r, p) in e.get('out_pins', []):
+                sources += pad_nodes.get((r, str(p)), [])
+    sources = list(dict.fromkeys(sources))
     if rail['root'] and not sources:
         rep['assumptions'].append('rail root is the declared external input; '
                                   'no source pads on this net')
