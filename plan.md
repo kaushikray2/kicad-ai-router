@@ -122,6 +122,18 @@ pay no gate penalty for priced-layer tracks) is filed and awaits
 a design ruling. The NAS rerun remains held for the owner's
 separate authorization.
 
+### Off-plan -- portfolio layer_cost exclusion, v1.11.3 (2026-11-25)
+
+#109 ruled (option 1) and fixed: while a valid layer_cost spec is
+in force, tool_portfolio excludes freerouting and krt -- they
+cannot honour the price, and priced layers carry no gate penalty
+for them -- with each exclusion logged and recorded in the
+portfolio ledger entry. Candidate sets are unchanged when
+layer_cost is off. With this, every bug from the two external
+reviews (#74-#109) is fixed; #80 closed the range on the
+engineered-nets branch as net-selective Grid enforcement (it
+carries no version of its own until the branch merges).
+
 ## In progress
 
 - **P2.1b** (below) is next up, with #63 as its first step. Phase 2E

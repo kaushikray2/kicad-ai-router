@@ -448,6 +448,19 @@ control run reproduced the identical 15). Fixtures: heal bridges
 
 The project is relicensed from MIT to **GPL-3.0-or-later** (SPDX: GPL-3.0-or-later), matching KiCad's own licensing. The change applies from this commit forward; releases through v1.10.2 were distributed under MIT, and copies already out there keep those terms. Sample boards in `docker/selftest/` remain under their original licenses.
 
+## v1.11.3 -- 2026-11-25
+
+- #109: the portfolio silently mis-scored opt-in freerouting/krt
+  candidates under layer_cost. Those engines take no layer-law
+  arguments, and priced layers leave the effective ban set, so the
+  gate levied no penalty on their priced-layer tracks -- they
+  competed at 1x against TraceMaker's priced cost. While a valid
+  layer_cost spec is in force, tool_portfolio now excludes them,
+  logs each exclusion with the reason, and records it in the
+  portfolio ledger entry. With layer_cost off (or invalid, hence
+  off) the candidate set is unchanged. Regression:
+  tests/test_portfolio_layer_cost.py (fails on v1.11.2, passes here).
+
 ## v1.11.2 -- 2026-11-25
 
 Fixes from the cross-check of the layer-cost review against v1.11.1
