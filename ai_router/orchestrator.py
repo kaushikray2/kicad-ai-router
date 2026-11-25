@@ -179,8 +179,10 @@ def _run_engineered_stages(pipe, log):
     switch gates EVERY stage -- it used to be read only in
     _engineered_setup, so with the switch off and a markings file
     present the domain/power/length/HV/quiet stages still ran.
-    Both tools no-op without markings, so unmarked boards run
-    exactly the pre-Step-2 sequence either way."""
+    The treatment tools no-op without markings.  (The placement
+    audit is NOT one of these stages: it runs on unmarked boards
+    too, report-only unless materialisation is opted in --
+    #149 D14.)"""
     if not pipe.cfg.get('engineered_nets', True):
         log('engineered stages skipped: engineered_nets is off')
         return

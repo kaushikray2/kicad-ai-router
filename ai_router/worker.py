@@ -1407,8 +1407,13 @@ def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
     # finisher rarely reaches an edge, which is why this stayed
     # hidden). Stamp a band around every Edge.Cuts segment: track
     # centres must stand off edge_clr + tw/2, via centres edge_clr +
-    # vr. Non-line shapes are stamped by expanded bbox
-    # (conservative). Applies to every layer.
+    # vr. Non-line shapes are stamped by expanded bbox -- an
+    # APPROXIMATION, not a conservative one (#149 D13): the band
+    # follows the bounding box, so where the real edge cuts
+    # inside its box (arcs, curves) the band is displaced and can
+    # under-cover the edge's neighbourhood.  The exact checker
+    # remains the authority near curved outlines.  Applies to
+    # every layer.
     try: edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
     except Exception: edge_clr = 0.5
     if edge_clr <= 0: return
