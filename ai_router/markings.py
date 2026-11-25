@@ -317,9 +317,18 @@ def _check_hv_domain(entry, idx):
             or len(set(nets)) != len(nets)):
         raise MarkingsError('%s: "nets" must be a non-empty list of '
                             'distinct net names' % p)
-    if not _num(e.get('voltage_v')) or e['voltage_v'] < 0:
-        raise MarkingsError('%s: "voltage_v" (peak working voltage '
-                            'vs the 0 V reference) is required, >= 0' % p)
+    # #129 (B3): the value is a PEAK working voltage, SIGNED -- a
+    # bipolar pair is entered as +15 / -15 (difference 30 V), not
+    # as two magnitudes (difference 0, 'no spacing requirement').
+    # "peak_v" is the field's name; "voltage_v" stays as a legacy
+    # alias and both are normalised into the validated entry.
+    _v = e.get('peak_v', e.get('voltage_v'))
+    if not _num(_v):
+        raise MarkingsError('%s: "peak_v" (peak working voltage vs '
+                            'the 0 V reference, signed) is required' % p)
+    if 'ac' in e and not isinstance(e['ac'], bool):
+        raise MarkingsError('%s: "ac" must be a boolean (the value '
+                            'is the AC peak either way)' % p)
     if e.get('coating', 'uncoated') not in ('uncoated', 'polymer', 'conformal'):
         raise MarkingsError('%s: "coating" must be uncoated|polymer|conformal '
                             '(solder mask alone is not a coating)' % p)
@@ -330,7 +339,10 @@ def _check_hv_domain(entry, idx):
         raise MarkingsError('%s: "pollution_degree" must be 1|2|3' % p)
     if 'materialise' in e and not isinstance(e['materialise'], bool):
         raise MarkingsError('%s: "materialise" must be a boolean' % p)
-    return dict(e)
+    out = dict(e)
+    out['peak_v'] = float(_v)
+    out['voltage_v'] = float(_v)
+    return out
 
 
 def _check_length_group(entry, idx):

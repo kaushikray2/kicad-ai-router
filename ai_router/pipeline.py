@@ -1276,10 +1276,12 @@ class Pipeline:
             'standard': 'IPC-2221B Table 6-1 (single spacing table '
                         'applied to both clearance and creepage)',
             'assumptions': [
-                {'domain': d['name'], 'voltage_v': d['voltage_v'],
+                {'domain': d['name'], 'peak_v': d.get('peak_v', d['voltage_v']),
+                 'ac': bool(d.get('ac')),
                  'coating': d.get('coating', 'uncoated'),
                  'altitude_m': d.get('altitude_m', 0),
                  'pollution_degree': d.get('pollution_degree'),
+                 'pollution_degree_applied': False,
                  'material_group': d.get('material_group')}
                 for d in doms],
             'creepage_grid_pitch_mm': 0.25,
