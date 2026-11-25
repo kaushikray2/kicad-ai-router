@@ -1430,6 +1430,17 @@ class Pipeline:
                              'conductor_column': cond_col,
                              'termination': term,
                              'required_mm': round(req, 3)}
+                    if dv > 500:
+                        # #128 (B2): disclose the whole-voltage
+                        # reading alongside the primary one
+                        alt = max(
+                            H.pair_required_alt_mm(
+                                dv, surf, da.get('coating', 'uncoated'),
+                                da.get('altitude_m', 0), term)[0],
+                            H.pair_required_alt_mm(
+                                dv, surf, db.get('coating', 'uncoated'),
+                                db.get('altitude_m', 0), term)[0])
+                        entry['required_mm_whole_voltage_reading'] = round(alt, 3)
                     entry['clearance_mm'] = round(gap, 3)
                     entry['clearance_at'] = [round(pa[0], 2),
                                              round(pa[1], 2)]
@@ -1471,7 +1482,13 @@ class Pipeline:
                 pairs.append(pair)
         rep = {
             'standard': 'IPC-2221B Table 6-1 (single spacing table '
-                        'applied to both clearance and creepage)',
+                        'applied to both clearance and creepage); '
+                        'above-500 V reading: 500 V band value + '
+                        'excess x column rate (para. 6.3 form, '
+                        'IPC-A-610 worked example), with the '
+                        'whole-voltage reading shown per pair; '
+                        'IPC-2221C (Dec 2023) supersedes B -- '
+                        'values not re-verified against C (#128)',
             'assumptions': [
                 {'domain': d['name'], 'peak_v': d.get('peak_v', d['voltage_v']),
                  'ac': bool(d.get('ac')),

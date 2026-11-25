@@ -22,6 +22,16 @@ Measurement model (draft):
                 surface.  A slot between the conductors therefore
                 lengthens the measured path.  Under-component
                 paths are unmodelled (no body data).
+Above-500 V reading (#128 (B2)): the primary values use the
+standard's own para. 6.3 form -- the 500 V band value plus the
+excess voltage times the column rate (verified against the
+IPC-A-610 appendix worked example).  Some published references
+apply the rate to the WHOLE voltage instead, which reads larger;
+both readings are computed (required_spacing_alt_mm) and the
+report shows both above 500 V.  The table is IPC-2221B's;
+IPC-2221C (Dec 2023) supersedes B and these values have not been
+re-verified against C.
+
 This is a design aid, not a certification.
 """
 import heapq
@@ -65,6 +75,20 @@ def required_spacing_mm(delta_v, column):
     return _BANDS[-1][_COLIDX[column]] + (dv - 500.0) * _RATES[column]
 
 
+def required_spacing_alt_mm(delta_v, column):
+    """The alternative above-500 V reading (#128 (B2)): the
+    column rate applied to the WHOLE voltage.  Identical to
+    required_spacing_mm at and below 500 V; larger above it
+    (600 V B1: 1.50 mm vs the primary 0.50 mm).  Reported
+    alongside the primary reading, never used for the verdict."""
+    if column not in _COLIDX:
+        raise ValueError('unknown column %r' % (column,))
+    dv = abs(float(delta_v))
+    if dv <= 500.0:
+        return required_spacing_mm(dv, column)
+    return dv * _RATES[column]
+
+
 def column_for(surface, coating='uncoated', altitude_m=0):
     """Table column for a layer's CONDUCTORS: internal -> B1;
     external with a declared permanent polymer coating -> B4;
@@ -88,6 +112,19 @@ def termination_column(coating='uncoated'):
     return 'A7' if coating == 'conformal' else 'A6'
 
 
+def _pair_required(delta_v, surface, coating, altitude_m,
+                   termination, spacing_fn):
+    col = column_for(surface, coating, altitude_m)
+    req = spacing_fn(delta_v, col)
+    eff = col
+    if termination and surface:
+        tcol = termination_column(coating)
+        treq = spacing_fn(delta_v, tcol)
+        if treq > req:
+            req, eff = treq, tcol
+    return req, eff, col
+
+
 def pair_required_mm(delta_v, surface, coating='uncoated',
                      altitude_m=0, termination=False):
     """(required_mm, effective_column, conductor_column) for one
@@ -95,15 +132,16 @@ def pair_required_mm(delta_v, surface, coating='uncoated',
     closest approach involves a termination on a surface layer,
     the termination column applies as well and the requirement is
     the larger of the conductor and termination values."""
-    col = column_for(surface, coating, altitude_m)
-    req = required_spacing_mm(delta_v, col)
-    eff = col
-    if termination and surface:
-        tcol = termination_column(coating)
-        treq = required_spacing_mm(delta_v, tcol)
-        if treq > req:
-            req, eff = treq, tcol
-    return req, eff, col
+    return _pair_required(delta_v, surface, coating, altitude_m,
+                          termination, required_spacing_mm)
+
+
+def pair_required_alt_mm(delta_v, surface, coating='uncoated',
+                         altitude_m=0, termination=False):
+    """pair_required_mm under the whole-voltage above-500 V
+    reading (#128 (B2)) -- for disclosure in the report."""
+    return _pair_required(delta_v, surface, coating, altitude_m,
+                          termination, required_spacing_alt_mm)
 
 
 # ------------------------------------------------------------ geometry
