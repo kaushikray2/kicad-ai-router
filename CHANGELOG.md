@@ -14,6 +14,28 @@ Entries below are in a single descending order, newest first (the pre-version da
 
 The project is relicensed from MIT to **GPL-3.0-or-later** (SPDX: GPL-3.0-or-later), matching KiCad's own licensing. The change applies from this commit forward; releases through v1.10.2 were distributed under MIT, and copies already out there keep those terms. Sample boards in `docker/selftest/` remain under their original licenses.
 
+## v1.11.6 -- 2026-11-25
+
+- #156: the PCM package was undiscoverable. The zip shipped the
+  plugin nested at plugins/ai_router/ with no plugins/__init__.py,
+  and KiCad's plugin loader (pcbnew.LoadPlugins) loads a package
+  directory only when it contains an __init__.py -- it records
+  'Skip subdir' and moves on. PCM installs therefore never
+  produced a toolbar button or an External Plugins entry.
+  build_package.py now writes a PCM entry point at
+  plugins/__init__.py that imports the bundled ai_router package.
+  Proven with KiCad's own LoadPlugins against the extracted
+  install layout: the 1.11.5 layout is skipped, the 1.11.6
+  layout registers 'AI Router (LLM orchestrator)'. Regression
+  test tests/test_pcm_entrypoint.py fails on the old build and
+  passes here.
+- #157: legacy PCM zips retired from the repo tree (the pcm/
+  folder and the superseded pcm-repo/ zips, 1.7.0-1.11.5),
+  archived with a sha256 manifest before removal;
+  build_package.py builds the canonical zip into pcm-repo/
+  (pcm/ remains, gitignored, as build output for CI). README gains the verified
+  Windows install notes.
+
 ## v1.11.5 -- 2026-11-25
 
 Third external review: all eleven main findings (R1-R11) fixed,

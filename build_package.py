@@ -6,7 +6,7 @@ the silent 'updates never appear' failure, so it happens here, always."""
 import datetime, hashlib, json, os, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VERSION = '1.11.5'
+VERSION = '1.11.6'
 IDENTIFIER = 'ca.siliconbrane.ai-router'
 REPO_BASE_URL = 'https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo'
 DESCRIPTION = ('LLM-orchestrated PCB routing for KiCad: deterministic TraceMaker passes, '
@@ -43,20 +43,57 @@ METADATA = {
     'versions': [{'version': VERSION, 'status': 'stable', 'kicad_version': '10.0', 'runtime': 'swig'}],
 }
 
+# KiCad discovers a PCM package through the __init__.py at the root
+# of the package's plugins/ folder: pcbnew.LoadPlugins loads a package
+# directory only when it contains an __init__.py, and records
+# 'Skip subdir' otherwise. Through v1.11.5 the zip shipped only
+# plugins/ai_router/*, so KiCad silently skipped the installed
+# package -- no toolbar button, no External Plugins entry (#156).
+# This shim is written into the zip as plugins/__init__.py. After
+# installation the bundled ai_router package sits beside it, so the
+# shim puts its own directory on sys.path and imports it;
+# ai_router/__init__.py performs the ActionPlugin registration.
+PCM_ENTRYPOINT = '''\
+"""AI Router -- KiCad PCM entry point.
+
+KiCad loads this file when it discovers the package; importing the
+bundled ai_router package (installed beside this file) registers
+the ActionPlugin. See build_package.py (#156).
+"""
+import os, sys
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+try:
+    import ai_router  # noqa: F401  (importing registers the plugin)
+except Exception as _e:
+    print('ai_router: PCM entry point failed to load the bundled plugin (%r)' % (_e,))
+'''
+
+
 def main():
-    out_zip_dir = os.path.join(HERE, 'pcm')
     repo_dir = os.path.join(HERE, 'pcm-repo')
-    os.makedirs(out_zip_dir, exist_ok=True); os.makedirs(repo_dir, exist_ok=True)
+    os.makedirs(repo_dir, exist_ok=True)
     zip_name = 'ai-router-%s.zip' % VERSION
-    zip_path = os.path.join(out_zip_dir, zip_name)
+    zip_path = os.path.join(repo_dir, zip_name)
     pkg_src = os.path.join(HERE, 'ai_router')
     files = ['__init__.py', 'ai_router_plugin.py', 'dialog.py', 'config.py', 'llm_client.py',
              'orchestrator.py', 'pipeline.py', 'worker.py', 'backend_client.py', 'icon.png']
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('metadata.json', json.dumps(METADATA, indent=2))
+        z.writestr('plugins/__init__.py', PCM_ENTRYPOINT)
         for f in files:
             z.write(os.path.join(pkg_src, f), 'plugins/ai_router/' + f)
         z.write(os.path.join(pkg_src, 'icon64.png'), 'resources/icon.png')
+    # CI's package job reads the zip from the historical pcm/
+    # staging path (the workflow file is unchanged -- the token
+    # available here cannot push workflow changes). Since #157
+    # pcm/ is gitignored build output only; the canonical zip
+    # lives in pcm-repo/ and packages.json points there.
+    out_zip_dir = os.path.join(HERE, 'pcm')
+    os.makedirs(out_zip_dir, exist_ok=True)
+    import shutil
+    shutil.copy(zip_path, os.path.join(out_zip_dir, zip_name))
     blob = open(zip_path, 'rb').read()
     sha = hashlib.sha256(blob).hexdigest()
     with zipfile.ZipFile(zip_path) as z:
@@ -68,8 +105,7 @@ def main():
                                   install_size=install_size)]
     packages = {'$schema': 'https://go.kicad.org/pcm/schemas/v2', 'packages': [pkg_entry]}
     with open(os.path.join(repo_dir, 'packages.json'), 'w') as f: json.dump(packages, f, indent=2)
-    import shutil, time
-    shutil.copy(zip_path, os.path.join(repo_dir, zip_name))
+    import time
     # v1.11.5 (#120): PCM v2 requires a packages RESOURCE (url +
     # sha256 of packages.json + update_timestamp).  Without it
     # KiCad cannot follow the repository to its package index at
