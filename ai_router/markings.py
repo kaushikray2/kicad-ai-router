@@ -23,7 +23,7 @@ Schema v1:
                           smooth?} ],   # Step 2: EMC treatment fields
       "power":         [ ... ],   # #68, carried, not enforced yet
       "length_groups": [ ... ],   # #69 matched groups (schema in _check_length_group)
-      "hv_domains":    [ ... ],   # #70, carried, not enforced yet
+      "hv_domains":    [ ... ],   # #70 voltage domains (schema in _check_hv_domain)
       "quiet":         [ ... ]    # #71, carried, not enforced yet
     }
 
@@ -150,6 +150,7 @@ class Markings:
     def hv_domains(self):
         return self.data.get('hv_domains', [])
 
+    @property
     def length_groups(self):
         return self.data.get('length_groups', [])
 

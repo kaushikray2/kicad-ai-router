@@ -157,7 +157,7 @@ def _near_item(x, y, item, extra=0.0):
 
 
 def creepage_path(items_a, items_b, blockers, outline, cutouts,
-                  pitch=0.25):
+                  pitch=0.25, filled=()):
     """Shortest surface path (mm) between two copper sets on one
     layer, or None when no path exists in the modelled region.
     Grid Dijkstra: cells covered by any copper (blockers),
@@ -201,6 +201,9 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
                 blocked[j][i] = True
                 continue
             if any(_point_in_poly(cx, cy, c) for c in cutouts):
+                blocked[j][i] = True
+                continue
+            if any(_point_in_poly(cx, cy, f) for f in filled):
                 blocked[j][i] = True
                 continue
             if any(_near_item(cx, cy, it) for it in blockers):
