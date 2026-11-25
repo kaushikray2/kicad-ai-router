@@ -1,97 +1,305 @@
 # KiCad AI Router
 
-Developed by [SiliconBrane Inc](https://www.siliconbrane.com).
+Developed by [SiliconBrane Inc](https://www.siliconbrane.com)
 
-![version](https://img.shields.io/badge/version-v1.11.3-blue) ![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
+![version](https://img.shields.io/badge/version-v1.11.3-blue)
+![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 
-A KiCad 10 plugin + routing backend that finishes PCB layouts with
-deterministic tools under an exact-geometry gate -- and, optionally, an LLM
-that makes **strategy decisions only, never geometry**.
+KiCad AI Router is a routing and routing-repair system for KiCad 10.
 
-Every experiment behind this project said the same thing: language models
-are bad at coordinates and good at choosing what to try next. So the LLM
-(or the built-in AUTO strategy, which needs no LLM at all) picks tools and
-orderings; all copper is drawn by deterministic code, and every result is
-accepted or reverted by `kicad-cli` DRC plus exact clearance checks. The
-gate's verdict is the only success criterion -- never the model's prose.
+The project started from a simple observation after a lot of experiments: large language models are terrible at geometry, but surprisingly useful for deciding what to try next.
 
-## What it does
+Instead of letting an AI draw copper directly, KiCad AI Router uses deterministic routing tools that generate all board geometry. The AI, when enabled, only chooses strategies and tool ordering. Every change is verified before it is accepted.
 
-- **Full-board routing** via [TraceMaker](https://github.com/DingoOz/TraceMaker)
-  passes with configurable net ordering and layer law (e.g. never route on a
-  solid GND plane; pour planes keep priority on their own layer).
-- **A repair toolkit** for what the main pass strands: a grid-A* finisher
-  with multi-victim displacement and re-bridging, a large-window finisher
-  for far-apart fragments, a plane-fragment healer, and a pour stitcher --
-  each one gate-verified as a unit, so a repair that adds faults is reverted
-  even if its connectivity looks better.
-- **Honest metrics**: per-layer track census (DRC cannot see a track drawn
-  across a power plane -- the census can), split-net counts for signal and
-  pour nets separately, via count and wirelength on every gate.
-- **Two ways to run**: inside KiCad as an ActionPlugin talking to the
-  backend over HTTP, or headless -- the backend is a small Docker service
-  with a job API, self-tests, and a status page.
+If a routing step introduces new violations, it gets reverted.
 
-## Measured results
+The goal is not to replace PCB designers or compete with professional routing workflows. The goal is to automate as much of the repetitive routing work as possible while producing results that survive real KiCad verification.
 
-- PCBench corpus (59 boards): the pipeline fully routes most boards it is
-  given; on a 24-board sample, 23 finished fully routed with exactly one
-  copper clearance violation across all 23.
-- dataset-v3 (139 hard boards harvested from public designs, 432 measured
-  backend runs): on boards the pipeline completes cleanly, median
-  wirelength is **0.83x the human original's** at 1.0-1.1x the vias.
-  Net-ordering policy made no measurable difference; layer law did.
-- The repair toolkit closes the "far-apart fragment" class completely
-  (fragments 100+ mm apart). Congestion-bound residuals remain open --
-  three successive repair strategies (ILP candidate selection, victim
-  re-bridge upgrades, attempt selection) and a PathFinder-style
-  negotiation prototype all measured zero against them, and the
-  [changelog](CHANGELOG.md) shows the receipts. This tool is a strong
-  finisher, not a magic router.
+---
+
+## How it works
+
+The system is built around a simple rule:
+
+> The router decides. The gate judges.
+
+Routing tools generate candidate changes. Those changes are then checked using:
+
+- `kicad-cli` DRC
+- Exact clearance validation
+- Per-layer track accounting
+- Connectivity checks
+- Split-net analysis
+
+A change is considered successful only if the gate accepts it.
+
+Not because an LLM says it looks good.
+Not because connectivity improved.
+Not because a heuristic thinks it is better.
+
+Only the gate's result matters.
+
+---
+
+## What it can do
+
+### Full-board routing
+
+For complete routing passes the system uses
+[TraceMaker](https://github.com/DingoOz/TraceMaker) together with a set of routing policies.
+
+Examples include:
+
+- Custom net ordering
+- Layer restrictions
+- Protecting solid plane layers
+- Keeping pours on preferred layers
+- Different routing strategies depending on board topology
+
+### Routing repair
+
+No autorouter finishes everything.
+
+When routing passes leave behind disconnected nets or broken geometry, the repair pipeline takes over.
+
+Current repair tools include:
+
+- Grid A* finishing
+- Multi-victim displacement
+- Re-bridging
+- Large-window fragment repair
+- Plane fragment healing
+- Pour stitching
+
+Every repair operation is verified independently. If a repair fixes one problem but creates another, it is rolled back automatically.
+
+### Measurement and verification
+
+Every run produces metrics including:
+
+- Signal split nets
+- Pour split nets
+- Via count
+- Total wire length
+- Per-layer track census
+
+The layer census exists because DRC alone can miss certain situations, such as tracks crossing areas that should remain exclusive to power planes.
+
+### AI mode or non-AI mode
+
+The project can run in two ways:
+
+#### AUTO mode
+
+No LLM required.
+
+The built-in strategy engine chooses routing actions using deterministic logic.
+
+#### LLM mode
+
+Any OpenAI-compatible endpoint can be used.
+
+The model never generates geometry.
+
+It only decides which routing tools should be attempted and in what order.
+
+---
+
+## Results
+
+The numbers below come from real measured runs.
+
+### PCBench corpus
+
+- 59-board corpus
+- On a 24-board sample, 23 boards finished fully routed
+- Only a single copper-clearance violation was observed across those 23 completed boards
+
+### dataset-v3
+
+- 139 difficult public boards
+- 432 measured backend runs
+
+For boards that completed successfully:
+
+- Median wire length was **0.83×** the original human-routed design
+- Via count was typically **1.0× to 1.1×** the original design
+
+One of the more surprising findings was that net-ordering strategies had little measurable impact, while layer-law policies had a significant effect on final results.
+
+### Known limitation
+
+Congestion remains the hardest problem.
+
+Several approaches were tested, including:
+
+- ILP candidate selection
+- Improved victim re-bridging
+- Attempt ranking
+- PathFinder-style negotiation routing
+
+None showed measurable improvement on the remaining congestion-bound failures.
+
+The project is a strong routing finisher and routing-repair system.
+
+It is not a magic autorouter.
+
+---
 
 ## Requirements
 
-- KiCad 10 (plugin and `kicad-cli`).
-- TraceMaker 0.12.1 for full-board passes (the finisher/healer tools work
-  without it). Place the binary in the backend data dir under
-  `tracemaker/0.12.1/`; see `docker/` for the layout. The backend refuses
-  unverified downloads -- TraceMaker is distributed locally by design.
-- For LLM mode: any OpenAI-compatible endpoint. AUTO mode needs none.
-- Docker for the backend, or run `docker/server.py` on any host with
-  KiCad 10 + Python 3.
+### Required
 
-## Install
+- KiCad 10
+- Python 3
+- `kicad-cli`
 
-**Plugin (PCM):** add the repository index from `pcm-repo/repository.json`
-in this repo (host it anywhere static), or unzip `pcm/ai-router-1.7.0.zip`
-into your KiCad scripting plugins folder. Configure the backend URL and
-token in `~/.config/ai_router/config.json`.
+### For full-board routing
 
-**Backend:**
+- TraceMaker 0.12.1
 
-```sh
-cd docker && docker build -f Dockerfile -t ai-router-backend ..
+Place the binary in:
+
+```
+tracemaker/0.12.1/
+```
+
+inside the backend data directory.
+
+The backend intentionally requires a locally supplied TraceMaker binary rather than downloading one automatically.
+
+### For AI mode
+
+Any OpenAI-compatible API endpoint.
+
+AUTO mode does not require an LLM.
+
+### Backend
+
+Either:
+
+- Docker (recommended)
+- A host machine with KiCad 10 and Python 3 capable of running `docker/server.py`
+
+---
+
+## Installation
+
+### Installing the KiCad plugin
+
+Add the repository from:
+
+```
+pcm-repo/repository.json
+```
+
+to KiCad's Plugin and Content Manager, or manually install:
+
+```
+pcm/ai-router-1.7.0.zip
+```
+
+into the KiCad scripting plugins directory.
+
+Configure the backend connection in:
+
+```
+~/.config/ai_router/config.json
+```
+
+---
+
+### Starting the backend
+
+```bash
+cd docker
+docker build -f Dockerfile -t ai-router-backend ..
 docker run -d -p 8731:8731 -v $PWD/data:/data ai-router-backend
 ```
 
-On first start the backend generates a config with an auth token under
-`data/config/`; the built-in self-tests (two public sample boards) run
-from the status page or `POST /api/selftest/run`.
+On first startup the backend creates:
 
-## Layout
+- Configuration files
+- Authentication token
+- Runtime directories
 
-- `ai_router/` -- the plugin: `worker.py` (all geometry tools, run as
-  subprocesses under KiCad's Python), `pipeline.py` (gate-verified tool
-  wrappers), `orchestrator.py` (AUTO strategy + LLM playbook).
-- `docker/` -- backend service (`server.py`, `run_job.py`), Dockerfile,
-  self-test boards.
-- `dataset-v1/ v2/ v3/` -- the benchmark corpora, grid runners and
-  extracted results behind the numbers above.
-- `CHANGELOG.md` -- the full engineering record, version by version,
-  including the approaches that did not work.
+The backend also includes built-in self-tests using public sample boards.
+
+Tests can be run through:
+
+- The status page
+- `POST /api/selftest/run`
+
+---
+
+## Repository layout
+
+```text
+ai_router/
+├── worker.py
+├── pipeline.py
+├── orchestrator.py
+
+docker/
+├── server.py
+├── run_job.py
+├── selftest/
+
+dataset-v1/
+dataset-v2/
+dataset-v3/
+
+CHANGELOG.md
+```
+
+### Important files
+
+**worker.py**
+
+Contains the geometry tools that execute under KiCad's Python environment.
+
+**pipeline.py**
+
+Wraps routing and repair tools with gate validation.
+
+**orchestrator.py**
+
+Implements AUTO mode and LLM-assisted strategy selection.
+
+**dataset-v1 / v2 / v3**
+
+Benchmark datasets, runners and result archives used during development.
+
+**CHANGELOG.md**
+
+The full engineering history of the project, including failed experiments, discarded ideas and the data that led to design decisions.
+
+---
+
+## Philosophy
+
+Most AI routing projects start by asking:
+
+> Can an LLM route a PCB?
+
+This project asks a different question:
+
+> Can a deterministic router become better if an LLM only decides what to try next?
+
+Everything in this repository follows that idea.
+
+The AI is optional.
+
+The geometry is deterministic.
+
+Verification is mandatory.
+
+---
 
 ## License
 
-GPL-3.0-or-later (see `LICENSE`). Copyright (c) 2026 SiliconBrane Inc. Sample boards in `docker/selftest/` are public
-open-hardware designs, included for testing; their original licenses
-apply.
+GPL-3.0-or-later.
+
+Copyright (c) 2026 SiliconBrane Inc.
+
+The sample boards included in `docker/selftest/` are public open-hardware designs and remain covered by their respective licenses.
