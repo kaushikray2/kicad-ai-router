@@ -110,10 +110,26 @@ def test_mask_correction_annex_range():
     bare = T.microstrip(0.38, 0.21, 0.035, 4.4)
     coated = T.microstrip(0.38, 0.21, 0.035, 4.4, mask=(0.02, 3.5))
     assert 'mask_correction_applied' in coated.flags
-    assert -3.5 < (coated.z0 - bare.z0) < -0.3
+    # #151 (B19): the range is tightened to the annex band (-1..-3 ohm,
+    # modelled point -1.3).  The pre-fix blend gave -0.53 ohm here and
+    # passed the old -3.5..-0.3 range while missing the annex value.
+    assert -2.0 < (coated.z0 - bare.z0) < -0.8
     thick = T.microstrip(0.38, 1.0, 0.035, 4.4, mask=(0.02, 3.5))
     assert 'mask_correction_off_thick_dielectric' in thick.flags
     assert thick.z0 == T.microstrip(0.38, 1.0, 0.035, 4.4).z0
+
+def test_mask_correction_sign_and_vacuum_cover():
+    # #151 (B19): adding dielectric can only ADD capacitance, so Z0
+    # must fall on a high-er laminate too, and a cover of er 1.0 (air)
+    # must change nothing at all.  Pre-fix: RO3010 moved +1.43 ohm
+    # (wrong sign) and an er-1.0 mask moved FR-4 by +3.23 ohm.
+    bare = T.microstrip(0.38, 0.21, 0.035, 4.4)
+    air = T.microstrip(0.38, 0.21, 0.035, 4.4, mask=(0.02, 1.0))
+    assert abs(air.z0 - bare.z0) < 1e-9, (air.z0, bare.z0)
+    w = T.solve_width(lambda w: T.microstrip(w, 0.25, 0.035, 10.2).z0, 50.0)
+    ro = T.microstrip(w, 0.25, 0.035, 10.2, mask=(0.02, 3.8))
+    assert ro.z0 < 50.0 - 0.2, ro.z0
+
 
 def test_loss_in_annex_band_range():
     # Annex CALC-5: standard FR-4 microstrip loss at 2.4 GHz (MID) is
