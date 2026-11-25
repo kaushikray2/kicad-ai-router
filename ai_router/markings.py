@@ -498,6 +498,10 @@ def _check_power_entry(entry, idx):
     return out
 
 
+def _reject_constant(name):
+    raise ValueError('non-finite number %s in markings' % name)
+
+
 def load_markings(board_path):
     """Load the sidecar for a board.  None when no sidecar exists;
     MarkingsError when one exists but is malformed."""
@@ -506,7 +510,11 @@ def load_markings(board_path):
         return None
     try:
         with open(path, 'r', encoding='utf-8') as fh:
-            data = json.load(fh)
+            # #145 (B20 row 7): Python's json accepts NaN/Infinity
+            # literals, and NaN defeats every range check below
+            # (NaN <= 0 is False, so a NaN z0_ohm validated).
+            # Reject non-finite numbers at the source.
+            data = json.load(fh, parse_constant=_reject_constant)
     except (OSError, ValueError) as exc:
         raise MarkingsError('cannot read %s: %s' % (path, exc))
     return Markings(validate(data), path=path)

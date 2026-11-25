@@ -3414,7 +3414,11 @@ def cmd_rfgeom(board_path, spec):
                                  'ref_layer': ref_layer, 'h_mm': h}
                 # foreign tracks on the reference layer inside the band
                 for t in all_tracks:
-                    if t.GetNetname() == net:
+                    if t.GetNetname() == net or t.GetNetname() == gnd:
+                        # #145 (B20 row 2): the ground net's own
+                        # copper -- including the fence/return vias
+                        # the treatments place -- is the reference,
+                        # not foreign copper
                         continue
                     if t.Type() == pcbnew.PCB_VIA_T:
                         # #91: GetLayer() reports a via's top layer

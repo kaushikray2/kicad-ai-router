@@ -474,7 +474,14 @@ class Pipeline:
             model = 'stripline'
         else:
             return {'error': 'unknown layer class %r' % (cls,)}
-        w = _tlcalc.solve_width(lambda ww: fn(ww).z0, target)
+        try:
+            w = _tlcalc.solve_width(lambda ww: fn(ww).z0, target)
+        except ValueError as e:
+            # #145 (B20 row 4): one unsolvable geometry (e.g. a
+            # coplanar gap the thickness correction consumes) must
+            # fail THIS net, not the whole sizing stage
+            return {'model': model, 'flags': flags,
+                    'error': 'geometry unsolvable: %s' % e}
         if w is None:
             return {'model': model, 'flags': flags,
                     'error': 'target z0 unreachable in width range'}
@@ -759,6 +766,16 @@ class Pipeline:
         for net, entry in entries.items():
             info = (su.get('nets') or {}).get(net) or {}
             routed = sorted((info.get('track_layers') or {}).keys())
+            # #145 (B20 row 1): the ground net for this entry --
+            # its own declaration, else the board's pour evidence
+            # ('GND' if it pours anywhere, else the sole pour net,
+            # else 'GND').  Never a bare hardcoded 'GND': on AGND /
+            # GND_RF / VSS boards every corridor read as severed.
+            all_pours = {pn for c in copper
+                         for pn in (c.get('pour_nets') or [])}
+            gnd = entry.get('gnd_net') or (
+                'GND' if 'GND' in all_pours else
+                (next(iter(all_pours)) if len(all_pours) == 1 else 'GND'))
             refs = {}
             for lname in routed:
                 if lname not in by_name:
@@ -776,8 +793,23 @@ class Pipeline:
                         cand.append((order[k - 1], (cu.get('diel_above') or {}).get('thickness_mm')))
                     if k + 1 < len(order):
                         cand.append((order[k + 1], (cu.get('diel_below') or {}).get('thickness_mm')))
-                refs[lname] = [{'ref_layer': a, 'h_mm': h} for (a, h) in cand if h]
+                # #145 (B20 row 3): a neighbouring layer is a
+                # reference plane only if it actually carries a
+                # pour of the ground net -- a neighbouring SIGNAL
+                # layer is not a plane, however close it sits.
+                refs[lname] = [{'ref_layer': a, 'h_mm': h}
+                               for (a, h) in cand if h
+                               and gnd in (by_name[a].get('pour_nets') or [])]
             band = _tlcalc.band_of(entry.get('freq_hz') or 0)
+            if band not in self._BAND_TOP_HZ:
+                # #145 (B20 row 5): tlcalc's band contract says
+                # callers must REFUSE above 6 GHz (and for unknown
+                # bands) -- the old .get(band, 3e9) silently sized
+                # them against the 3 GHz limits
+                spec.setdefault('refused', {})[net] = (
+                    'frequency band %r is outside the validated '
+                    'range (max 6 GHz); refusing to size' % (band,))
+                continue
             sized = (eng.get('nets') or {}).get(net) or {}
             prim = (sized.get('per_layer') or {}).get(sized.get('primary_layer') or '') or {}
             eps_eff = prim.get('eps_eff')
@@ -787,7 +819,7 @@ class Pipeline:
             ceiling = self._BAND_CEILING_MM.get(band, 2.54)
             pi = entry.get('pi') or {}
             pi_refs = list(pi.get('radio') or []) + list(pi.get('antenna') or [])
-            spec['nets'][net] = {'gnd_net': 'GND', 'ceiling_mm': ceiling,
+            spec['nets'][net] = {'gnd_net': gnd, 'ceiling_mm': ceiling,
                                  'refs': refs, 'pi_refs': pi_refs}
             ctxs[net] = {
                 'band': band, 'freq_hz': entry.get('freq_hz'),
@@ -800,6 +832,11 @@ class Pipeline:
                                 if prim.get('loss_db_per_mm') is not None else None),
                 'length_mm': round(info.get('length_mm') or 0.0, 2),
                 'finish': su.get('copper_finish'), 'eps_eff': eps_eff,
+                'gnd_net': gnd,
+                # #145 (B20 row 6): the user's loss budget reaches
+                # rfcheck (it read ctx['loss_budget_db'] all along;
+                # the pipeline never passed it)
+                'loss_budget_db': entry.get('loss_budget_db'),
                 'refs': {ln: {'ref_layer': rl[0]['ref_layer'],
                               'pour_nets': by_name[rl[0]['ref_layer']].get('pour_nets') or []}
                          for ln, rl in refs.items() if rl}}
@@ -863,7 +900,7 @@ class Pipeline:
             return {'status': 'no_markings'}
         spec, ctxs = self._eng_rf_spec(self.current)
         out = {'status': 'ok'}
-        vspec = {'nets': {n: {'gnd_net': 'GND',
+        vspec = {'nets': {n: {'gnd_net': ctxs[n].get('gnd_net') or 'GND',
                               'ceiling_mm': ctxs[n]['return_ceiling_mm']}
                           for n in spec['nets']}}
         p = os.path.join(self.workdir, 'rf_vias_spec.json')
@@ -882,7 +919,7 @@ class Pipeline:
                 band = ctxs[n]['band']
                 lam = _tlcalc.lambda_g_mm(ctxs[n]['eps_eff'], self._BAND_TOP_HZ.get(band, 3e9))
                 if lam:
-                    fence_nets[n] = {'gnd_net': 'GND',
+                    fence_nets[n] = {'gnd_net': ctxs[n].get('gnd_net') or 'GND',
                                      'pitch_mm': round(lam / (10.0 if band == 'HIGH' else 20.0), 3),
                                      'gap_mm': e.get('gap_mm')}
         if fence_nets:
