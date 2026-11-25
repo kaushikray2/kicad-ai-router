@@ -47,9 +47,17 @@ def evaluate_group(entry, members):
     grades every member.  Tolerance semantics: a member is in
     tolerance when its shortfall vs target is within BOTH
     declared tolerances (mm checked on length, ps on delay)."""
+    tol_mm = entry.get('tolerance_mm')
+    tol_ps = entry.get('tolerance_ps')
     mode = entry.get('target_mode', 'longest')
     if mode == 'longest':
-        tgt_net = max(members, key=lambda n: members[n]['length_mm'])
+        # #98: 'longest' = longest in the graded quantity.  For a
+        # delay-only group (tolerance_ps, no tolerance_mm) that is
+        # delay: a member on slower layers can be delay-longest
+        # while mm-shorter, and grading against the mm-longest
+        # member's delay inverts the shortfalls.
+        _key = 'delay_ps' if (tol_ps is not None and tol_mm is None) else 'length_mm'
+        tgt_net = max(members, key=lambda n: members[n][_key])
         target = dict(members[tgt_net])
         target['from_net'] = tgt_net
     elif mode == 'length':
@@ -58,8 +66,6 @@ def evaluate_group(entry, members):
     else:
         v = entry['target_value']
         target = {'length_mm': None, 'delay_ps': v, 'from_net': None}
-    tol_mm = entry.get('tolerance_mm')
-    tol_ps = entry.get('tolerance_ps')
     out = {'name': entry.get('name'), 'target_mode': mode, 'target': target,
            'tolerance_mm': tol_mm, 'tolerance_ps': tol_ps, 'members': {}}
     for net, st in members.items():

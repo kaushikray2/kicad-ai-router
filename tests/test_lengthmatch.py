@@ -50,3 +50,17 @@ def test_evaluate_targets():
         {'name': 'G', 'target_mode': 'delay', 'target_value': 250.0, 'tolerance_ps': 12.0}, mem)
     assert ev2['members']['A']['within_tolerance'] is False  # 50 ps over, tol 12
     assert ev2['members']['B']['within_tolerance'] is True   # 10 ps under
+
+
+def test_longest_target_for_delay_only_group_is_delay_longest():
+    # #98: a delay-graded group (tolerance_ps, no tolerance_mm)
+    # whose members run at different ps/mm: the target must be the
+    # delay-longest member, not the mm-longest.
+    mem = {'A': {'length_mm': 50.0, 'delay_ps': 280.0},
+           'B': {'length_mm': 45.0, 'delay_ps': 320.0}}
+    ev = lengthmatch.evaluate_group(
+        {'name': 'G', 'target_mode': 'longest', 'tolerance_ps': 10.0}, mem)
+    assert ev['target']['from_net'] == 'B', ev['target']
+    assert ev['members']['B']['within_tolerance'] is True
+    assert ev['members']['A']['delta_ps'] == 40.0
+    assert ev['members']['A']['within_tolerance'] is False
