@@ -10,9 +10,9 @@ try:
 except ImportError:
     from llm_client import LLMClient, LLMError
 try:
-    from .pipeline import Pipeline, fault_count, parse_layer_cost
+    from .pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost
 except ImportError:
-    from pipeline import Pipeline, fault_count, parse_layer_cost
+    from pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost
 try:
     from config import DEFAULTS as _CFG_DEFAULTS
 except Exception:
@@ -159,7 +159,12 @@ def _unc_key(g):
     return 10 ** 9 if u is None else u
 
 def _final_key(g):
-    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g))
+    # v1.11.4 (#115): the same layer-cost tail as _accept_key,
+    # appended last -- this key's (unconnected, splits, faults)
+    # order is deliberate (#37) and unchanged; the tail only breaks
+    # full ties, so between two passes equal on the gate the cheaper
+    # one now wins instead of whichever came first.
+    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), cost_tail(g))
 
 def run_auto(cfg, pipe, log):
     # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54
@@ -248,7 +253,7 @@ def _run_auto_once(cfg, pipe, log):
         if pg is not None:
             if (pipe.last_gate or {}).get('board') != pipe.current:
                 pg = pipe.tool_gate(pipe.current)  # last_gate may hold a losing candidate's gate
-            best = ((_unc_key(pg), len(pg.get('split_nets') or []), fault_count(pg)), pipe.current)
+            best = (_final_key(pg), pipe.current)  # v1.11.4 (#115): was an inline copy of this key's shape
             gate = pg
             # v1.9.6 (#37): skip passes ONLY for a winner that is fully
             # connected (any net kind -- split_nets excludes GND, so
@@ -267,7 +272,7 @@ def _run_auto_once(cfg, pipe, log):
             break
         gate = pipe.tool_gate()
         failing = list(gate.get('split_nets') or [])
-        key = (_unc_key(gate), len(failing), fault_count(gate))
+        key = _final_key(gate)  # v1.11.4 (#115): len(failing) IS len(gate's split_nets); one key definition, no inline copies
         if best is None or key < best[0]: best = (key, pipe.current)
         if not failing:
             log('All signal nets connected after pass %d' % pno)
