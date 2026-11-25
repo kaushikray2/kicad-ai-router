@@ -388,6 +388,8 @@ def _run_auto_once(cfg, pipe, log):
     except Exception as e: log('power stage failed: %s' % e)
     try: pipe.tool_length_match()
     except Exception as e: log('length match failed: %s' % e)
+    try: pipe.tool_hv_domains()
+    except Exception as e: log('hv domains failed: %s' % e)
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))

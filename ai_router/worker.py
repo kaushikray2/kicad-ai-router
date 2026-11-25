@@ -2883,6 +2883,120 @@ def cmd_stackup(board_path, nets=None):
 
 
 
+def cmd_hvgeom(board_path):
+    """Copper facts for the HV-domain checks (#70): every net's
+    tracks / pads (with size) / vias / filled zone polygons, the
+    copper layer order, and the Edge_Cuts loops (largest = board
+    outline, the rest = cutouts/slots)."""
+    b = pcbnew.LoadBoard(board_path)
+    refill(b)
+    layers = []
+    lset = b.GetEnabledLayers()
+    for lid in range(pcbnew.PCB_LAYER_ID_COUNT):
+        if not lset.Contains(lid):
+            continue
+        nm_ = b.GetLayerName(lid)
+        if nm_ and nm_.endswith('.Cu') and nm_ not in layers:
+            layers.append(nm_)
+    lid_of = {}
+    for lid in range(pcbnew.PCB_LAYER_ID_COUNT):
+        nm_ = b.GetLayerName(lid)
+        if nm_:
+            lid_of[nm_] = lid
+    nets = {}
+    def rec(n):
+        return nets.setdefault(n, {'tracks': [], 'pads': [], 'vias': [],
+                                   'zones': []})
+    for t in b.GetTracks():
+        n = t.GetNetname()
+        if not n:
+            continue
+        r = rec(n)
+        if t.Type() == pcbnew.PCB_VIA_T:
+            r['vias'].append({'x': mm(t.GetStart().x),
+                              'y': mm(t.GetStart().y),
+                              'd': mm(t.GetWidth())})
+        elif t.Type() in (pcbnew.PCB_TRACE_T, pcbnew.PCB_ARC_T):
+            r['tracks'].append({
+                'layer': b.GetLayerName(t.GetLayer()),
+                'x1': mm(t.GetStart().x), 'y1': mm(t.GetStart().y),
+                'x2': mm(t.GetEnd().x), 'y2': mm(t.GetEnd().y),
+                'w': mm(t.GetWidth())})
+    for fp in b.GetFootprints():
+        for p in fp.Pads():
+            n = p.GetNetname()
+            if not n:
+                continue
+            ls = p.GetLayerSet()
+            pl = [nm_ for nm_ in layers if ls.Contains(lid_of[nm_])]
+            rec(n)['pads'].append({
+                'ref': fp.GetReference(), 'x': mm(p.GetPosition().x),
+                'y': mm(p.GetPosition().y), 'w': mm(p.GetSize().x),
+                'h': mm(p.GetSize().y), 'layers': pl})
+    for z in b.Zones():
+        n = z.GetNetname()
+        if not n or not z.GetIsFilled():
+            continue
+        poly = z.GetFilledPolysList(z.GetLayer())
+        for oi in range(poly.OutlineCount()):
+            pts = [(mm(pt.x), mm(pt.y))
+                   for pt in poly.Outline(oi).CPoints()]
+            if len(pts) >= 3:
+                rec(n)['zones'].append(
+                    {'layer': b.GetLayerName(z.GetLayer()), 'pts': pts})
+    segs = []
+    ec = lid_of.get('Edge.Cuts')
+    pre_loops = []
+    for d in b.GetDrawings():
+        if d.GetLayer() != ec or d.Type() != pcbnew.PCB_SHAPE_T:
+            continue
+        shape = d.GetShape()
+        if shape == pcbnew.SHAPE_T_SEGMENT:
+            segs.append((mm(d.GetStart().x), mm(d.GetStart().y),
+                         mm(d.GetEnd().x), mm(d.GetEnd().y)))
+        elif shape == pcbnew.SHAPE_T_RECT:
+            x1, y1 = mm(d.GetStart().x), mm(d.GetStart().y)
+            x2, y2 = mm(d.GetEnd().x), mm(d.GetEnd().y)
+            pre_loops.append([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+        elif shape == pcbnew.SHAPE_T_CIRCLE:
+            cx, cy = mm(d.GetCenter().x), mm(d.GetCenter().y)
+            r = mm(d.GetRadius())
+            pre_loops.append([(cx + r * math.cos(2 * math.pi * k / 24),
+                               cy + r * math.sin(2 * math.pi * k / 24))
+                              for k in range(24)])
+    loops = []
+    used = [False] * len(segs)
+    for i, s in enumerate(segs):
+        if used[i]:
+            continue
+        used[i] = True
+        loop = [(s[0], s[1]), (s[2], s[3])]
+        grew = True
+        while grew:
+            grew = False
+            for j, t in enumerate(segs):
+                if used[j]:
+                    continue
+                for k in (0, 1):
+                    px, py = (t[0], t[1]) if k == 0 else (t[2], t[3])
+                    if abs(px - loop[-1][0]) < 0.02 and abs(py - loop[-1][1]) < 0.02:
+                        loop.append((t[2], t[3]) if k == 0 else (t[0], t[1]))
+                        used[j] = True; grew = True
+                        break
+        if len(loop) >= 4 and abs(loop[0][0] - loop[-1][0]) < 0.02                 and abs(loop[0][1] - loop[-1][1]) < 0.02:
+            loops.append(loop[:-1])
+    def area(lp):
+        return abs(sum(lp[i][0] * lp[(i + 1) % len(lp)][1]
+                       - lp[(i + 1) % len(lp)][0] * lp[i][1]
+                       for i in range(len(lp))) / 2.0)
+    loops = loops + pre_loops
+    loops.sort(key=area, reverse=True)
+    return {'nets': nets, 'layers': layers,
+            'outline': loops[0] if loops else [],
+            'cutouts': loops[1:] if len(loops) > 1 else []}
+
+
+
 # ---------------------------------------------------------------- rfgeom
 # #67 Step 2 fact extraction: everything ai_router.rfcheck needs, measured
 # with pcbnew so the rule module stays pure.  The spec (JSON, --spec)
@@ -3790,6 +3904,7 @@ def main():
     elif a.cmd == 'smooth': res = cmd_smooth(a.board, a.net)
     elif a.cmd == 'powergeom': res = cmd_powergeom(a.board, a.nets or '')
     elif a.cmd == 'meander': res = cmd_meander(a.board, a.net, float(a.add_mm or 0))
+    elif a.cmd == 'hvgeom': res = cmd_hvgeom(a.board)
     elif a.cmd == 'auditgeom': res = cmd_auditgeom(a.board)
     elif a.cmd == 'audit_zones':
         with open(a.spec) as _f: res = cmd_audit_zones(a.board, json.load(_f))

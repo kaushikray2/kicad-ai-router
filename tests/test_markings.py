@@ -19,7 +19,7 @@ def test_roundtrip_preserves_all_sections_and_unknowns():
                        'dk': 3.66, 'dk_basis': 'design', 'mask': 'covered'}],
         'power': [{'net': 'VBAT', 'note': 'carried for #68'}],
         'length_groups': [{'name': 'g1', 'nets': ['A', 'B'], 'tolerance_mm': 0.5}],
-        'hv_domains': [{'name': 'mains', 'voltage': 230}],
+        'hv_domains': [{'name': 'mains', 'nets': ['L', 'N'], 'voltage_v': 230}],
         'quiet': [{'net': 'SENSE', 'future_field': 1}],
         'unknown_top_level': {'kept': True},
     }

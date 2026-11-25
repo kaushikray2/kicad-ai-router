@@ -45,6 +45,7 @@ try:
     from ai_router import library_rules as _library_rules
     from ai_router import placement_audit as _placement_audit
     from ai_router import lengthmatch as _lengthmatch
+    from ai_router import hvdomains as _hvdomains
 except Exception:
     try:
         import markings as _markings
@@ -57,6 +58,7 @@ except Exception:
         import library_rules as _library_rules
         import placement_audit as _placement_audit
         import lengthmatch as _lengthmatch
+        import hvdomains as _hvdomains
     except Exception:
         _markings = None
         _tlcalc = None
@@ -163,6 +165,12 @@ class Pipeline:
             # The audit must never break a route either.
             self.log('Placement audit failed (%s) -- continuing without it' % e)
             self._record('placement_audit', {'error': str(e)})
+        try:
+            _mk = _markings.load_markings(self.board_path)
+            if _mk is not None and _mk.hv_domains:
+                self._hv_materialise(_mk)
+        except Exception as e:
+            self.log('HV materialise failed (%s) -- continuing' % e)
 
     # ------------------------------------------------------------ internals
     def _record(self, step, data):
@@ -1037,6 +1045,194 @@ class Pipeline:
                                'via_adds': len(plan['via_adds'])})
         return {'status': 'ok', 'applied': applied}
 
+    def _hv_items(self, facts, net, layer):
+        """Copper items of one net on one layer, hvdomains shapes."""
+        items, filled = [], []
+        nf = facts.get('nets', {}).get(net)
+        if not nf:
+            return items, filled
+        for t in nf.get('tracks', []):
+            if t['layer'] == layer:
+                items.append(('seg', t['x1'], t['y1'], t['x2'], t['y2'],
+                              t['w'] / 2.0))
+        for p in nf.get('pads', []):
+            if layer in (p.get('layers') or []):
+                items.append(('disc', p['x'], p['y'],
+                              max(p['w'], p['h']) / 2.0))
+        for v in nf.get('vias', []):
+            items.append(('disc', v['x'], v['y'], v['d'] / 2.0))
+        for z in nf.get('zones', []):
+            if z['layer'] == layer:
+                pts = [tuple(q) for q in z['pts']]
+                filled.append(pts)
+                for i in range(len(pts)):
+                    x1, y1 = pts[i]
+                    x2, y2 = pts[(i + 1) % len(pts)]
+                    items.append(('seg', x1, y1, x2, y2, 0.0))
+        return items, filled
+
+    def tool_hv_domains(self):
+        """#70: per domain pair, required (IPC-2221B Table 6-1) vs
+        measured clearance and surface creepage, with the limiting
+        geometry located.  Report-only: never moves copper."""
+        if _hvdomains is None:
+            return None
+        try:
+            mk = _markings.load_markings(self.board_path)
+        except Exception as e:
+            return {'error': 'markings_error: %s' % e}
+        if mk is None or not mk.hv_domains:
+            return None
+        H = _hvdomains
+        facts = self._worker('hvgeom', '--board', self.current)
+        if not facts:
+            return {'error': 'hvgeom_failed'}
+        layers = facts.get('layers') or []
+        if not layers:
+            return {'error': 'no_copper_layers'}
+        surface = {layers[0], layers[-1]}
+        outline = [tuple(p) for p in (facts.get('outline') or [])]
+        cutouts = [[tuple(p) for p in c]
+                   for c in (facts.get('cutouts') or [])]
+        doms = mk.hv_domains
+        items, filled, blockers = {}, {}, {}
+        for layer in layers:
+            all_items, all_filled = [], []
+            for net in facts.get('nets', {}):
+                it, fi = self._hv_items(facts, net, layer)
+                items[(net, layer)] = it
+                filled[(net, layer)] = fi
+                all_items += it
+                all_filled += fi
+            blockers[layer] = (all_items, all_filled)
+        pairs = []
+        for i in range(len(doms)):
+            for j in range(i + 1, len(doms)):
+                da, db = doms[i], doms[j]
+                dv = abs(da['voltage_v'] - db['voltage_v'])
+                pair = {'a': da['name'], 'b': db['name'],
+                        'delta_v': dv, 'layers': [], 'violations': []}
+                if dv <= 0:
+                    pair['note'] = ('same declared potential; no spacing '
+                                    'requirement')
+                    pairs.append(pair)
+                    continue
+                for layer in layers:
+                    surf = layer in surface
+                    col = max(
+                        (H.column_for(surf, da.get('coating', 'uncoated'),
+                                      da.get('altitude_m', 0)),
+                         H.column_for(surf, db.get('coating', 'uncoated'),
+                                      db.get('altitude_m', 0))),
+                        key=lambda c: H.required_spacing_mm(dv, c))
+                    req = H.required_spacing_mm(dv, col)
+                    ia = [it for n in da['nets']
+                          for it in items.get((n, layer), [])]
+                    ib = [it for n in db['nets']
+                          for it in items.get((n, layer), [])]
+                    if not ia or not ib:
+                        continue
+                    entry = {'layer': layer, 'column': col,
+                             'required_mm': round(req, 3)}
+                    gap, pa, pb = H.min_clearance(ia, ib)
+                    entry['clearance_mm'] = round(gap, 3)
+                    entry['clearance_at'] = [round(pa[0], 2),
+                                             round(pa[1], 2)]
+                    if gap < req - 1e-9:
+                        pair['violations'].append(
+                            {'kind': 'clearance', 'layer': layer,
+                             'required_mm': round(req, 3),
+                             'actual_mm': round(gap, 3),
+                             'at': entry['clearance_at']})
+                    if surf:
+                        bl, bf = blockers[layer]
+                        cr = H.creepage_path(ia, ib, bl, outline, cutouts,
+                                             pitch=0.25, filled=bf)
+                        entry['creepage_mm'] = (None if cr is None
+                                                else round(cr, 2))
+                        if cr is not None and cr < req - 1e-9:
+                            pair['violations'].append(
+                                {'kind': 'creepage', 'layer': layer,
+                                 'required_mm': round(req, 3),
+                                 'actual_mm': round(cr, 2),
+                                 'at': entry['clearance_at']})
+                    pair['layers'].append(entry)
+                pairs.append(pair)
+        rep = {
+            'standard': 'IPC-2221B Table 6-1 (single spacing table '
+                        'applied to both clearance and creepage)',
+            'assumptions': [
+                {'domain': d['name'], 'voltage_v': d['voltage_v'],
+                 'coating': d.get('coating', 'uncoated'),
+                 'altitude_m': d.get('altitude_m', 0),
+                 'pollution_degree': d.get('pollution_degree'),
+                 'material_group': d.get('material_group')}
+                for d in doms],
+            'creepage_grid_pitch_mm': 0.25,
+            'unmodelled': ['under-component creepage paths (no body data)',
+                           'cross-layer creepage',
+                           'clearance to enclosure/chassis',
+                           'IEC 62368-1 creepage tables (see the research '
+                           'annex on issue #70)'],
+            'pairs': pairs,
+        }
+        self._eng_hv_report = rep
+        self.log('HV domains: %d pair(s), %d violation(s)' % (
+            len(pairs), sum(len(p['violations']) for p in pairs)))
+        return rep
+
+    def _hv_materialise(self, mk):
+        """Opt-in pre-route keepouts (#70): for domains marked
+        materialise, a no-track/via/pour rule area around each pad,
+        expanded by the largest required spacing vs the other
+        domains.  KiCad rule areas are not net-selective: the
+        keepout also constrains the owning domain's own fanout --
+        stated in the report."""
+        doms = [d for d in mk.hv_domains if d.get('materialise')]
+        if not doms or _hvdomains is None:
+            return None
+        H = _hvdomains
+        facts = self._worker('hvgeom', '--board', self.current)
+        if not facts:
+            return None
+        layers = facts.get('layers') or []
+        if not layers:
+            return None
+        spec = []
+        for d in doms:
+            req = 0.0
+            for o in mk.hv_domains:
+                if o is d:
+                    continue
+                dv = abs(d['voltage_v'] - o['voltage_v'])
+                if dv > 0:
+                    req = max(req, H.required_spacing_mm(
+                        dv, H.column_for(True, d.get('coating', 'uncoated'),
+                                         d.get('altitude_m', 0))))
+            if req <= 0:
+                continue
+            for net in d['nets']:
+                nf = facts.get('nets', {}).get(net) or {}
+                for p in nf.get('pads', []):
+                    r = max(p['w'], p['h']) / 2.0 + req
+                    x, y = p['x'], p['y']
+                    spec.append({
+                        'outline': [[x - r, y - r], [x + r, y - r],
+                                    [x + r, y + r], [x - r, y + r]],
+                        'layers': p.get('layers') or [layers[0]],
+                        'keepout': {'tracks': True, 'vias': True,
+                                    'copperpour': True},
+                        'ref': 'AIR-HV-%s' % d['name']})
+        if not spec:
+            return None
+        res = self._worker('audit_zones', '--board', self.current,
+                           '--spec', json.dumps(spec))
+        out = {'zones': len((res or {}).get('added') or []),
+               'note': 'rule areas are not net-selective; they also '
+                       'constrain the owning domain fanout'}
+        self.ledger.append({'tool': 'hv_materialise', **out})
+        return out
+
     def engineered_report(self, final_board):
         # #67 Step 1 per-net verification report.  Verifies geometry and
         # stackup math only -- it does not predict S11 (annex VER-2).
@@ -1082,6 +1278,9 @@ class Pipeline:
         audit = getattr(self, '_audit', None)
         if audit is not None:
             rep['placement_audit'] = audit
+        hvrep = getattr(self, '_eng_hv_report', None)
+        if hvrep is not None:
+            rep['hv_domains'] = hvrep
         lplan = getattr(self, '_eng_length_plan', None)
         if lplan is not None:
             rep['length_groups'] = lplan
