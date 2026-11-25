@@ -16,8 +16,8 @@ Hand-worked design currents (EVA per mode; modes BASE/TX/HEAT/LAMP):
   V5    channels 4 x 0.10 = 0.40; CP load 0.5 A at 5 V = 2.5 W at
         Vmin 4.75 -> 0.526316; own 0.926316; total 2.377316 pk /
         1.917316 sust
-  buck  in = 5.0 * Iout / (0.85 * 10.8): pk 1.294834 / sust 1.044291
-  VIN   = buck input;  VIN_RAW = fuse floor: max(1.294834, 2.0) = 2.0
+  buck  in = 5.25 (Vout MAX, #136) * Iout / (0.85 * 10.8): pk 1.359576 / sust 1.096504
+  VIN   = buck input;  VIN_RAW = fuse floor: max(1.359576, 2.0) = 2.0
 """
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -106,11 +106,11 @@ def test_hand_worked_wcca_table_exact():
     assert d['VSW'] == (0.84, 0.84), d['VSW']
     assert d['V3'] == (1.45, 0.99), d['V3']
     assert abs(d['V5'][0] - 2.377316) < 1e-6 and abs(d['V5'][1] - 1.917316) < 1e-6, d['V5']
-    assert abs(d['VIN'][0] - 1.294834) < 1e-6 and abs(d['VIN'][1] - 1.04429) < 1e-6, d['VIN']
+    assert abs(d['VIN'][0] - 1.359576) < 1e-6 and abs(d['VIN'][1] - 1.096504) < 1e-6, d['VIN']
     assert d['VIN_RAW'] == (2.0, 2.0), d['VIN_RAW']  # fuse floor, not the load sum
     e = {x['ref']: x for x in t['edges']}
     assert e['F1']['kind'] == 'protective' and e['F1']['design'] == {'peak_a': 2.0, 'sustained_a': 2.0}
-    assert e['U1']['kind'] == 'buck' and abs(e['U1']['design']['peak_a'] - 1.294834) < 1e-6
+    assert e['U1']['kind'] == 'buck' and abs(e['U1']['design']['peak_a'] - 1.359576) < 1e-6
     assert e['U2']['kind'] == 'ldo' and e['U2']['design'] == {'peak_a': 1.451, 'sustained_a': 0.991}
     assert e['Q1']['kind'] == 'conduit' and e['Q1']['design'] == {'peak_a': 0.84, 'sustained_a': 0.84}
     # mutually exclusive branches are never summed; modes are visible
