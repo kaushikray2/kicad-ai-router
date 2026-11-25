@@ -310,6 +310,21 @@ class Pipeline:
         # that violates the layer law keys worse (banned tracks are
         # faults), so selection cannot prefer a law-breaking board
         # over a clean one at the same connectivity.
+        engines = list(engines)
+        # v1.11.3 (#109): freerouting/krt cannot honour layer_cost --
+        # they take no layer-law arguments, and priced layers leave
+        # the effective ban set, so the gate levies no penalty on
+        # their priced-layer tracks: they would compete at 1x against
+        # TraceMaker's priced cost with the mis-score invisible.
+        # Exclude them while a valid cost spec is in force, loudly.
+        excluded = []
+        _cost = self._layer_cost_spec(self.base)
+        if _cost:
+            for eng in ('freerouting', 'krt'):
+                if eng in engines:
+                    engines.remove(eng)
+                    excluded.append(eng)
+                    self.log('portfolio: %s excluded -- cannot honour layer_cost %s; priced-layer tracks would carry no gate penalty (#109)' % (eng, _cost))
         results = []
         winner = None
         for eng in engines:
@@ -347,8 +362,10 @@ class Pipeline:
                      (eng, key, g.get('unconnected_total'), g.get('copper_violations'), g.get('banned_layer_tracks')))
             if winner is None or key < winner[0]:
                 winner = (key, outp, g)
-        self._record('portfolio', {'engines': list(engines), 'results': results,
-                                   'winner': winner[1] if winner else None})
+        _rec = {'engines': list(engines), 'results': results,
+                'winner': winner[1] if winner else None}
+        if excluded: _rec['excluded_layer_cost'] = excluded
+        self._record('portfolio', _rec)
         if winner:
             self.current = winner[1]
             return winner[2]
