@@ -63,13 +63,21 @@ def _pt_in_rect(x, y, rect, grow=0.0):
 def _seg_hits_rect(item, rect, grow):
     if item[0] == 'disc':
         return _pt_in_rect(item[1], item[2], rect, grow + item[3])
+    g = grow + item[5]
+    x0, y0 = rect[0] - g, rect[1] - g
+    x1, y1 = rect[2] + g, rect[3] + g
     for (x, y) in ((item[1], item[2]), (item[3], item[4])):
-        if _pt_in_rect(x, y, rect, grow + item[5]):
+        if x0 <= x <= x1 and y0 <= y <= y1:
             return True
-    # segment crossing the rect without an endpoint inside:
-    # sample the midpoint as a cheap conservative extra probe
-    mx, my = (item[1] + item[3]) / 2.0, (item[2] + item[4]) / 2.0
-    return _pt_in_rect(mx, my, rect, grow + item[5])
+    # #96: exact edge-crossing test -- endpoint+midpoint probing
+    # missed segments that clip a corner of the region (in one
+    # edge, out the adjacent one, midpoint outside).
+    seg = (item[1], item[2], item[3], item[4])
+    for edge in ((x0, y0, x1, y0), (x1, y0, x1, y1),
+                 (x1, y1, x0, y1), (x0, y1, x0, y0)):
+        if _H._seg_seg(seg, edge)[0] <= 1e-9:
+            return True
+    return False
 
 
 def evaluate(entry, board):

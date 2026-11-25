@@ -95,3 +95,14 @@ def test_guard_single_tie_fails_and_cap_return():
     rep = Q.evaluate(ENTRY, _board(cap_via=False))
     assert not rep['pass']
     assert any(not c['ground_return'] for c in rep['load_caps'])
+
+
+def test_seg_hits_rect_corner_crossing():
+    # #96: a segment clipping the rect's corner (in through one
+    # edge, out the adjacent one) with endpoints AND midpoint
+    # outside must still register as a hit.
+    rect = (0.0, 0.0, 10.0, 10.0)
+    item = ('seg', -0.05, 0.15, 5.0, -4.9, 0.0)   # crosses (0,0.1)-(0.1,0)
+    assert Q._seg_hits_rect(item, rect, 0.0) is True
+    far = ('seg', -5.0, -5.0, -1.0, -1.0, 0.0)
+    assert Q._seg_hits_rect(far, rect, 0.0) is False
