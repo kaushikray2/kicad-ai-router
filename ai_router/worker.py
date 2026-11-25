@@ -1410,6 +1410,42 @@ def cmd_finish_attempt(board_path, out_path, net, victims):
     return {'status': 'failed', 'net': net}
 
 
+def _edge_shape_segments(dr):
+    # v1.11.5 (#118): the outline segments of one Edge.Cuts drawing.
+    # Straight segments are exact. Every other shape (circle, arc,
+    # rectangle, polygon, bezier) is tessellated by KiCad itself via
+    # TransformShapeToPolygon at 0.05 mm max error, ERROR_OUTSIDE so
+    # the tessellation never overstates the distance to the true
+    # edge. The old code used the shape's BOUNDING BOX, which is
+    # wrong in both directions: too lenient at a circle's diagonals
+    # (copper 0.2 mm from a 3.2 mm circle sits ~0.33 mm from the
+    # nearest box side and passed a 0.3 mm rule) and too strict
+    # across a corner arc or a polygon notch (box sides run through
+    # the board interior). Falls back to the bbox if tessellation
+    # is unavailable.
+    if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+        return [(mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y))]
+    try:
+        ps = pcbnew.SHAPE_POLY_SET()
+        dr.TransformShapeToPolygon(ps, dr.GetLayer(), 0, nm(0.05), pcbnew.ERROR_OUTSIDE)
+        segs = []
+        for oi in range(ps.OutlineCount()):
+            chains = [ps.Outline(oi)]
+            try:
+                for hi in range(ps.HoleCount(oi)): chains.append(ps.Hole(oi, hi))
+            except Exception: pass
+            for ch in chains:
+                pts = [(mm(ch.CPoint(i).x), mm(ch.CPoint(i).y)) for i in range(ch.PointCount())]
+                for i in range(len(pts)):
+                    x1, y1 = pts[i]; x2, y2 = pts[(i + 1) % len(pts)]
+                    if (x1, y1) != (x2, y2): segs.append((x1, y1, x2, y2))
+        if segs: return segs
+    except Exception:
+        pass
+    bb = dr.GetBoundingBox()
+    el, et, er, eb = mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom())
+    return [(el, et, er, et), (er, et, er, eb), (er, eb, el, eb), (el, eb, el, et)]
+
 def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
     # The grid has no notion of the board outline, so a board-wide leg
     # can hug the edge closer than the copper_edge_clearance rule
@@ -1418,8 +1454,8 @@ def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
     # finisher rarely reaches an edge, which is why this stayed
     # hidden). Stamp a band around every Edge.Cuts segment: track
     # centres must stand off edge_clr + tw/2, via centres edge_clr +
-    # vr. Non-line shapes are stamped by expanded bbox
-    # (conservative). Applies to every layer.
+    # vr. Non-line shapes are stamped from their tessellated
+    # outline (_edge_shape_segments, #118). Applies to every layer.
     try: edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
     except Exception: edge_clr = 0.5
     if edge_clr <= 0: return
@@ -1448,14 +1484,8 @@ def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
         band = np.zeros((g.NY, g.NX), dtype=bool)
         for dr in _drawings:
             if dr.GetLayer() != pcbnew.Edge_Cuts: continue
-            if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
-                stamp_band(mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y), rad, band)
-            else:
-                bb = dr.GetBoundingBox()
-                stamp_band(mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetTop()), rad, band)
-                stamp_band(mm(bb.GetLeft()), mm(bb.GetBottom()), mm(bb.GetRight()), mm(bb.GetBottom()), rad, band)
-                stamp_band(mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetLeft()), mm(bb.GetBottom()), rad, band)
-                stamp_band(mm(bb.GetRight()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom()), rad, band)
+            for (sx0, sy0, sx1, sy1) in _edge_shape_segments(dr):
+                stamp_band(sx0, sy0, sx1, sy1, rad, band)
         if is_via: via_block |= band
         else:
             for li in range(g.nl): blocked[li] |= band
@@ -1742,12 +1772,7 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
     except Exception: edge_clr = 0.5
     if edge_clr > 0:
         def _add_edge(dr):
-            if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
-                edge_segs.append((mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y)))
-            else:
-                bb = dr.GetBoundingBox()
-                el, et, er, eb = mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom())
-                edge_segs.extend([(el, et, er, et), (er, et, er, eb), (er, eb, el, eb), (el, eb, el, et)])
+            edge_segs.extend(_edge_shape_segments(dr))  # v1.11.5 (#118): tessellated outline, not the bbox
         for dr in b.GetDrawings():
             if dr.GetLayer() == pcbnew.Edge_Cuts: _add_edge(dr)
         # v1.11.1 (#75): Edge.Cuts drawn inside a footprint (slots,

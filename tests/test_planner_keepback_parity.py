@@ -101,4 +101,22 @@ assert via_block4[j, i], 'cell between drill-radius and pad-radius bands not sta
 j, i = cell(21.0, 20.0)
 assert not via_block4[j, i], 'cell beyond the pad-radius band stamped -- band too wide'
 
+# --- edge stamp: curved Edge.Cuts are tessellated, not boxed (#118)
+# 3.2 mm circle at (32, 8). With edge_clr set to 0.3 and vr 0, the
+# via band radius is 0.3. The grid point (33.2, 9.2) is 0.097 mm
+# from the circle at 45 degrees -- inside the true band -- but
+# 0.4 mm from the nearest bounding-box side, so the bbox model
+# left it unstamped (the review's section-9 geometry).
+ds.m_CopperEdgeClearance = NM(0.3)
+circ2 = pcbnew.PCB_SHAPE(b); circ2.SetShape(pcbnew.SHAPE_T_CIRCLE)
+circ2.SetCenter(pcbnew.VECTOR2I(NM(32), NM(8))); circ2.SetRadius(NM(1.6))
+circ2.SetLayer(pcbnew.Edge_Cuts); b.Add(circ2)
+blocked5 = np.zeros((g.nl, g.NY, g.NX), dtype=bool); via_block5 = np.zeros((g.NY, g.NX), dtype=bool)
+w._stamp_edge_keepback(b, g, blocked5, via_block5, 0.25, 0.0)
+j, i = cell(33.2, 9.2)
+assert via_block5[j, i], 'point 0.097 mm from a curved cutout not stamped -- planner still uses the bbox (#118)'
+j, i = cell(35.5, 11.5)
+assert not via_block5[j, i], 'point 2.35 mm from the circle stamped -- tessellation band too wide'
+ds.m_CopperEdgeClearance = NM(0.5)
+
 print('planner keepback parity OK')

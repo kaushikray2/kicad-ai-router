@@ -40,4 +40,16 @@ assert w._new_items_clean(b, 'N1', [], [(55.0, 50.0)], []) is True, 'distant via
 assert w._new_items_clean(b, 'N1', [(0, 10.0, 10.0, 30.0, 10.0)], [], [], w=0.25) is False, 'footprint Edge.Cuts graze passed the checker'
 # control: 1.8 mm away is clean
 assert w._new_items_clean(b, 'N1', [(0, 10.0, 12.0, 30.0, 12.0)], [], [], w=0.25) is True, 'distant track rejected'
+# (c) curved Edge.Cuts (#118): a 3.2 mm circle at (50, 20); a short
+# segment at 45 degrees, 0.10 mm from the circle, edge rule now
+# 0.3 mm. The bounding-box model measured ~0.39 mm to the nearest
+# box side and PASSED it; the tessellated outline must reject it.
+ds.m_CopperEdgeClearance = NM(0.3)
+circ = pcbnew.PCB_SHAPE(b); circ.SetShape(pcbnew.SHAPE_T_CIRCLE)
+circ.SetCenter(pcbnew.VECTOR2I(NM(50), NM(20))); circ.SetRadius(NM(1.6))
+circ.SetLayer(pcbnew.Edge_Cuts); b.Add(circ)
+assert w._new_items_clean(b, 'N1', [(0, 51.195, 21.209, 51.209, 21.195)], [], [], w=0.1) is False, 'segment 0.1 mm from a curved cutout passed the checker (bbox model)'
+# control: the same segment 1.5 mm from the circle is clean
+assert w._new_items_clean(b, 'N1', [(0, 52.4, 22.9, 52.5, 22.8)], [], [], w=0.1) is True, 'distant segment near circle rejected'
+ds.m_CopperEdgeClearance = NM(0.5)
 print('new_items_clean hole_to_hole + footprint Edge.Cuts OK')
