@@ -3349,9 +3349,39 @@ class _ViaSites:
         self.vias = [(mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetWidth()), t.GetNetname())
                      for t in b.GetTracks() if t.Type() == pcbnew.PCB_VIA_T]
         self.novia = []
-        for z in b.Zones():
-            if z.GetIsRuleArea() and z.GetZoneRuleAreaSettings().GetNoVia():
+        # #78: GetDoNotAllowVias() is the KiCad 10 API (the old
+        # GetZoneRuleAreaSettings().GetNoVia() call does not exist and
+        # raised AttributeError on any board with a rule-area zone);
+        # footprint-embedded rule areas count too (_all_zones pattern).
+        _allz = list(b.Zones())
+        for fp in b.GetFootprints(): _allz.extend(list(fp.Zones()))
+        for z in _allz:
+            if z.GetIsRuleArea() and z.GetDoNotAllowVias():
                 self.novia.append(z.Outline())
+        # #78: same-net drill facts for the hole_to_hole test in ok()
+        self.vdrills = [(mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2, t.GetNetname())
+                        for t in b.GetTracks() if t.Type() == pcbnew.PCB_VIA_T]
+        self.pad_drills = [(mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(p.GetDrillSize().x), mm(p.GetDrillSize().y)) / 2)
+                           for fp in b.GetFootprints() for p in fp.Pads()
+                           if p.GetNetname() == gnd and p.GetDrillSize().x > 0]
+        try: self.h2h = mm(b.GetDesignSettings().m_HoleToHoleMin)
+        except Exception: self.h2h = 0.25
+        try: self.edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
+        except Exception: self.edge_clr = 0.5
+        self.edge_segs = []
+        if self.edge_clr > 0:
+            def _es(dr):
+                if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+                    self.edge_segs.append((mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y)))
+                else:
+                    bb = dr.GetBoundingBox()
+                    el, et, er, eb = mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom())
+                    self.edge_segs.extend([(el, et, er, et), (er, et, er, eb), (er, eb, el, eb), (el, eb, el, et)])
+            for dr in b.GetDrawings():
+                if dr.GetLayer() == pcbnew.Edge_Cuts: _es(dr)
+            for fp in b.GetFootprints():
+                for dr in fp.GraphicalItems():
+                    if dr.GetLayer() == pcbnew.Edge_Cuts: _es(dr)
 
     def _inside_gnd(self, lid, x, y):
         pt = pcbnew.VECTOR2I(nm(x), nm(y))
@@ -3372,11 +3402,31 @@ class _ViaSites:
         for (vx, vy, w, n) in self.vias:
             if n != self.gnd and math.hypot(x - vx, y - vy) < self.clr + r + w / 2:
                 return False
+        # #78: hole_to_hole binds same-net drills too -- without this,
+        # cmd_power_vias ring neighbours land 0.31 mm apart with
+        # 0.6 mm vias (physically overlapping barrels).
+        for (vx, vy, dr, n) in self.vdrills:
+            if n == self.gnd and math.hypot(x - vx, y - vy) < dr + self.vd / 2 + self.h2h:
+                return False
+        for (px_, py_, dr) in self.pad_drills:
+            if math.hypot(x - px_, y - py_) < dr + self.vd / 2 + self.h2h:
+                return False
+        for (ex1, ey1, ex2, ey2) in self.edge_segs:
+            if seg_pt(x, y, ex1, ey1, ex2, ey2) < r + self.edge_clr:
+                return False
         pt = pcbnew.VECTOR2I(nm(x), nm(y))
         for ps in self.novia:
             for oi in range(ps.OutlineCount()):
                 if ps.Contains(pt, oi):
                     return False
+                # #78: dilate by the via radius -- DRC tests the via
+                # DISC against the area, not the centre point.
+                _o = ps.Outline(oi)
+                _pts = [(mm(_o.CPoint(k).x), mm(_o.CPoint(k).y)) for k in range(_o.PointCount())]
+                for i in range(len(_pts)):
+                    q = _pts[(i + 1) % len(_pts)]
+                    if seg_pt(x, y, _pts[i][0], _pts[i][1], q[0], q[1]) < r:
+                        return False
         if self.contain_net is not None:
             for lid in self.outer + self.inner:
                 if lid in self.fills and not self._inside_gnd(lid, x, y):
@@ -3387,6 +3437,7 @@ class _ViaSites:
         nets = {n: self.b.FindNet(n) for n in (self.gnd,)}
         v = add_via(self.b, nets, self.gnd, x, y, self.vw, self.vd)
         self.vias.append((x, y, self.vw, self.gnd))
+        self.vdrills.append((x, y, self.vd / 2, self.gnd))
         return v
 
 
