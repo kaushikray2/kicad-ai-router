@@ -29,6 +29,22 @@ def _layer_id_from_name(n):
         except Exception: return None
     return None
 
+def _parse_no_tracks_raw(spec):
+    # v1.11.2 (#104): split a --no-tracks-on value into (canonical
+    # layer ids, unresolved names). Empty tokens are skipped:
+    # ''.split(',') is [''], and an empty token would otherwise land
+    # in the unresolved list and make Grid.__init__ raise on a spec
+    # that simply means 'ban nothing' (a trailing comma, 'In1.Cu,',
+    # hit the same crash before this helper existed).
+    banned = set(); unresolved = []
+    for _x in spec.split(','):
+        _x = _x.strip()
+        if not _x: continue
+        _i = _layer_id_from_name(_x)
+        if _i is None: unresolved.append(_x)
+        else: banned.add(_i)
+    return banned, unresolved
+
 def _resolve_banned_on_board(b, names):
     # v1.9 (M4): resolve non-canonical --no-tracks-on names against
     # THIS board. A board may name its copper layers freely (the
@@ -1250,7 +1266,7 @@ def cmd_finish_leg(board_path, out_path, net, attempt_select=False):
                     pline = [sys.executable, os.path.abspath(__file__), 'finish_probe',
                              '--board', board_in, '--net', net,
                              '--victims', ','.join(victims), '--result', ppath]
-                    if NO_TRACKS_ON_RAW: pline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+                    if NO_TRACKS_ON_RAW is not None: pline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
                     if LAYER_COST_RAW: pline += ['--layer-cost', LAYER_COST_RAW]
                     try:
                         subprocess.run(pline, capture_output=True, text=True, timeout=600)
@@ -1271,7 +1287,7 @@ def cmd_finish_leg(board_path, out_path, net, attempt_select=False):
             cmdline = [sys.executable, os.path.abspath(__file__), 'finish_attempt',
                        '--board', board_in, '--out', out_path, '--net', net,
                        '--victims', ','.join(victims), '--result', rpath]
-            if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+            if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
             if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
             try:
                 subprocess.run(cmdline, capture_output=True, text=True, timeout=300)
@@ -1525,7 +1541,7 @@ def cmd_long_leg(board_path, out_path, net):
         fd, rpath = tempfile.mkstemp(suffix='.json'); os.close(fd)
         cmdline = [sys.executable, os.path.abspath(__file__), 'long_attempt',
                    '--board', board_in, '--out', out_path, '--net', net, '--result', rpath]
-        if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+        if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
         if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
         try:
             subprocess.run(cmdline, capture_output=True, text=True, timeout=900)
@@ -2015,7 +2031,7 @@ def cmd_heal(board_path, out_path, only=None):
                            '--frm', '%s:%.2f:%.2f' % (','.join(map(str, fl)), fx, fy),
                            '--dst', '%s:%.2f:%.2f' % (','.join(map(str, dl)), dx, dy),
                            '--result', rpath]
-                if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+                if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
                 if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
                 try:
                     subprocess.run(cmdline, capture_output=True, text=True, timeout=300)
@@ -2586,7 +2602,7 @@ def cmd_ilp_repair(board_path, out_path, nets):
             cmdline = [sys.executable, os.path.abspath(__file__), 'finish_attempt',
                        '--board', cur, '--out', tmp_out, '--net', cand['net'],
                        '--victims', ','.join(cand['victims']), '--result', rpath]
-            if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+            if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
             if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
             try:
                 subprocess.run(cmdline, capture_output=True, text=True, timeout=600)
@@ -2723,14 +2739,10 @@ def main():
     ap.add_argument('--layer-cost')
     ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
-    if a.no_tracks_on:
+    if a.no_tracks_on is not None:  # v1.11.2 (#104): '' is an explicit empty ban set, not 'unset' -- the truthiness test silently restored the Grid default {In1_Cu} ban
         global BANNED_LAYER_IDS, NO_TRACKS_ON_RAW, NO_TRACKS_ON_UNRESOLVED
         NO_TRACKS_ON_RAW = a.no_tracks_on
-        BANNED_LAYER_IDS = set(); NO_TRACKS_ON_UNRESOLVED = []
-        for _x in a.no_tracks_on.split(','):
-            _i = _layer_id_from_name(_x)
-            if _i is None: NO_TRACKS_ON_UNRESOLVED.append(_x.strip())
-            else: BANNED_LAYER_IDS.add(_i)
+        BANNED_LAYER_IDS, NO_TRACKS_ON_UNRESOLVED = _parse_no_tracks_raw(a.no_tracks_on)
     if a.layer_cost:
         global LAYER_COST_RAW, LAYER_COST_BY_ID, LAYER_COST_UNRESOLVED
         LAYER_COST_RAW = a.layer_cost

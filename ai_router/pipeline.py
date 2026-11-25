@@ -506,6 +506,19 @@ class Pipeline:
         spec = self._layer_cost_spec(self.current)
         return ['--layer-cost', spec] if spec else []
 
+    def _leg_ban_args(self):
+        # v1.11.2 (#104): legs receive the EFFECTIVE ban set for the
+        # current board -- canonical, board-resolved, priced layers
+        # removed -- exactly the law the engine paths run under. The
+        # flag is always emitted: with layer_cost pricing every
+        # configured ban the effective set is legitimately empty, and
+        # for worker legs an omitted flag means the worker's default
+        # {In1_Cu} ban, not 'ban nothing'. NOT _banned_for(): it logs
+        # a WARNING on every call when a configured name is unknown
+        # on this board, which would spam once per leg;
+        # _effective_policy's own warnings are once per Pipeline.
+        return ['--no-tracks-on', ','.join(self._effective_policy(self.current)[0])]
+
     def _banned_for(self, board):
         # v1.10.1 (#49): the layer law, resolved against THIS board.
         # A name that resolves (board spelling or canonical, any case)
@@ -657,7 +670,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
         extra = ['--attempt-select'] if self.cfg.get('attempt_select') else []
-        r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *extra, *self._leg_layer_args())
+        r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, *self._leg_ban_args(), *extra, *self._leg_layer_args())
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -679,7 +692,7 @@ class Pipeline:
         outp = self._out('longfinish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_layer_args())
+        r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, *self._leg_ban_args(), *self._leg_layer_args())
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -705,7 +718,7 @@ class Pipeline:
         outp = self._out('ilprepair')
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_layer_args())
+        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), *self._leg_ban_args(), *self._leg_layer_args())
         if r.get('routed') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -732,7 +745,7 @@ class Pipeline:
         for net in cands:
             outp = self._out('healed')
             kb = _accept_key(cur_gate)
-            args = ['--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu'))]
+            args = ['--board', self.current, '--out', outp, *self._leg_ban_args()]
             args += self._leg_layer_args()  # v1.11 (#73): heal routes bridges on the grid
             if net: args += ['--nets', net]
             r = self._worker('heal', *args)
@@ -763,7 +776,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
         outp = self._out('stitched')
-        r = self._worker('stitch', '--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_layer_args())  # v1.11.2 (#102): stitch DOES route -- _bridge_island draws track bridges (<=8 mm, <=2 vias) on the Grid; the v1.11.0 'vias only' exclusion rationale was wrong
+        r = self._worker('stitch', '--board', self.current, '--out', outp, *self._leg_ban_args(), *self._leg_layer_args())  # v1.11.2 (#102): stitch DOES route -- _bridge_island draws track bridges (<=8 mm, <=2 vias) on the Grid; the v1.11.0 'vias only' exclusion rationale was wrong
         if os.path.exists(outp):
             prev = self.current
             self.current = outp
