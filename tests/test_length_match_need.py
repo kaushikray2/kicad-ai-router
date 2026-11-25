@@ -16,8 +16,9 @@ STATS = {'NA': {'length_mm': 50.0, 'delay_ps': 300.0},
 
 def test_delay_only_failure_requests_meander():
     try:
-        subprocess.run([sys.executable, '-c', 'import pcbnew'],
-                       capture_output=True, timeout=60)
+        r = subprocess.run([sys.executable, '-c', 'import pcbnew'],
+                           capture_output=True, timeout=60)
+        if r.returncode != 0: print('skip: pcbnew unavailable'); return
     except Exception:
         print('skip: pcbnew unavailable'); return
     from ai_router.pipeline import Pipeline

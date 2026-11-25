@@ -41,8 +41,9 @@ FACTS = {'V5': {'tracks': [{'uuid': 't1', 'layer': 'GND', 'x1': 0, 'y1': 0,
 
 def test_power_plan_with_renamed_layers():
     try:
-        subprocess.run([sys.executable, '-c', 'import pcbnew'],
-                       capture_output=True, timeout=60)
+        r = subprocess.run([sys.executable, '-c', 'import pcbnew'],
+                           capture_output=True, timeout=60)
+        if r.returncode != 0: print('skip: pcbnew unavailable'); return
     except Exception:
         print('skip: pcbnew unavailable'); return
     from ai_router.pipeline import Pipeline
