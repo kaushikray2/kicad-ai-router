@@ -84,3 +84,16 @@ def test_creepage_bridges_foreign_copper():
     m = [('disc', 6.0, 0.0, 2.0)]
     cr = H.creepage_path(a, b, m, [], [], pitch=0.25)
     assert cr is not None and 4.5 < cr < 7.5, cr
+
+
+def test_creepage_no_diagonal_corner_cut():
+    # #88: two cutouts meeting corner-to-corner leave only a
+    # diagonal pinch between free cells (6.0,0.25) and (6.25,0);
+    # their orthogonal neighbours are both blocked, so no legal
+    # path exists and the checker must say so.
+    a = [('disc', 0.0, 0.0, 0.5)]
+    b = [('disc', 12.0, 0.0, 0.5)]
+    r1 = [(4.9, -4.0), (6.125, -4.0), (6.125, 0.125), (4.9, 0.125)]
+    r2 = [(6.125, 0.125), (7.1, 0.125), (7.1, 4.0), (6.125, 4.0)]
+    cr = H.creepage_path(a, b, [], [], [r1, r2], pitch=0.25)
+    assert cr is None, cr

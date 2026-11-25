@@ -252,6 +252,10 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
                 if not (0 <= ni < nx and 0 <= nj < ny) \
                         or blocked[nj][ni]:
                     continue
+                if di and dj and (blocked[j][ni] or blocked[nj][i]):
+                    continue   # #88: no diagonal corner cuts -- the
+                    # step would squeeze through the point where two
+                    # blocked cells touch, a sub-pitch surface gap
                 nd = d + (0.0 if metal[nj][ni]
                           else (diag if di and dj else pitch))
                 if nd < dist.get((ni, nj), 1e18):
