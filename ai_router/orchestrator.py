@@ -95,11 +95,23 @@ def _trim(result, limit=3500):
     s = json.dumps(result)
     return s if len(s) <= limit else s[:limit] + '...[trimmed]'
 
+def _cfg_int(cfg, key, default):
+    """Config int with a forgiving read (#138 (B13) smaller
+    item): a non-numeric max_tool_calls used to crash an
+    LLM-mode job outright at int(...); fall back to the default
+    instead.  (The backend's S6 clamps in run_job cover job
+    overrides; this covers every other config source.)"""
+    try:
+        return int(cfg.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def run_llm(cfg, pipe, log):
     client = LLMClient(cfg['endpoint'], cfg['model'], cfg.get('api_key', ''), cfg.get('request_timeout_s', 600))
     messages = [{'role': 'system', 'content': PLAYBOOK},
                 {'role': 'user', 'content': 'Route this board. Board file: %s. Begin.' % pipe.board_path}]
-    max_calls = int(cfg.get('max_tool_calls', 48))
+    max_calls = _cfg_int(cfg, 'max_tool_calls', 48)
     calls_made = 0
     while calls_made < max_calls:
         try:
