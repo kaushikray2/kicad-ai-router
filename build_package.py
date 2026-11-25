@@ -50,8 +50,12 @@ def main():
     zip_name = 'ai-router-%s.zip' % VERSION
     zip_path = os.path.join(out_zip_dir, zip_name)
     pkg_src = os.path.join(HERE, 'ai_router')
-    files = ['__init__.py', 'ai_router_plugin.py', 'dialog.py', 'config.py', 'llm_client.py',
-             'orchestrator.py', 'pipeline.py', 'worker.py', 'backend_client.py', 'icon.png']
+    # v1.11.5 (#150): package EVERY ai_router/*.py by glob -- the
+    # hard-coded list silently shipped NONE of the 12 engineered-
+    # nets modules, so PCM installs had no markings support at all
+    # (and the import fallback then hid the fact, see pipeline.py).
+    import glob as _glob
+    files = sorted(os.path.basename(f) for f in _glob.glob(os.path.join(pkg_src, '*.py'))) + ['icon.png']
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('metadata.json', json.dumps(METADATA, indent=2))
         for f in files:

@@ -26,6 +26,13 @@ DEFAULTS = {
     'no_tracks_on': 'In1.Cu',
     'layer_law_policy': 'auto',  # v1.8: B-first + escalate on >=4L In2-pour boards (dataset-v3 gap)
     'strip_existing': True,
+    # v1.11.5 (#150/#138): the ONLY engineered-nets keys admitted
+    # to DEFAULTS -- plain booleans. power_netlist / kb_cache /
+    # kb_endpoint deliberately stay OUT: they are paths/URLs and
+    # remain server-owned (set in server config, never forwarded
+    # from job overrides).
+    'engineered_nets': True,
+    'placement_audit': True,
     'max_tool_calls': 48,
     'request_timeout_s': 600,
     'use_backend': False,

@@ -22,6 +22,11 @@ def submit(url, token, board_path, overrides):
     dru = os.path.splitext(board_path)[0] + '.kicad_dru'
     if os.path.exists(dru):
         payload['dru_b64'] = base64.b64encode(open(dru, 'rb').read()).decode()
+    # v1.11.5 (#150): the markings sidecar travels with the board --
+    # without it a backend run silently routes unmarked.
+    sidecar = os.path.splitext(board_path)[0] + '.ai-router-markings.json'
+    if os.path.exists(sidecar):
+        payload['markings_b64'] = base64.b64encode(open(sidecar, 'rb').read()).decode()
     out = json.loads(_req(url, '/api/runs', token, 'POST', payload, timeout=300))
     return out['job_id']
 

@@ -72,6 +72,8 @@ except Exception:
         _library_rules = None
         _placement_audit = None
         _lengthmatch = None
+        _hvdomains = None
+        _quietnets = None
 
 # KiCad's built-in Default netclass values (what LoadBoard synthesises
 # when a board has no .kicad_pro); used as the clone source for an
@@ -166,6 +168,16 @@ class Pipeline:
         self.current = self.base
         self._record('setup', {'base': self.base})
         self._eng = None
+        if _markings is None or _tlcalc is None or _hvdomains is None or _quietnets is None:
+            # v1.11.5 (#150): a markings sidecar exists but the
+            # engineered modules failed to import (e.g. a PCM zip
+            # that does not ship them) -- fail LOUDLY. Silently
+            # running unmarked would route the board as if it had
+            # no markings at all.
+            _sc = os.path.splitext(self.board_path)[0] + '.ai-router-markings.json'
+            if os.path.exists(_sc):
+                raise RuntimeError('markings sidecar present (%s) but the engineered-nets '
+                                   'modules failed to import -- refusing to run unmarked' % _sc)
         self._domains_path = None  # #80: set by _domain_setup when materialise markings exist
         try:
             self._engineered_setup()

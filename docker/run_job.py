@@ -139,7 +139,8 @@ def main():
             _led = os.path.join(os.path.dirname(final), 'ledger.json')
             if os.path.isfile(_led): shutil.copy(_led, os.path.join(jd, 'ledger.json'))
         gate = res.get('gate') or {}
-        write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'tracks_by_layer')})
+        write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'tracks_by_layer')},
+                     engineered_nets=res.get('engineered_nets'))  # v1.11.5 (#150): the engineered-nets report travels with the result
     except Exception as e:
         import traceback; traceback.print_exc()
         write_status(status='error', error=str(e)[:500])
