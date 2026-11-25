@@ -3,7 +3,7 @@
 Every tool works on FILES in a work directory; the user's open board is
 never modified. The gate is kicad-cli DRC after a zone refill — the same
 gate used to validate the method by hand."""
-import hashlib, json, os, re, shutil, subprocess, sys, time
+import hashlib, json, math, os, re, shutil, subprocess, sys, time
 from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -173,6 +173,28 @@ def _conn_key(g):
     return (10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
             len((g or {}).get('split_nets') or []), fault_count(g),
             int((g or {}).get('skeleton_intrusions') or 0))
+
+def _router_added(cur, base):
+    # tool_fix_violations' base diff (#155): a current fault is
+    # router-added when no base fault of the same type sits within
+    # 0.5 mm of it -- matched greedily 1-to-1, nearest pairs first,
+    # so one base fault can mask at most one current fault. #160:
+    # the old 0.5 mm grid snap implemented a different rule -- it
+    # chased base faults that jittered 0.02 mm across a bucket
+    # boundary and masked genuinely new faults sharing a cell
+    # 0.68 mm away, outside the documented tolerance.
+    pairs = []
+    for i, f in enumerate(cur):
+        for j, g in enumerate(base):
+            if g['type'] != f['type']: continue
+            d = math.hypot(f['x'] - g['x'], f['y'] - g['y'])
+            if d <= 0.5: pairs.append((d, i, j))
+    pairs.sort()
+    used_cur, used_base, matched = set(), set(), set()
+    for _d, i, j in pairs:
+        if i in used_cur or j in used_base: continue
+        used_cur.add(i); used_base.add(j); matched.add(i)
+    return [f for i, f in enumerate(cur) if i not in matched]
 
 
 class Pipeline:
@@ -735,9 +757,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         cur = self._drc_fault_items(self.current)
         base = self._drc_fault_items(self.base)
-        def _key(f): return (f['type'], round(f['x'] * 2) / 2, round(f['y'] * 2) / 2)
-        base_keys = {_key(f) for f in base}
-        added = [f for f in cur if _key(f) not in base_keys]
+        added = _router_added(cur, base)
         order = {t: i for i, t in enumerate(FAULT_FIX_ORDER)}
         added.sort(key=lambda f: order.get(f['type'], 99))
         added = added[:32]
