@@ -64,6 +64,7 @@ tool errors, read the error and adapt; do not retry it verbatim."""
 TOOLS = [
     {'type': 'function', 'function': {'name': 'board_summary', 'description': 'Board orientation: nets, pad counts, split nets (pads in >1 component), track/via counts.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'scorecard', 'description': 'Physics scorecard: worst decoupling caps by distance to nearest same-net pad.', 'parameters': {'type': 'object', 'properties': {}}}},
+    {'type': 'function', 'function': {'name': 'skeleton', 'description': 'Pour skeletons (#63): per-pour pad components, severed spanning-tree edges, and the reserved-corridor intrusion census of the current board.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'route', 'description': 'One TraceMaker pass. From the clean base unless from_current is true.', 'parameters': {'type': 'object', 'properties': {'first_nets': {'type': 'array', 'items': {'type': 'string'}}, 'work': {'type': 'integer'}, 'from_current': {'type': 'boolean'}}}}},
     {'type': 'function', 'function': {'name': 'gate', 'description': 'KiCad DRC gate with zone refill: unconnected decomposed into pour vs signal, violation classes, split nets.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'finish_leg', 'description': 'Scripted in-place finisher for one net: grid A*, single-net displacement if blocked, re-bridge of the displaced net.', 'parameters': {'type': 'object', 'properties': {'net': {'type': 'string'}}, 'required': ['net']}}},
@@ -78,6 +79,7 @@ TOOLS = [
 def _dispatch(pipe, name, args):
     if name == 'board_summary': return pipe.tool_board_summary()
     if name == 'scorecard': return pipe.tool_scorecard()
+    if name == 'skeleton': return pipe.tool_skeleton()
     if name == 'route': return pipe.tool_route(args.get('first_nets') or [], args.get('work'), bool(args.get('from_current')))
     if name == 'gate': return pipe.tool_gate()
     if name == 'finish_leg': return pipe.tool_finish_leg(args.get('net', ''))
