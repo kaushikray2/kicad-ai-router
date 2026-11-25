@@ -24,6 +24,7 @@ def test_pad_over_own_plane_not_filtered():
     b.Add(z)
     fp = pcbnew.FOOTPRINT(b); fp.SetPosition(pcbnew.VECTOR2I(nm(20), nm(20)))
     pad = pcbnew.PAD(fp); pad.SetShape(pcbnew.PAD_SHAPE_RECT)
+    pad.SetAttribute(pcbnew.PAD_ATTRIB_SMD); pad.SetDrillSize(pcbnew.VECTOR2I(0, 0))  # truly SMD: a default PAD carries a 0.762 PTH drill, which the corrected hole_to_hole check (#75) rightly rejects a via on top of
     pad.SetSize(pcbnew.VECTOR2I(nm(1.6), nm(1.6)))
     pad.SetPosition(pcbnew.VECTOR2I(nm(20), nm(20)))
     _ls = pcbnew.LSET(); _ls.AddLayer(pcbnew.F_Cu); pad.SetLayerSet(_ls); pad.SetNetCode(code)
@@ -33,6 +34,7 @@ def test_pad_over_own_plane_not_filtered():
     # bridging pad 1 into the plane must grow pad 1's pad set to 2.
     fp2 = pcbnew.FOOTPRINT(b); fp2.SetPosition(pcbnew.VECTOR2I(nm(30), nm(30)))
     pad2 = pcbnew.PAD(fp2); pad2.SetShape(pcbnew.PAD_SHAPE_RECT)
+    pad2.SetAttribute(pcbnew.PAD_ATTRIB_SMD); pad2.SetDrillSize(pcbnew.VECTOR2I(0, 0))
     pad2.SetSize(pcbnew.VECTOR2I(nm(1.6), nm(1.6)))
     pad2.SetPosition(pcbnew.VECTOR2I(nm(30), nm(30)))
     pad2.SetLayerSet(_ls); pad2.SetNetCode(code)

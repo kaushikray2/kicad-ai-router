@@ -1640,15 +1640,24 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
     try: edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
     except Exception: edge_clr = 0.5
     if edge_clr > 0:
-        for dr in b.GetDrawings():
-            if dr.GetLayer() != pcbnew.Edge_Cuts: continue
+        def _add_edge(dr):
             if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
                 edge_segs.append((mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y)))
             else:
                 bb = dr.GetBoundingBox()
                 el, et, er, eb = mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom())
-                edge_segs += [(el, et, er, et), (er, et, er, eb), (er, eb, el, eb), (el, eb, el, et)]
+                edge_segs.extend([(el, et, er, et), (er, et, er, eb), (er, eb, el, eb), (el, eb, el, et)])
+        for dr in b.GetDrawings():
+            if dr.GetLayer() == pcbnew.Edge_Cuts: _add_edge(dr)
+        # v1.11.1 (#75): Edge.Cuts drawn inside a footprint (slots,
+        # cutouts) is board outline for DRC too -- collect it as well.
+        for fp in b.GetFootprints():
+            for dr in fp.GraphicalItems():
+                if dr.GetLayer() == pcbnew.Edge_Cuts: _add_edge(dr)
     fdrills = []
+    adrills = []   # v1.11.1 (#75): EVERY drill, any net -- hole_to_hole
+    # is a physical drill-separation rule and binds same-net pairs too;
+    # fdrills stays foreign-only for the hole_clearance (copper) test.
     try: hole_clr = mm(b.GetDesignSettings().m_HoleClearance)
     except Exception: hole_clr = 0.25
     try: h2h = mm(b.GetDesignSettings().m_HoleToHoleMin)
@@ -1656,13 +1665,16 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
     if hole_clr > 0 or h2h > 0:
         for fp in b.GetFootprints():
             for p in fp.Pads():
-                if p.GetNetname() == net: continue
                 ds = p.GetDrillSize()
                 if ds.x > 0:
-                    fdrills.append((mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2))
+                    _dr = (mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2)
+                    adrills.append(_dr)
+                    if p.GetNetname() != net: fdrills.append(_dr)
         for t in b.GetTracks():
-            if t.GetNetname() == net or t.Type() != pcbnew.PCB_VIA_T: continue
-            fdrills.append((mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2))
+            if t.Type() != pcbnew.PCB_VIA_T: continue
+            _dr = (mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2)
+            adrills.append(_dr)
+            if t.GetNetname() != net: fdrills.append(_dr)
     vdr = net_class_via(b, net)[1] / 2
     def in_poly(px, py, pts):
         inside = False
@@ -1713,9 +1725,9 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
         for (ex1, ey1, ex2, ey2) in edge_segs:
             if seg_pt(x, y, ex1, ey1, ex2, ey2) < vr + edge_clr: return False
         for (hx, hy, hr_) in fdrills:
-            d = math.hypot(x - hx, y - hy)
-            if d < hr_ + vr + hole_clr: return False
-            if d < hr_ + vdr + h2h: return False
+            if math.hypot(x - hx, y - hy) < hr_ + vr + hole_clr: return False
+        for (hx, hy, hr_) in adrills:
+            if math.hypot(x - hx, y - hy) < hr_ + vdr + h2h: return False
     return True
 
 def cmd_heal_attempt(board_path, out_path, net, frm, dst):
