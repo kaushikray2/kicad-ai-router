@@ -161,6 +161,31 @@ def _unc_key(g):
 def _final_key(g):
     return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g))
 
+def _run_engineered_stages(pipe, log):
+    """The engineered-nets treatment stages (#67 Step 2 and the
+    #68/#69/#70/#71 stages).  #138 (B13): the engineered_nets
+    switch gates EVERY stage -- it used to be read only in
+    _engineered_setup, so with the switch off and a markings file
+    present the domain/power/length/HV/quiet stages still ran.
+    Both tools no-op without markings, so unmarked boards run
+    exactly the pre-Step-2 sequence either way."""
+    if not pipe.cfg.get('engineered_nets', True):
+        log('engineered stages skipped: engineered_nets is off')
+        return
+    try: pipe.tool_rf_treatments()
+    except Exception as e: log('rf treatments failed: %s' % e)
+    try: pipe.tool_smooth_marked()
+    except Exception as e: log('rf smoothing failed: %s' % e)
+    try: pipe.tool_power()
+    except Exception as e: log('power stage failed: %s' % e)
+    try: pipe.tool_length_match()
+    except Exception as e: log('length match failed: %s' % e)
+    try: pipe.tool_hv_domains()
+    except Exception as e: log('hv domains failed: %s' % e)
+    try: pipe.tool_quiet_nets()
+    except Exception as e: log('quiet nets failed: %s' % e)
+
+
 def run_auto(cfg, pipe, log):
     # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54
     # multilayer boards -- the 44-connection gap is layer-law-driven).
@@ -377,21 +402,7 @@ def _run_auto_once(cfg, pipe, log):
                 try: pipe.tool_reroute_window(net, margin=float(cfg.get('reroute_margin', 6.0)))
                 except Exception as e: log('reroute_window %s failed: %s' % (net, e))
             gate = pipe.tool_gate()
-    # #67 Step 2 (branch-only): RF treatments + gate-verified smoothing
-    # for marked nets.  Both tools no-op without markings, so unmarked
-    # boards run exactly the pre-Step-2 sequence.
-    try: pipe.tool_rf_treatments()
-    except Exception as e: log('rf treatments failed: %s' % e)
-    try: pipe.tool_smooth_marked()
-    except Exception as e: log('rf smoothing failed: %s' % e)
-    try: pipe.tool_power()
-    except Exception as e: log('power stage failed: %s' % e)
-    try: pipe.tool_length_match()
-    except Exception as e: log('length match failed: %s' % e)
-    try: pipe.tool_hv_domains()
-    except Exception as e: log('hv domains failed: %s' % e)
-    try: pipe.tool_quiet_nets()
-    except Exception as e: log('quiet nets failed: %s' % e)
+    _run_engineered_stages(pipe, log)
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))

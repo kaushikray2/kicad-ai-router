@@ -200,9 +200,10 @@ class Pipeline:
             self.base = self.current
         try:
             _mk = _markings.load_markings(self.board_path)
-            if _mk is not None and (_mk.hv_domains or _mk.quiet):
+            # #138 (B13): domain setup is an engineered stage too
+            if _mk is not None and (_mk.hv_domains or _mk.quiet)                     and self.cfg.get('engineered_nets', True):
                 self._domain_setup(_mk)
-            if _mk is not None and _mk.hv_domains:
+            if _mk is not None and _mk.hv_domains                     and self.cfg.get('engineered_nets', True):
                 # #148 (B24): HV spacing must bind the ENGINE, not
                 # only the finisher grid and a post-route report.
                 try:
