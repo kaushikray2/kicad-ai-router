@@ -16,6 +16,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_BODY = 200 * 1024 * 1024  # stated cap: whole-board uploads, LAN v1
 _lock = threading.Lock()
 
+_KC_VERSION = None
+def _kicad_cli_version():
+    # v1.11.5 (#126, also L12): /health used to shell out to
+    # kicad-cli --version on EVERY request. Probe once, cache for
+    # the process lifetime (warmed at startup in main()).
+    global _KC_VERSION
+    if _KC_VERSION is None:
+        try: _KC_VERSION = subprocess.run(['kicad-cli', '--version'], capture_output=True, text=True, timeout=30).stdout.strip()
+        except Exception: _KC_VERSION = ''
+    return _KC_VERSION
+
 def _atomic_write(path, data_bytes):
     tmp = path + '.tmp-%d' % os.getpid()
     with open(tmp, 'wb') as f: f.write(data_bytes)
@@ -378,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == '/health':
                 if not self._guard(need_auth=False): return
-                kc = subprocess.run(['kicad-cli', '--version'], capture_output=True, text=True, timeout=30).stdout.strip()
+                kc = _kicad_cli_version()
                 cfg = self._cfg()
                 self._send(200, {'ok': True, 'backend_version': BACKEND_VERSION, 'kicad_cli': kc,
                                  'schema_version': SCHEMA_VERSION,
@@ -521,6 +532,7 @@ def main():
     os.makedirs(runs_root(), exist_ok=True)
     os.makedirs(os.path.join(DATA, 'selftest'), exist_ok=True)
     cfg = load_config()
+    _kicad_cli_version()  # v1.11.5 (#126): warm the /health cache at startup
     _load_existing_jobs()
     if not tm_versions():
         url = cfg.get('tracemaker', {}).get('url') or os.environ.get('TRACEMAKER_URL', '')
