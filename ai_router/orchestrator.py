@@ -166,7 +166,11 @@ def _final_key(g):
     # order is deliberate (#37) and unchanged; the tail only breaks
     # full ties, so between two passes equal on the gate the cheaper
     # one now wins instead of whichever came first.
-    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), cost_tail(g))
+    # v1.12 (#63): intrusions price after non-intrusion faults, as
+    # in _accept_key -- pass selection may trade corridor crossings
+    # for completion, never for real copper faults.
+    _intr = int(g.get('skeleton_intrusions') or 0)
+    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g) - _intr, _intr, cost_tail(g))
 
 def run_auto(cfg, pipe, log):
     # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54

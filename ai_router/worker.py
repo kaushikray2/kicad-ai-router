@@ -3042,6 +3042,30 @@ def cmd_krt_route(board_path, out_path):
     return {'status': 'routed', 'seconds': round(time.time() - t0, 1), 'refill': refill_note}
 
 
+def _with_yield(fn, is_fail):
+    # #63 yield: the reservation is a planning preference, not a
+    # veto -- the ticket's own rule is that it 'yields first under
+    # congestion, so it never costs a connection'. A finisher
+    # command that fails outright with the reservation on runs once
+    # more without it (the measured esp32 case: with corridors hard,
+    # finish/heal found no path at all for nets the unreserved
+    # finisher connects). The pipeline gate still counts every
+    # intrusion the yielded leg leaves behind, so the trade is
+    # priced, never free; 'skeleton_yield' in the result records
+    # that the reservation was stood down for this command.
+    global SKELETON_ON
+    res = fn()
+    if SKELETON_ON and is_fail(res):
+        SKELETON_ON = False
+        try:
+            res2 = fn()
+        finally:
+            SKELETON_ON = True
+        if not is_fail(res2):
+            res2 = dict(res2); res2['skeleton_yield'] = True
+            return res2
+    return res
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd')
@@ -3079,14 +3103,14 @@ def main():
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'skeleton': res = cmd_skeleton(a.board)
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
-    elif a.cmd == 'finish_leg': res = cmd_finish_leg(a.board, a.out, a.net, attempt_select=bool(getattr(a, 'attempt_select', False)))
+    elif a.cmd == 'finish_leg': res = _with_yield(lambda: cmd_finish_leg(a.board, a.out, a.net, attempt_select=bool(getattr(a, 'attempt_select', False))), lambda r: r.get('status') not in ('routed', 'already_connected'))
     elif a.cmd == 'finish_probe': res = cmd_finish_probe(a.board, a.net, tuple(v for v in (a.victims or '').split(',') if v))
     elif a.cmd == 'finish_attempt': res = cmd_finish_attempt(a.board, a.out, a.net, [v for v in (a.victims or '').split(',') if v])
-    elif a.cmd == 'long_leg': res = cmd_long_leg(a.board, a.out, a.net)
+    elif a.cmd == 'long_leg': res = _with_yield(lambda: cmd_long_leg(a.board, a.out, a.net), lambda r: r.get('status') not in ('routed', 'already_connected'))
     elif a.cmd == 'long_attempt': res = cmd_long_attempt(a.board, a.out, a.net)
-    elif a.cmd == 'ilp_repair': res = cmd_ilp_repair(a.board, a.out, [n for n in (a.nets or '').split(',') if n])
-    elif a.cmd == 'stitch': res = cmd_stitch(a.board, a.out)
-    elif a.cmd == 'heal': res = cmd_heal(a.board, a.out, set(a.nets.split(',')) if getattr(a, 'nets', None) else None)
+    elif a.cmd == 'ilp_repair': res = _with_yield(lambda: cmd_ilp_repair(a.board, a.out, [n for n in (a.nets or '').split(',') if n]), lambda r: not r.get('routed'))
+    elif a.cmd == 'stitch': res = _with_yield(lambda: cmd_stitch(a.board, a.out), lambda r: not r.get('stitched') and bool(r.get('failed')))
+    elif a.cmd == 'heal': res = _with_yield(lambda: cmd_heal(a.board, a.out, set(a.nets.split(',')) if getattr(a, 'nets', None) else None), lambda r: not r.get('bridges') and bool(r.get('failed')))
     elif a.cmd == 'heal_attempt':
         def _pt(s):
             ls, x, y = s.split(':'); return (tuple(int(v) for v in ls.split(',')), float(x), float(y))

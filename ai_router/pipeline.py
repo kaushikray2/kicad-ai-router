@@ -126,8 +126,17 @@ def _accept_key(g):
     # because no decision site consulted the price (NAS layer-cost
     # run: engine passes placed In1.Cu segments, the delivered board
     # had none).
-    return (fault_count(g), 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
-            len((g or {}).get('split_nets') or []), cost_tail(g))
+    # v1.12 (#63): skeleton intrusions are counted in fault_count
+    # (the gate record, the ledger, finalize's delta) but price
+    # AFTER connectivity and after non-intrusion faults here: the
+    # reservation 'yields first under congestion, so it never costs
+    # a connection' -- a leg that closes a split by crossing a
+    # corridor is kept and the intrusion recorded; a leg that only
+    # adds intrusions still loses on this term. With the feature
+    # off the term is 0 and the key is the old key plus a constant.
+    _intr = int((g or {}).get('skeleton_intrusions') or 0)
+    return (fault_count(g) - _intr, 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
+            len((g or {}).get('split_nets') or []), _intr, cost_tail(g))
 
 def fault_count(g):
     c = (g or {}).get('classes') or {}
