@@ -16,6 +16,14 @@ class PipelineError(Exception):
 # the gate guard reverts a step that increases any of them (v1.2.3:
 # widened from the original 3 -- hole_clearance and tracks_crossing
 # are real finisher failure modes the old guard could not see).
+# P2.1b (#155): the order tool_fix_violations works fault classes
+# in -- shorts before clearances before hole rules before the
+# cosmetic end of the list (plan.md P2.1b).
+FAULT_FIX_ORDER = ('shorting_items', 'tracks_crossing', 'clearance',
+                   'hole_clearance', 'hole_to_hole', 'items_not_allowed',
+                   'copper_edge_clearance', 'annular_width', 'via_diameter',
+                   'drill_out_of_range', 'track_width', 'solder_mask_bridge',
+                   'track_dangling', 'via_dangling', 'copper_sliver')
 FAULT_CLASSES = ('shorting_items', 'clearance', 'items_not_allowed',
                  'tracks_crossing', 'hole_clearance', 'hole_to_hole',
                  'copper_edge_clearance', 'annular_width', 'via_diameter',
@@ -663,6 +671,86 @@ class Pipeline:
         if self.last_gate.get('skeleton_intrusions'):
             self.log('Gate: %d foreign items inside reserved pour corridors (%.1f mm) -- router-added pour faults (#63)' % (self.last_gate['skeleton_intrusions'], self.last_gate.get('skeleton_intrusion_mm') or 0.0))
         return self.last_gate
+
+    def _drc_fault_items(self, board):
+        # Item-level fault list for the fix_violations diff (#155):
+        # [{type, x, y, nets}] from the JSON DRC report. nets are the
+        # candidate offender nets in order -- track/via parties
+        # first (a pad cannot be ripped; the copper that came to it
+        # can). Fault point = mean of the items' positions.
+        self._gseq += 1
+        jp = os.path.join(self.workdir, 'fix-%03d.drc.json' % self._gseq)
+        p = subprocess.run([self.cfg.get('kicad_cli', 'kicad-cli'), 'pcb', 'drc', '--refill-zones',
+                            '--format', 'json', '--output', jp, board], capture_output=True, text=True, timeout=900)
+        if p.returncode != 0 or not os.path.exists(jp):
+            raise PipelineError('kicad-cli DRC (fault items) failed (rc=%s) on %s: %s' % (p.returncode, os.path.basename(board), (p.stderr or '')[-300:]))
+        doc = json.load(open(jp))
+        out = []
+        for v in doc.get('violations') or []:
+            t = v.get('type') or ''
+            if t not in FAULT_CLASSES: continue
+            items = v.get('items') or []
+            if not items: continue
+            xs = [float(it['pos']['x']) for it in items]; ys = [float(it['pos']['y']) for it in items]
+            cand = []
+            for prio, kind in ((0, ('Track', 'Via')), (1, ('Pad', 'Zone'))):
+                for it in items:
+                    d = str(it.get('description', ''))
+                    m = re.search(r'\[([^\]]+)\]', d)
+                    if m and d.split(' ', 1)[0] in kind and m.group(1) not in cand:
+                        cand.append(m.group(1))
+            out.append({'type': t, 'x': round(sum(xs) / len(xs), 2), 'y': round(sum(ys) / len(ys), 2), 'nets': cand})
+        return out
+
+    def tool_fix_violations(self):
+        # P2.1b (#155): repair router-added copper faults on
+        # already-connected nets. Diff the current board's
+        # item-level DRC faults against the base board's -- a fault
+        # is router-added when no base fault of the same type sits
+        # within 0.5 mm. For each, the worker rips only the
+        # offending net's copper within +-3 mm and re-closes with
+        # the exact-checked finisher. Gate-verified like every
+        # stage: the output stands only if the fault count strictly
+        # drops, unconnected and splits do not grow (the tool's exit
+        # terms), and the faults-first accept key does not regress.
+        # A fix that trades faults is reverted.
+        before = self.last_gate if self.last_gate is not None else self.tool_gate()
+        cur = self._drc_fault_items(self.current)
+        base = self._drc_fault_items(self.base)
+        def _key(f): return (f['type'], round(f['x'] * 2) / 2, round(f['y'] * 2) / 2)
+        base_keys = {_key(f) for f in base}
+        added = [f for f in cur if _key(f) not in base_keys]
+        order = {t: i for i, t in enumerate(FAULT_FIX_ORDER)}
+        added.sort(key=lambda f: order.get(f['type'], 99))
+        added = added[:32]
+        if not added:
+            r = {'status': 'no_router_faults', 'faults': 0}
+            self._record('fix_violations', r)
+            self.log('fix_violations: no router-added faults')
+            return r
+        fp = os.path.join(self.workdir, 'fix-faults.json')
+        json.dump(added, open(fp, 'w'))
+        outp = self._out('fixed')
+        r = self._worker('fix_violations', '--board', self.current, '--out', outp, '--faults', fp,
+                         *self._leg_ban_args(), *self._leg_layer_args(), *self._leg_skeleton_args())
+        if r.get('fixed') and os.path.exists(outp):
+            prev = self.current; self.current = outp
+            after = self.tool_gate()
+            ok = (fault_count(after) < fault_count(before)
+                  and (after.get('unconnected_total') or 0) <= (before.get('unconnected_total') or 0)
+                  and len(after.get('split_nets') or []) <= len(before.get('split_nets') or [])
+                  and _accept_key(after) <= _accept_key(before))
+            if not ok:
+                self.current = prev; self.last_gate = before
+                r = dict(r); r['status'] = 'reverted'
+                self.log('fix_violations reverted: faults %d -> %d, unconnected %s -> %s' % (
+                    fault_count(before), fault_count(after), before.get('unconnected_total'), after.get('unconnected_total')))
+            else:
+                r = dict(r); r['status'] = 'fixed'
+        self._record('fix_violations', r)
+        self.log('fix_violations: %s (%d fixed, %d failed of %d router-added)' % (
+            r.get('status'), len(r.get('fixed') or []), len(r.get('failed') or []), len(added)))
+        return r
 
     def tool_reroute_window(self, net, margin=6.0):
         # v1.9 (Phase 1.5): windowed engine re-route. Lock all copper

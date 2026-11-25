@@ -251,6 +251,106 @@ def cmd_summary(board_path, fast=False):
     if _sk_items is not None: _res['skeleton_intrusions'] = _sk_items; _res['skeleton_intrusion_mm'] = _sk_mm
     return _res
 
+# ---------------------------------------------------------------- fix_violations (#155)
+def _track_key(t):
+    # Geometry identity of one track/via item, for rollback matching.
+    if t.Type() == pcbnew.PCB_VIA_T:
+        dr = t.GetDrill()
+        drm = mm(dr.x) if hasattr(dr, 'x') else mm(dr)
+        return ('via', t.GetNetCode(), round(mm(t.GetPosition().x), 3), round(mm(t.GetPosition().y), 3), round(mm(t.GetWidth(pcbnew.F_Cu)), 3), round(drm, 3))
+    return ('seg', t.GetNetCode(), t.GetLayer(), round(mm(t.GetStart().x), 3), round(mm(t.GetStart().y), 3), round(mm(t.GetEnd().x), 3), round(mm(t.GetEnd().y), 3), round(mm(t.GetWidth()), 3))
+
+def _restore_key(b, key):
+    if key[0] == 'via':
+        _k, code, x, y, dia, drill = key
+        v = pcbnew.PCB_VIA(b); v.SetPosition(pcbnew.VECTOR2I(nm(x), nm(y)))
+        v.SetWidth(nm(dia)); v.SetDrill(nm(drill)); v.SetNetCode(code); b.Add(v)
+    else:
+        _k, code, lay, x1, y1, x2, y2, wdt = key
+        t = pcbnew.PCB_TRACK(b)
+        t.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1))); t.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
+        t.SetWidth(nm(wdt)); t.SetLayer(lay); t.SetNetCode(code); b.Add(t)
+
+def _fix_one_violation(b, net, x, y, radius=3.0):
+    # P2.1b (#155): rip ONLY `net`'s copper within `radius` of the
+    # fault point (+-3 mm per plan.md) and re-close the net with the
+    # exact-checked bridge planner. True = the rip stood; False =
+    # rolled back, board unchanged for this fault. Guarantees on
+    # True: the net is no more split than before, and every drawn
+    # item passed _new_items_clean inside _bridge_plan. Whether the
+    # fault itself is gone is the pipeline gate's call.
+    conn = b.GetConnectivity(); conn.Build(b)
+    pads, clusters = _pad_clusters(b, conn, net)
+    if not pads: return False
+    before = len(clusters)
+    rip = []
+    for t in list(b.GetTracks()):
+        if t.GetNetname() != net: continue
+        if t.Type() == pcbnew.PCB_VIA_T:
+            if math.hypot(mm(t.GetPosition().x) - x, mm(t.GetPosition().y) - y) < radius + mm(t.GetWidth(pcbnew.F_Cu)) / 2: rip.append(t)
+        elif seg_pt(x, y, mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y)) < radius + mm(t.GetWidth()) / 2:
+            rip.append(t)
+    if not rip: return False
+    saved = [_track_key(t) for t in rip]
+    for t in rip: b.RemoveNative(t)
+    # Vias of the net inside the window that the rip left dangling
+    # are removed too -- a stranded via is a via_dangling fault the
+    # fix would otherwise trade for the one it came to repair.
+    conn = b.GetConnectivity(); conn.Build(b)
+    for t in list(b.GetTracks()):
+        if t.GetNetname() != net or t.Type() != pcbnew.PCB_VIA_T: continue
+        if math.hypot(mm(t.GetPosition().x) - x, mm(t.GetPosition().y) - y) >= radius + 1.0: continue
+        if not [it for it in conn.GetConnectedItems(t) if it.Type() != pcbnew.PCB_PAD_T]:
+            saved.append(_track_key(t)); b.RemoveNative(t)
+    nets = b.GetNetsByName(); stack = copper_stack(b)
+    drawn = []
+    conn = b.GetConnectivity(); conn.Build(b)
+    now = len(_pad_clusters(b, conn, net)[1])
+    rounds = 0
+    while now > before and rounds < 4:
+        plan = _bridge_plan(b, net, before)
+        if not plan: break
+        segs, vias = plan
+        if not segs and not vias: break
+        tw = net_class_width(b, net, W_TRACK); vd, vdr = net_class_via(b, net)
+        code = nets[net].GetNetCode()
+        for (li, x1, y1, x2, y2) in segs:
+            add_seg(b, nets, net, li, x1, y1, x2, y2, tw)
+            drawn.append(('seg', code, stack[li], round(x1, 3), round(y1, 3), round(x2, 3), round(y2, 3), round(tw, 3)))
+        for (vx, vy) in vias:
+            add_via(b, nets, net, vx, vy, vd, vdr)
+            drawn.append(('via', code, round(vx, 3), round(vy, 3), round(vd, 3), round(vdr, 3)))
+        conn = b.GetConnectivity(); conn.Build(b)
+        now = len(_pad_clusters(b, conn, net)[1])
+        rounds += 1
+    if now > before:
+        want = {}
+        for k in drawn: want[k] = want.get(k, 0) + 1
+        for t in list(b.GetTracks()):
+            k = _track_key(t)
+            if want.get(k): want[k] -= 1; b.RemoveNative(t)
+        for k in saved: _restore_key(b, k)
+        return False
+    return True
+
+def cmd_fix_violations(board_path, out_path, faults):
+    # faults: [{type, x, y, nets: [candidate offender nets, in
+    # order]}] -- the router-added faults from the pipeline's base
+    # diff (#155). Each fault is attempted per candidate net until
+    # one rip+reclose stands.
+    b = pcbnew.LoadBoard(board_path); refill(b)
+    fixed, failed = [], []
+    for f in faults:
+        ok = None
+        for net in (f.get('nets') or []):
+            if _fix_one_violation(b, net, float(f['x']), float(f['y'])):
+                ok = net; break
+        rec = {'type': f.get('type'), 'x': f.get('x'), 'y': f.get('y'), 'net': ok or (f.get('nets') or [None])[0]}
+        (fixed if ok else failed).append(rec)
+    if fixed:
+        refill(b); pcbnew.SaveBoard(out_path, b)
+    return {'status': 'ok' if fixed else 'none', 'fixed': fixed, 'failed': failed}
+
 # ---------------------------------------------------------------- skeleton
 def cmd_skeleton(board_path):
     # #63 measurement surface: per (zone, layer) skeleton -- the pad
@@ -3086,6 +3186,7 @@ def main():
     ap.add_argument('--no-tracks-on')
     ap.add_argument('--layer-cost')
     ap.add_argument('--skeleton', action='store_true')  # v1.12 (#63)
+    ap.add_argument('--faults')  # v1.12 (#155): JSON fault list for fix_violations
     ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
     if a.no_tracks_on is not None:  # v1.11.2 (#104): '' is an explicit empty ban set, not 'unset' -- the truthiness test silently restored the Grid default {In1_Cu} ban
@@ -3102,6 +3203,7 @@ def main():
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'skeleton': res = cmd_skeleton(a.board)
+    elif a.cmd == 'fix_violations': res = _with_yield(lambda: cmd_fix_violations(a.board, a.out, json.load(open(a.faults))), lambda r: not r.get('fixed'))
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
     elif a.cmd == 'finish_leg': res = _with_yield(lambda: cmd_finish_leg(a.board, a.out, a.net, attempt_select=bool(getattr(a, 'attempt_select', False))), lambda r: r.get('status') not in ('routed', 'already_connected'))
     elif a.cmd == 'finish_probe': res = cmd_finish_probe(a.board, a.net, tuple(v for v in (a.victims or '').split(',') if v))
