@@ -316,6 +316,17 @@ def _plan_rail(net, rail, entry, facts, tree, parsed, copper, surface,
                                      'edge_kind': e['kind'], 'source': 'tree'})
     ec, paths = _attribute(g, _dist, prev, contribs)
     design = _design(ec)
+    # #83: sizing budget = the rail's declared drop_budget_v (the
+    # same one the loop-drop verdict below uses), apportioned by
+    # length share against the rail's longest attributed path --
+    # size_segment spends its entire budget on the one segment it
+    # is given, so an unapportioned call lets an N-segment path
+    # consume N times the rail budget.
+    rail_budget = entry.get('drop_budget_v') or corners['drop_budget_v']
+    _pathlens = [sum(g.edges[i]['length'] for i in _pth
+                     if g.edges[i]['kind'] == 'track')
+                 for _pth in paths.values() if _pth]
+    longest_path = max(_pathlens) if _pathlens else 0.0
     t_op = corners['ambient_c'] + corners['delta_t_c']
     if not rail['complete']:
         rep['resistances_only'] = True
@@ -348,8 +359,11 @@ def _plan_rail(net, rail, entry, facts, tree, parsed, copper, surface,
         seg['i_peak_a'] = round(pk, 4)
         seg['i_sustained_a'] = round(su, 4)
         if pk > 0 or su > 0:
+            _sc = dict(corners)
+            _sc['drop_budget_v'] = rail_budget * (
+                e['length'] / longest_path if longest_path > 0 else 1.0)
             s = wcca.size_segment(pk, su, e['length'], thickness[e['layer']],
-                                  e['layer'] not in surface, corners)
+                                  e['layer'] not in surface, _sc)
             if 'error' in s:
                 seg['failed'] = s['error']
             else:

@@ -176,3 +176,22 @@ def test_incoming_edge_outpins_seed_the_rail():
                                 CORNERS, {'V5': {}})
     segs = {s['uuid']: s for s in plan['rails']['V5']['segments']}
     assert segs['t1']['i_peak_a'] == 2.0, segs['t1']
+
+
+def test_sizing_uses_per_rail_budget_apportioned_by_length():
+    # #83: sizing must use the rail's declared drop_budget_v (not
+    # the global corners budget), apportioned by length share
+    # against the longest attributed path -- size_segment spends
+    # its whole budget on the one segment it is given.
+    from ai_router import wcca
+    rail = _rail({'U2': _load(2.0, 2.0), 'U3': _load(1.0, 0.5, ['TX'])},
+                 {'U2': [('U2', '1')], 'U3': [('U3', '1')]})
+    plan = powerplan.plan_power(_tree(rail), _parsed(), _facts(), LAYERS,
+                                CORNERS, {'V5': {'drop_budget_v': 0.05}})
+    segs = {s['uuid']: s for s in plan['rails']['V5']['segments']}
+    # longest attributed path = 20 mm (t1+t2 and t1+t3); each 10 mm
+    # segment gets 0.05 * 10/20 = 0.025 V of drop budget
+    exp_t3 = round(wcca.drop_width_mm(1.0, 10.0, 0.035, 0.025, 50.0, 0.02, 0.10), 4)
+    exp_t1 = round(wcca.drop_width_mm(3.0, 10.0, 0.035, 0.025, 50.0, 0.02, 0.10), 4)
+    assert segs['t3']['drop_width_mm'] == exp_t3, (segs['t3'], exp_t3)
+    assert segs['t1']['drop_width_mm'] == exp_t1, (segs['t1'], exp_t1)
