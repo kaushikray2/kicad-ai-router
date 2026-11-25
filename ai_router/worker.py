@@ -13,6 +13,12 @@ import pcbnew
 BANNED_LAYER_IDS = None
 NO_TRACKS_ON_RAW = None
 NO_TRACKS_ON_UNRESOLVED = []  # v1.9 (M4): --no-tracks-on names the canonical table could not resolve; Grid resolves them against the actual board or fails loud
+# v1.11 (#73): --layer-cost LAYER=FACTOR pairs; Grid prices travel
+# on a priced layer at its factor instead of excluding the layer.
+# A priced layer is NOT banned (the price wins over a ban).
+LAYER_COST_RAW = None
+LAYER_COST_BY_ID = {}
+LAYER_COST_UNRESOLVED = []  # (name, factor) pairs the canonical table could not resolve; Grid resolves them against the actual board or fails loud, same discipline as bans
 
 def _layer_id_from_name(n):
     n = n.strip()
@@ -296,6 +302,18 @@ class Grid:
             if _still:
                 raise ValueError('--no-tracks-on names not resolvable on this board: %s (copper layers: %s)' % (', '.join(_still), ', '.join(b.GetLayerName(l) for l in self.stack)))
             _banned = set(_banned) | _extra
+        _cost = dict(LAYER_COST_BY_ID)
+        for _nm, _f in LAYER_COST_UNRESOLVED:
+            _ids, _still = _resolve_banned_on_board(b, [_nm])
+            if _still:
+                raise ValueError('--layer-cost names not resolvable on this board: %s (copper layers: %s)' % (', '.join(_still), ', '.join(b.GetLayerName(l) for l in self.stack)))
+            for _lid in _ids: _cost[_lid] = _f
+        # v1.11 (#73): a priced layer is NOT banned -- if a layer
+        # arrives as both (legs receive the raw configured bans),
+        # the price wins, mirroring the pipeline's effective law.
+        _banned = _banned - set(_cost)
+        self.layer_cost = {self.lidx[lay]: f for lay, f in _cost.items() if lay in self.lidx}
+        self._lfac = [float(self.layer_cost.get(k, 1)) for k in range(self.nl)]
         self.routable = {k for k, lay in enumerate(self.stack) if lay not in _banned}
         self.banned_idx = {k for k, lay in enumerate(self.stack) if lay in _banned}
         self.pads, self.segs, self.vias = [], [], []
@@ -502,7 +520,7 @@ class Grid:
                     # between two blocked orthogonal neighbours -- it passes
                     # within p/sqrt(2) of their corners (v3 audit, bug #6).
                     if dj and di and (blocked[li, j + dj, i] or blocked[li, j, i + di]): continue
-                    nd = dcur + (1.41421356 if dj and di else 1.0); nb = (li, nj, ni)
+                    nd = dcur + (1.41421356 if dj and di else 1.0) * self._lfac[li]; nb = (li, nj, ni)  # v1.11 (#73): travel on a priced layer costs its factor per cell (1 = unpriced, the old cost exactly; the heuristic stays unit-cost, admissible since factors are >= 1)
                     if nd < dist.get(nb, 1e18): dist[nb] = nd; prev[nb] = node; heapq.heappush(pq, (nd + _h(nj, ni), nd, nb))
             if not via_block[j, i]:
                 # A through via pierces every layer: transition to any
@@ -685,7 +703,7 @@ class Grid:
                 if not (0 <= nj < self.NY and 0 <= ni < self.NX) or blocked[li, nj, ni]: continue
                 if dj and di and (blocked[li, j + dj, i] or blocked[li, j, i + di]): continue
                 add, nmask = _charge(owner.get((li, nj, ni), 0), mask)
-                push(dcur + (1.41421356 if dj and di else 1.0) + add, li, nj, ni, nmask, this)
+                push(dcur + (1.41421356 if dj and di else 1.0) * self._lfac[li] + add, li, nj, ni, nmask, this)  # v1.11 (#73): priced-layer factor, as in astar
             if not via_block[j, i]:
                 vo = via_owner.get((j, i), 0)
                 for ol in allowed:
@@ -1231,6 +1249,7 @@ def cmd_finish_leg(board_path, out_path, net, attempt_select=False):
                              '--board', board_in, '--net', net,
                              '--victims', ','.join(victims), '--result', ppath]
                     if NO_TRACKS_ON_RAW: pline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+                    if LAYER_COST_RAW: pline += ['--layer-cost', LAYER_COST_RAW]
                     try:
                         subprocess.run(pline, capture_output=True, text=True, timeout=600)
                         pres = json.load(open(ppath))
@@ -1251,6 +1270,7 @@ def cmd_finish_leg(board_path, out_path, net, attempt_select=False):
                        '--board', board_in, '--out', out_path, '--net', net,
                        '--victims', ','.join(victims), '--result', rpath]
             if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+            if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
             try:
                 subprocess.run(cmdline, capture_output=True, text=True, timeout=300)
                 res = json.load(open(rpath))
@@ -1504,6 +1524,7 @@ def cmd_long_leg(board_path, out_path, net):
         cmdline = [sys.executable, os.path.abspath(__file__), 'long_attempt',
                    '--board', board_in, '--out', out_path, '--net', net, '--result', rpath]
         if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+        if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
         try:
             subprocess.run(cmdline, capture_output=True, text=True, timeout=900)
             res = json.load(open(rpath))
@@ -1981,6 +2002,7 @@ def cmd_heal(board_path, out_path, only=None):
                            '--dst', '%s:%.2f:%.2f' % (','.join(map(str, dl)), dx, dy),
                            '--result', rpath]
                 if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+                if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
                 try:
                     subprocess.run(cmdline, capture_output=True, text=True, timeout=300)
                     res = json.load(open(rpath))
@@ -2551,6 +2573,7 @@ def cmd_ilp_repair(board_path, out_path, nets):
                        '--board', cur, '--out', tmp_out, '--net', cand['net'],
                        '--victims', ','.join(cand['victims']), '--result', rpath]
             if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+            if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
             try:
                 subprocess.run(cmdline, capture_output=True, text=True, timeout=600)
                 res = json.load(open(rpath))
@@ -2683,6 +2706,7 @@ def main():
     ap.add_argument('--dst')
     ap.add_argument('--result')
     ap.add_argument('--no-tracks-on')
+    ap.add_argument('--layer-cost')
     ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
     if a.no_tracks_on:
@@ -2693,6 +2717,17 @@ def main():
             _i = _layer_id_from_name(_x)
             if _i is None: NO_TRACKS_ON_UNRESOLVED.append(_x.strip())
             else: BANNED_LAYER_IDS.add(_i)
+    if a.layer_cost:
+        global LAYER_COST_RAW, LAYER_COST_BY_ID, LAYER_COST_UNRESOLVED
+        LAYER_COST_RAW = a.layer_cost
+        LAYER_COST_BY_ID = {}; LAYER_COST_UNRESOLVED = []
+        for _tok in a.layer_cost.split(','):
+            _nm, _eq, _fc = _tok.partition('=')
+            try: _f = int(_fc.strip())
+            except Exception: continue  # the pipeline validates the spec; an unparseable token here prices nothing
+            _i = _layer_id_from_name(_nm)
+            if _i is None: LAYER_COST_UNRESOLVED.append((_nm.strip(), _f))
+            else: LAYER_COST_BY_ID[_i] = _f
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
