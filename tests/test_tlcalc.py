@@ -157,3 +157,22 @@ def test_solve_diff_geometry_round_trips():
     ss = lambda w: T.stripline(w, 1.4, 0.035, 4.4, a=0.68)
     r = T.solve_diff_geometry(ds, ss, 100.0)
     assert 'error' not in r and abs(ds(r['width_mm'], r['gap_mm']).zdiff - 100.0) < 0.1, r
+
+
+def test_mask_correction_uses_mask_er():
+    # #90: the mask's own dielectric constant must drive the cover
+    # blend -- pre-fix both calls used the substrate er and agreed.
+    a = T.microstrip(0.2, 0.2, 0.035, 4.4, mask=(0.02, 3.0))
+    b = T.microstrip(0.2, 0.2, 0.035, 4.4, mask=(0.02, 4.4))
+    assert 'mask_correction_applied' in a.flags
+    assert abs(a.z0 - b.z0) > 0.05, (a.z0, b.z0)
+    # same-er mask == embedded_microstrip with that er, exactly
+    e = T.embedded_microstrip(0.2, 0.2, 0.035, 0.02, 4.4)
+    assert abs(b.z0 - e.z0) < 1e-9
+
+def test_mask_correction_flags_unmodelled_dispersion():
+    # #90: at f > 0 the coated (static) value replaces the
+    # dispersive one -- that must be flagged, not silent.
+    r = T.microstrip(0.2, 0.2, 0.035, 4.4, f_hz=2e9, mask=(0.02, 3.5))
+    assert 'mask_correction_applied' in r.flags
+    assert 'embedded_dispersion_not_modelled' in r.flags, r.flags

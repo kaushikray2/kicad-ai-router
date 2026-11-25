@@ -263,13 +263,22 @@ def microstrip(w, h, t, er, f_hz=0.0, tand=0.0, sigma=COPPER_SIGMA, mask=None):
                              'dispersion, as KiCad 10 PCB Calculator',
                    in_range=in_range, flags=flags, loss_db_per_mm=loss)
     if mask is not None:
-        mask_t, _mask_er = mask
+        mask_t, mask_er = mask
         if h <= MASK_CORRECTION_MAX_H_MM:
-            coated = embedded_microstrip(w, h, t, mask_t, er)
+            # #90: the cover blend runs on the MASK's er (not the
+            # substrate's), at the caller's frequency; the coated
+            # result's flags (dispersion not modelled) propagate so
+            # the static coated value never silently replaces the
+            # dispersive one.
+            coated = embedded_microstrip(w, h, t, mask_t, er,
+                                         f_hz=f_hz, cover_er=mask_er)
             res.detail['z0_unmasked'] = res.z0
             res.detail['mask_delta_ohm'] = coated.z0 - res.z0
             res.z0 = coated.z0
             res.eps_eff = coated.eps_eff
+            for _fl in coated.flags:
+                if _fl not in res.flags:
+                    res.flags.append(_fl)
             res.flags.append('mask_correction_applied')
         else:
             res.flags.append('mask_correction_off_thick_dielectric')
@@ -281,11 +290,15 @@ def microstrip(w, h, t, er, f_hz=0.0, tand=0.0, sigma=COPPER_SIGMA, mask=None):
 # IPC-D-317A publishes; also the coated-microstrip construction).
 # ---------------------------------------------------------------------------
 
-def embedded_microstrip(w, h, t, cover, er, f_hz=0.0):
-    """Microstrip buried under `cover` mm of dielectric of the same er.
+def embedded_microstrip(w, h, t, cover, er, f_hz=0.0, cover_er=None):
+    """Microstrip buried under `cover` mm of dielectric.
 
-    eps_eff,emb = er - (er - eps_eff,surf) * exp(-2*cover/h); the impedance
-    is the surface static solution re-evaluated at eps_eff,emb.
+    eps_eff,emb = cover_er - (cover_er - eps_eff,surf) * exp(-2*cover/h)
+    -- the blend asymptotes to the COVER material's er (an infinitely
+    thick cover embeds the line in the cover material); cover_er
+    defaults to the substrate er, the original same-er form.  The
+    impedance is the surface static solution re-evaluated at
+    eps_eff,emb.
     """
     z0_s, er_eff_s, z0_h_1 = _ms_static(w, h, t, er)
     flags = []
@@ -293,7 +306,9 @@ def embedded_microstrip(w, h, t, cover, er, f_hz=0.0):
         return TLResult(z0=z0_s, eps_eff=er_eff_s, model='embedded_microstrip',
                         reference='Wadell 1991 s3.5.4 (cover = 0: surface line)',
                         flags=flags)
-    er_eff_e = er - (er - er_eff_s) * math.exp(-2.0 * cover / h)
+    if cover_er is None:
+        cover_er = er
+    er_eff_e = cover_er - (cover_er - er_eff_s) * math.exp(-2.0 * cover / h)
     # The geometry's air (er=1) impedance over the embedded eps_eff: the
     # surface Z0 rescaled by sqrt(eps_eff,surf / eps_eff,emb).
     z0_e = z0_h_1 / math.sqrt(er_eff_e)
