@@ -4,6 +4,23 @@ silently deleted and redrawn unlocked.  Needs pcbnew."""
 import os, subprocess, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+def _require_pcbnew():
+    # #130 (B5): a missing pcbnew must be a REAL skip under pytest,
+    # not a print-and-return that pytest counts as a pass while
+    # running nothing.  Standalone runs keep the print behaviour.
+    try:
+        import pcbnew  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        import pytest
+        pytest.skip('pcbnew unavailable')
+    except ImportError:
+        print('skip: pcbnew unavailable')
+    return False
+
+
 
 def _nm(x):
     return int(round(x * 1e6))
@@ -31,12 +48,7 @@ def _locked_tracks(path):
 
 
 def test_meander_never_touches_locked_tracks():
-    try:
-        r = subprocess.run([sys.executable, '-c', 'import pcbnew'],
-                           capture_output=True, timeout=60)
-        if r.returncode != 0: print('skip'); return
-    except Exception:
-        print('skip'); return
+    if not _require_pcbnew(): return
     from ai_router import worker
     with tempfile.TemporaryDirectory() as td:
         path = os.path.join(td, 't.kicad_pcb')

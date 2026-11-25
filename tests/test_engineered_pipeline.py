@@ -29,10 +29,12 @@ STACKUP = '''(stackup
     '''
 
 def _pcbnew_available():
+    # #130 (B5): the probe used to ignore the return code and so
+    # always reported pcbnew available
     try:
-        subprocess.run([sys.executable, '-c', 'import pcbnew'],
-                       capture_output=True, timeout=60)
-        return True
+        r = subprocess.run([sys.executable, '-c', 'import pcbnew'],
+                           capture_output=True, timeout=60)
+        return r.returncode == 0
     except Exception:
         return False
 

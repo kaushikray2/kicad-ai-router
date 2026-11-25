@@ -5,6 +5,23 @@ Synthetic pcbnew boards in the style of test_engineered_step2."""
 import json, os, subprocess, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+def _require_pcbnew():
+    # #130 (B5): a missing pcbnew must be a REAL skip under pytest,
+    # not a print-and-return that pytest counts as a pass while
+    # running nothing.  Standalone runs keep the print behaviour.
+    try:
+        import pcbnew  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        import pytest
+        pytest.skip('pcbnew unavailable')
+    except ImportError:
+        print('skip: pcbnew unavailable')
+    return False
+
+
 WORKER = os.path.join(os.path.dirname(__file__), '..', 'ai_router', 'worker.py')
 STACKUP = '''(stackup
       (layer "F.Cu" (type "copper") (thickness 0.035))
@@ -90,7 +107,7 @@ def _facts(board, h=0.2):
 
 
 def test_gate11_foreign_via_on_reference_layer():
-    if not _pcbnew_available(): print('skip'); return
+    if not _require_pcbnew(): return
     bd = _B(); p = bd.p
     bd.zone('GND', p.In1_Cu, 2, 2, 58, 38)
     bd.seg('RF', p.F_Cu, 5, 20, 30, 20)
@@ -104,7 +121,7 @@ def test_gate11_foreign_via_on_reference_layer():
     assert ('CLK', 'via') in kinds, kinds        # #91
 
 def test_gate2_keepout_crossing_track():
-    if not _pcbnew_available(): print('skip'); return
+    if not _require_pcbnew(): return
     bd = _B(); p = bd.p
     fp = bd.smd_fp('U1', [('1', 'RF', 10, 20)])
     z = p.ZONE(fp); z.SetIsRuleArea(True)
@@ -121,7 +138,7 @@ def test_gate2_keepout_crossing_track():
     assert any(e['net'] == 'CLK' and e['kind'] == 'track' for e in f['keepout_intrusions']), f['keepout_intrusions']  # #93
 
 def test_gate6_via_stitched_pour_not_island():
-    if not _pcbnew_available(): print('skip'); return
+    if not _require_pcbnew(): return
     def build(with_via):
         bd = _B(); p = bd.p
         bd.seg('RF', p.F_Cu, 5, 30, 50, 30)
@@ -137,7 +154,7 @@ def test_gate6_via_stitched_pour_not_island():
     assert not any(i['net'] == 'AUX' for i in f_via['floating_islands']), f_via['floating_islands']  # #94
 
 def test_arc_feed_corridor_checked():
-    if not _pcbnew_available(): print('skip'); return
+    if not _require_pcbnew(): return
     bd = _B(); p = bd.p
     bd.zone('GND', p.In1_Cu, 2, 2, 18, 38)
     bd.zone('GND', p.In1_Cu, 22, 2, 58, 38)      # 4 mm reference gap under the arc apex

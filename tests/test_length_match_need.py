@@ -6,6 +6,23 @@ Seam test: real Pipeline, stubbed member stats and gate."""
 import json, os, shutil, subprocess, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+def _require_pcbnew():
+    # #130 (B5): a missing pcbnew must be a REAL skip under pytest,
+    # not a print-and-return that pytest counts as a pass while
+    # running nothing.  Standalone runs keep the print behaviour.
+    try:
+        import pcbnew  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        import pytest
+        pytest.skip('pcbnew unavailable')
+    except ImportError:
+        print('skip: pcbnew unavailable')
+    return False
+
+
 SELFTEST = os.path.join(os.path.dirname(__file__), '..', 'docker', 'selftest',
                         'hbridge-driver.kicad_pcb')
 SELFTEST_PRO = os.path.join(os.path.dirname(__file__), '..', 'docker', 'selftest',
@@ -15,12 +32,7 @@ STATS = {'NA': {'length_mm': 50.0, 'delay_ps': 300.0},
 
 
 def test_delay_only_failure_requests_meander():
-    try:
-        r = subprocess.run([sys.executable, '-c', 'import pcbnew'],
-                           capture_output=True, timeout=60)
-        if r.returncode != 0: print('skip: pcbnew unavailable'); return
-    except Exception:
-        print('skip: pcbnew unavailable'); return
+    if not _require_pcbnew(): return
     from ai_router.pipeline import Pipeline
     with tempfile.TemporaryDirectory() as tmp:
         board = os.path.join(tmp, 'demo.kicad_pcb')

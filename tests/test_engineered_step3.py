@@ -7,6 +7,23 @@ measured fact only (length matching is a separate item).
 import json, os, subprocess, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+def _require_pcbnew():
+    # #130 (B5): a missing pcbnew must be a REAL skip under pytest,
+    # not a print-and-return that pytest counts as a pass while
+    # running nothing.  Standalone runs keep the print behaviour.
+    try:
+        import pcbnew  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        import pytest
+        pytest.skip('pcbnew unavailable')
+    except ImportError:
+        print('skip: pcbnew unavailable')
+    return False
+
+
 STACKUP = '''(stackup
       (layer "F.Mask" (type "Top Solder Mask") (thickness 0.01) (material "EPDM") (epsilon_r 3.3) (loss_tangent 0.02))
       (layer "F.Cu" (type "copper") (thickness 0.035))
@@ -70,9 +87,7 @@ def _build_board(path):
 
 
 def test_pipeline_sizes_diff_pair():
-    if not _pcbnew_available():
-        print('skip: pcbnew unavailable')
-        return
+    if not _require_pcbnew(): return
     from ai_router import tlcalc
     from ai_router.pipeline import Pipeline
     with tempfile.TemporaryDirectory() as tmp:
