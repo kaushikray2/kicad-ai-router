@@ -8,7 +8,11 @@ when the config turns the reservation on).
 Run: python3 tests/test_pour_skeleton.py  (needs pcbnew)"""
 import importlib.machinery, importlib.util, json, os, subprocess, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ai_router'))
-import pcbnew
+try:
+    import pcbnew
+except ImportError:
+    import pytest
+    pcbnew = pytest.importorskip('pcbnew')  # v1.11.5 (#122): report a skip, not a collection error, outside KiCad
 ld = importlib.machinery.SourceFileLoader('w', os.path.join(os.path.dirname(__file__), '..', 'ai_router', 'worker.py'))
 sp = importlib.util.spec_from_loader('w', ld); w = importlib.util.module_from_spec(sp); sp.loader.exec_module(w)
 import pipeline
