@@ -112,19 +112,14 @@ def main():
         cfg = build_cfg(rt, llm, tm_exe)
         sys.path.insert(0, find_plugin())
         sys.path.insert(0, os.path.join(find_plugin(), 'ai_router'))
-        # v1.8.2 (#20): forward any other key the plugin's config
-        # schema knows -- the hardcoded cfg list above silently
-        # dropped first_nets_policy/layer_law_policy for the whole
-        # dataset-v2/v3 era (issue #8's root cause). Server-owned
-        # keys never come from config/job data. The effective merged
-        # config is recorded in the job status for audit.
-        try:
-            import config as _cfgmod
-            _owned = {'endpoint', 'model', 'api_key', 'tracemaker_path', 'kicad_cli'}
-            for _k in _cfgmod.DEFAULTS:
-                if _k not in cfg and _k not in _owned and _k in rt: cfg[_k] = rt[_k]
-        except Exception:
-            pass
+        # v1.11.2 (#108): forwarding lives in build_cfg alone since
+        # #74 -- it starts from the full plugin DEFAULTS and copies
+        # every remaining job-set key. The v1.8.2 generic loop that
+        # used to sit here tested '_k not in cfg', which build_cfg
+        # made permanently False; removed as dead code (its comment
+        # also misdescribed the flow and invited fixes in the wrong
+        # place). The effective merged config is recorded in the job
+        # status below for audit.
         # v1.9 (S6): job overrides are untrusted input to a shared
         # backend -- clamp the numeric routing params to sane ranges
         # (a max_passes of 100000 or a negative work budget otherwise
