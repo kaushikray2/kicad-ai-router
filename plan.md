@@ -147,6 +147,28 @@ cost_weighted_wirelength_mm (null when uncosted) -- a layer-cost
 run is now measurable from its own ledger. Basis: layer-cost
 research report candidates 1-2 (2026-11-25).
 
+### Third external review -- all main findings fixed, v1.11.5 (2026-11-25)
+
+R1-R11 (#116-#126) fixed and closed with fail-before/pass-after
+regression tests: CI workflow + pcbnew collection guards (#122),
+strip keeps locked items and free vias with a gate invariance
+census (#119), starved_thermal keyed as a base-relative delta
+(#116), fractional layer-cost factors (#121), planner hole band
+at the via pad radius (#117), curved Edge.Cuts tessellated in
+planner and checker (#118), relative-first config imports with
+reconciled fallbacks (#123), failed lock restore = failed attempt
+(#124), _run_group Windows kill fallback (#125) plus the
+subprocess NameError it exposed (#153, KRT/Freerouting legs
+silently dead since v1.10.1), PCM v2 repository.json + rebuilt
+1.11.5 package (#120), and release hygiene: backfilled tags
+v1.10.0-v1.11.4, KRT binary hash pin, non-root container +
+HEALTHCHECK, cached /health version (#126). On the
+engineered-nets branch, the three merge blockers are fixed:
+#132 (audit report-only by default), #133 (treatment key),
+#150 (PCM glob + markings sidecar round-trip). Follow-ups:
+the NAS layer-cost factor sweep (1.25/1.5/2/3) once a backend
+is free; #138's merge-time remainder.
+
 ## In progress
 
 - **P2.1b** (below) is next up, with #63 as its first step. Phase 2E

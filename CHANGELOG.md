@@ -448,6 +448,73 @@ control run reproduced the identical 15). Fixtures: heal bridges
 
 The project is relicensed from MIT to **GPL-3.0-or-later** (SPDX: GPL-3.0-or-later), matching KiCad's own licensing. The change applies from this commit forward; releases through v1.10.2 were distributed under MIT, and copies already out there keep those terms. Sample boards in `docker/selftest/` remain under their original licenses.
 
+## v1.11.5 -- 2026-11-25
+
+Third external review: all eleven main findings (R1-R11) fixed,
+plus one found during the work (#153). Every fix carries a
+regression test that fails on v1.11.4 and passes here.
+
+- #122: CI -- a GitHub Actions workflow builds the backend image
+  and runs pytest in it, and a packaging job verifies the PCM zip
+  contents, the packages.json version and both repo JSON files
+  against the PCM v2 schema. The four pcbnew test files gained
+  importorskip guards so the suite collects without pcbnew.
+- #119: strip no longer deletes user-locked routing or free vias:
+  it removes only unlocked tracks/arcs and vias left dangling by
+  that removal (cmd_prune honours locks too), and the final gate
+  records an invariance census of locked items and free vias
+  between the input and the delivered board.
+- #116: starved_thermal is a keyed acceptance tier (as the
+  routing-caused delta against the base board, after faults);
+  isolated_copper is reported in the gate but not keyed.
+- #121: layer-cost factors may be fractional (up to two decimal
+  places, 1..1000) in the pipeline parser, the worker parser and
+  the dialog; integer specs produce byte-identical engine command
+  lines, malformed specs still warn and disable, never raise.
+- #117: the planner's via hole-clearance band uses the via PAD
+  radius, matching the checker (the drill radius remains for the
+  hole-to-hole band); the parity test probes a cell between the
+  two radii.
+- #118: curved Edge.Cuts are no longer approximated by bounding
+  boxes in the planner or the checker -- shapes are tessellated
+  by KiCad (TransformShapeToPolygon, 0.05 mm max error,
+  ERROR_OUTSIDE) and measured as real segments.
+- #123: config imports are relative-first in pipeline and
+  orchestrator; the hard-coded fallbacks agree with config.py
+  (reroute_accept 'connectivity', engine_portfolio 'tm_relax');
+  run_job logs a failed config import instead of passing
+  silently; the package __init__ prints the ImportError it
+  swallows.
+- #124: a failed lock restore after a windowed re-route is a
+  failed attempt (recorded 'lock_restore_failed', re-route
+  discarded) instead of a warning on the way to acceptance.
+- #125: the _run_group timeout kill has a Windows branch
+  (taskkill /T on the process-group child, p.kill() as last
+  resort) instead of silently degrading to an unbounded
+  communicate(); POSIX behaviour unchanged.
+- #153: _run_group never had subprocess in scope, so the KRT and
+  Freerouting portfolio legs silently returned run_failed on
+  every call since v1.10.1 -- fixed by importing subprocess in
+  _run_group/_kill_group (found and proven during the #125 work).
+- #120: build_package.py emits a PCM v2 repository.json
+  (schema_version 2 + a packages resource with the sha256 of the
+  packages.json written in the same build); this release's
+  package is rebuilt at 1.11.5, and the README install section
+  and version badge are corrected/synced.
+- #126: release hygiene -- annotated git tags backfilled for
+  v1.10.0..v1.11.4 at their release commits; the KRT grid_router
+  binary is sha256-pinned in the Dockerfile (digest verified
+  against the GitHub API and a cached copy); the backend
+  container runs as a non-root user with a HEALTHCHECK; /health
+  serves a startup-cached kicad-cli version.
+- Branch (not in this package): the engineered-nets merge
+  blockers were fixed on the engineered-nets branch in the same
+  programme -- #132 (placement audit report-only by default,
+  gate-checked AIR:-named zone materialisation), #133
+  (treatment key, merge-safe against the layer-cost tail),
+  #150 (PCM glob packaging, loud markings-import failure,
+  backend markings sidecar round-trip).
+
 ## v1.11.4 -- 2026-11-25
 
 - #114: layer cost reached every search site in v1.11.0 but no
