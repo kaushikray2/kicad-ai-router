@@ -45,10 +45,25 @@ def resolve_ban_names(raw, aliases):
         elif c not in out: out.append(c)
     return out, unknown
 
+def _parse_factor(tok):
+    # v1.11.5 (#121): a layer-cost factor is a number 1..1000 with
+    # up to two decimal places ('1', '1.5', '1.25') -- the range
+    # where a price nudges rather than switches is roughly 1.1-3,
+    # mostly fractional, and the engine has always accepted
+    # fractions (per-mille internally). Returns the float, or None
+    # when the token is not of that shape. The worker carries the
+    # same check (it loads standalone).
+    if not tok or tok.count('.') > 1: return None
+    whole, dot, frac = tok.partition('.')
+    if not whole.isdigit(): return None
+    if dot and (not frac.isdigit() or len(frac) > 2): return None
+    return float(tok)
+
 def parse_layer_cost(spec):
     # v1.11 (#73): the layer_cost config spec, engine syntax:
     # comma-separated LAYER=FACTOR pairs ('In1.Cu=10,In2.Cu=10'),
-    # factor an integer 1..1000 (1 = normal cost). Returns
+    # factor a number 1..1000 (1 = normal cost; fractional factors
+    # to two decimal places since v1.11.5, #121). Returns
     # (pairs, error): pairs is a list of (name, factor) in spec
     # order, [] for an empty/off spec; on ANY malformed token the
     # whole spec is rejected -- (None, reason) -- and the caller
@@ -67,11 +82,10 @@ def parse_layer_cost(spec):
         name = name.strip(); fac = fac.strip()
         if not name:
             return None, 'token %r has an empty layer name' % tok
-        try:
-            f = int(fac)
-        except Exception:
-            return None, 'factor %r for layer %r is not an integer' % (fac, name)
-        if not fac.isdigit() or f < 1 or f > 1000:
+        f = _parse_factor(fac)
+        if f is None:
+            return None, 'factor %r for layer %r is not a number (up to two decimal places)' % (fac, name)
+        if f < 1 or f > 1000:
             return None, 'factor %r for layer %r is outside 1..1000' % (fac, name)
         if name.lower() in seen:
             return None, 'layer %r is priced twice' % name
@@ -95,9 +109,18 @@ def resolve_cost_names(pairs, aliases):
             seen.add(c); out.append((c, fac))
     return out, unknown
 
+def _fmt_factor(f):
+    # Canonical factor spelling: integral factors without a decimal
+    # point (an integer spec's engine command line stays
+    # byte-identical to the pre-fractional format), fractions
+    # trimmed of trailing zeros.
+    f = float(f)
+    if f == int(f): return str(int(f))
+    return ('%.2f' % f).rstrip('0')
+
 def format_layer_cost(pairs):
     # Canonical spec string for --layer-cost / the ledger.
-    return ','.join('%s=%d' % (n, f) for n, f in pairs or [])
+    return ','.join('%s=%s' % (n, _fmt_factor(f)) for n, f in pairs or [])
 
 def cost_tail(g):
     # v1.11.4 (#114): the layer-cost tail shared by every keep/discard

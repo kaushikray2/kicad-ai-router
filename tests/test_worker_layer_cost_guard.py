@@ -20,9 +20,10 @@ def test_worker_layer_cost_guards():
     P = w._parse_layer_cost_raw
     assert P('In1.Cu=10,In2.Cu=10') == ({pcbnew.In1_Cu: 10, pcbnew.In2_Cu: 10}, [])
     assert P('In1.Cu=1') == ({pcbnew.In1_Cu: 1}, [])        # bounds are inclusive
+    assert P('In1.Cu=10.5') == ({pcbnew.In1_Cu: 10.5}, [])  # v1.11.5 (#121): fractional factors reach Grid._lfac as floats
     assert P('In1.Cu=1000') == ({pcbnew.In1_Cu: 1000}, [])
     assert P('In1.Cu= 10 ') == ({pcbnew.In1_Cu: 10}, [])    # whitespace tolerated
-    for bad in ('In1.Cu=0', 'In1.Cu=1001', 'In1.Cu=-3', 'In1.Cu=+10', 'In1.Cu=10.5',
+    for bad in ('In1.Cu=0', 'In1.Cu=1001', 'In1.Cu=-3', 'In1.Cu=+10', 'In1.Cu=10.555',
                 'In1.Cu=x', 'In1.Cu=', 'In1.Cu', '=10'):
         assert P(bad) == ({}, []), bad
     assert P('GND=5') == ({}, [('GND', 5)])                # board-alias names stay unresolved for Grid

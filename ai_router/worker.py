@@ -45,11 +45,22 @@ def _parse_no_tracks_raw(spec):
         else: banned.add(_i)
     return banned, unresolved
 
+def _factor_or_none(tok):
+    # v1.11.5 (#121): the pipeline's _parse_factor shape check -- a
+    # number with up to two decimal places; float value or None.
+    if not tok or tok.count('.') > 1: return None
+    whole, dot, frac = tok.partition('.')
+    if not whole.isdigit(): return None
+    if dot and (not frac.isdigit() or len(frac) > 2): return None
+    return float(tok)
+
 def _parse_layer_cost_raw(spec):
     # v1.11.2 (#105): split a --layer-cost value into (factor by
     # canonical layer id, unresolved (name, factor) pairs), applying
     # the guards the pipeline's parse_layer_cost enforces --
-    # non-empty name, digits-only factor, 1..1000 inclusive. Before
+    # non-empty name, factor a number with up to two decimal places
+    # (v1.11.5, #121 -- the pipeline's _parse_factor check, carried
+    # here because the worker loads standalone), 1..1000 inclusive. Before
     # this, the worker accepted any integer int() would parse: 0
     # (travel on a 'priced' layer becomes free), negatives (negative
     # A* step costs) and >1000 all reached Grid._lfac when a spec
@@ -60,9 +71,9 @@ def _parse_layer_cost_raw(spec):
     for _tok in spec.split(','):
         _nm, _eq, _fc = _tok.partition('=')
         _nm = _nm.strip(); _fc = _fc.strip()
-        if not _nm or not _fc.isdigit(): continue
-        _f = int(_fc)
-        if not (1 <= _f <= 1000): continue
+        if not _nm: continue
+        _f = _factor_or_none(_fc)
+        if _f is None or not (1 <= _f <= 1000): continue
         _i = _layer_id_from_name(_nm)
         if _i is None: unresolved.append((_nm, _f))
         else: by_id[_i] = _f

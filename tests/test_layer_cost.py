@@ -22,10 +22,11 @@ def test_parse_valid():
     assert parse_layer_cost('In1.Cu=10,In2.Cu=10') == ([('In1.Cu', 10), ('In2.Cu', 10)], None)
     assert parse_layer_cost('In1.Cu=1') == ([('In1.Cu', 1)], None)        # bounds are inclusive
     assert parse_layer_cost('In1.Cu=1000') == ([('In1.Cu', 1000)], None)
+    assert parse_layer_cost('In1.Cu=10.5') == ([('In1.Cu', 10.5)], None)  # v1.11.5 (#121): fractional factors (the nudge range is mostly fractional)
     assert parse_layer_cost(' In2.Cu = 4 ,') == ([('In2.Cu', 4)], None)   # whitespace/stray comma tolerated
 
 def test_parse_rejects_malformed():
-    for bad in ('In1.Cu=0', 'In1.Cu=1001', 'In1.Cu=-3', 'In1.Cu=x', 'In1.Cu=10.5',
+    for bad in ('In1.Cu=0', 'In1.Cu=1001', 'In1.Cu=-3', 'In1.Cu=x', 'In1.Cu=10.555',
                 'In1.Cu=+10', 'In1.Cu', 'In1.Cu=', '=10', 'In1.Cu=10,In1.Cu=5',
                 'In1.Cu=10,in1.cu=5', ',', 'In1.Cu==10', 'In1.Cu=1e3'):
         pairs, err = parse_layer_cost(bad)
