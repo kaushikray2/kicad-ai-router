@@ -134,7 +134,10 @@ def fault_count(g):
     # v1.3.2: tracks on a banned layer (the layer-law census) count
     # as faults -- DRC cannot see them (the pour refills around a
     # track drawn on its own plane), so the census is the only guard.
-    return sum(c.get(k, 0) for k in FAULT_CLASSES) + int((g or {}).get('banned_layer_tracks') or 0)
+    # v1.12 (#63): foreign copper inside a reserved pour-skeleton
+    # corridor is a router-added fault, on the same footing as a
+    # track on a banned layer (a policy count the DRC cannot see).
+    return sum(c.get(k, 0) for k in FAULT_CLASSES) + int((g or {}).get('banned_layer_tracks') or 0) + int((g or {}).get('skeleton_intrusions') or 0)
 
 
 class Pipeline:
@@ -227,6 +230,15 @@ class Pipeline:
         split = [n for n in r['nets'] if n['components'] > 1 and n['net'] not in ('GND',)]
         r['split_nets'] = split
         self._record('summary', {'split_nets': [s['net'] for s in split]})
+        return r
+
+    def tool_skeleton(self, board=None):
+        # #63: pour-skeleton state of a board (default: current) --
+        # per-pour pad components, severed tree edges, the intrusion
+        # census. The P2.1b pour fault definition compares the base
+        # board's reading with the final board's.
+        r = self._worker('skeleton', '--board', board or self.current)
+        self._record('skeleton', r)
         return r
 
     def tool_scorecard(self):
@@ -540,6 +552,13 @@ class Pipeline:
         spec = self._layer_cost_spec(self.current)
         return ['--layer-cost', spec] if spec else []
 
+    def _leg_skeleton_args(self):
+        # v1.12 (#63): the pour-skeleton reservation flag for worker
+        # legs and the gate's summary. [] when off -- leg command
+        # lines are then exactly what they were before the feature,
+        # the layer-cost rule.
+        return ['--skeleton'] if self.cfg.get('pour_skeleton', True) else []
+
     def _leg_ban_args(self):
         # v1.11.2 (#104): legs receive the EFFECTIVE ban set for the
         # current board -- canonical, board-resolved, priced layers
@@ -577,7 +596,7 @@ class Pipeline:
         # and a failed kicad-cli silently left the PREVIOUS board's
         # report to be parsed as this board's gate.
         total, unc, classes, pour, signal = self._drc_measure(board)
-        summ = self._worker('summary', '--board', board, '--fast')  # v1.9.6 (#40): the gate discards crossings/RUDY
+        summ = self._worker('summary', '--board', board, '--fast', *self._leg_skeleton_args())  # v1.9.6 (#40): the gate discards crossings/RUDY
         # v1.3.2 layer census: any track on a cfg-banned layer is a
         # layer-law fault, counted into fault_count via the gate dict.
         _tbl = summ.get('tracks_by_layer') or {}
@@ -629,9 +648,11 @@ class Pipeline:
                           'vias': summ.get('vias'), 'wirelength_mm': summ.get('wirelength_mm'),
                           'classes': classes, 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
                           'signal_items': signal, 'split_nets': split_nets,
-                          'pour_nets': pour_nets, 'tracks_by_layer': _tbl, 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
+                          'pour_nets': pour_nets, 'tracks_by_layer': _tbl, 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'skeleton_intrusions': summ.get('skeleton_intrusions'), 'skeleton_intrusion_mm': summ.get('skeleton_intrusion_mm'), 'board': board}
         self._record('gate', self.last_gate)
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
+        if self.last_gate.get('skeleton_intrusions'):
+            self.log('Gate: %d foreign items inside reserved pour corridors (%.1f mm) -- router-added pour faults (#63)' % (self.last_gate['skeleton_intrusions'], self.last_gate.get('skeleton_intrusion_mm') or 0.0))
         return self.last_gate
 
     def tool_reroute_window(self, net, margin=6.0):
@@ -715,7 +736,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
         extra = ['--attempt-select'] if self.cfg.get('attempt_select') else []
-        r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, *self._leg_ban_args(), *extra, *self._leg_layer_args())
+        r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, *self._leg_ban_args(), *extra, *self._leg_layer_args(), *self._leg_skeleton_args())
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -737,7 +758,7 @@ class Pipeline:
         outp = self._out('longfinish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, *self._leg_ban_args(), *self._leg_layer_args())
+        r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, *self._leg_ban_args(), *self._leg_layer_args(), *self._leg_skeleton_args())
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -763,7 +784,7 @@ class Pipeline:
         outp = self._out('ilprepair')
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), *self._leg_ban_args(), *self._leg_layer_args())
+        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), *self._leg_ban_args(), *self._leg_layer_args(), *self._leg_skeleton_args())
         if r.get('routed') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -792,6 +813,7 @@ class Pipeline:
             kb = _accept_key(cur_gate)
             args = ['--board', self.current, '--out', outp, *self._leg_ban_args()]
             args += self._leg_layer_args()  # v1.11 (#73): heal routes bridges on the grid
+            args += self._leg_skeleton_args()  # v1.12 (#63)
             if net: args += ['--nets', net]
             r = self._worker('heal', *args)
             agg['per_net'][net or '*'] = r.get('status')
@@ -821,7 +843,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
         outp = self._out('stitched')
-        r = self._worker('stitch', '--board', self.current, '--out', outp, *self._leg_ban_args(), *self._leg_layer_args())  # v1.11.2 (#102): stitch DOES route -- _bridge_island draws track bridges (<=8 mm, <=2 vias) on the Grid; the v1.11.0 'vias only' exclusion rationale was wrong
+        r = self._worker('stitch', '--board', self.current, '--out', outp, *self._leg_ban_args(), *self._leg_layer_args(), *self._leg_skeleton_args())  # v1.11.2 (#102): stitch DOES route -- _bridge_island draws track bridges (<=8 mm, <=2 vias) on the Grid; the v1.11.0 'vias only' exclusion rationale was wrong
         if os.path.exists(outp):
             prev = self.current
             self.current = outp
