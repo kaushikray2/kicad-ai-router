@@ -39,3 +39,35 @@ def test_switch_absent_defaults_on():
     p = _mkpipe({})
     orchestrator._run_engineered_stages(p, lambda m: None)
     assert p.calls == STAGES, p.calls
+
+
+class _DoneClient:
+    def __init__(self, *a):
+        pass
+
+    def chat(self, messages, tools):
+        return {'content': '', 'raw': {},
+                'tool_calls': [{'name': 'done', 'args': {'note': 'ok'},
+                                'id': '1'}]}
+
+
+class _StubPipe:
+    board_path = 'x.kicad_pcb'
+    cfg = {}
+
+    def finalize(self):
+        return 'board'
+
+    def tool_gate(self, board=None):
+        return {}
+
+
+def test_llm_mode_survives_non_numeric_max_tool_calls(monkeypatch):
+    monkeypatch.setattr(orchestrator, 'LLMClient', _DoneClient)
+    cfg = {'endpoint': 'http://unused', 'model': 'm',
+           'max_tool_calls': 'not-a-number'}
+    out = orchestrator.run_llm(cfg, _StubPipe(), lambda m: None)
+    assert out['final_board'] == 'board'
+    assert orchestrator._cfg_int({'max_tool_calls': '7'},
+                                 'max_tool_calls', 48) == 7
+    assert orchestrator._cfg_int({}, 'max_tool_calls', 48) == 48
