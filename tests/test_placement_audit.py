@@ -67,3 +67,22 @@ def test_unresolved_library_is_not_a_gap():
     rep = placement_audit.audit(facts, {})  # nothing resolved
     assert rep['gaps'] == []
     assert 'Y1' in rep['unresolved']
+
+
+def test_generic_module_is_not_rf_class():
+    # #77: the bare substring 'module' classified ANY module-named
+    # footprint as an RF module.
+    assert library_rules.classify('Sensors:Humidity_Module', 'Generic sensor module') is None
+    assert library_rules.classify('RF:E22-900M22S', 'LoRa module') == 'rf_module'
+    assert library_rules.classify('Wireless:ESP32-WROOM', '') == 'rf_module'
+
+def test_pour_nets_never_join_first_nets():
+    # #77: supply rails / pour nets must stay out of first_nets_extra
+    # even on a genuine RF module; its signal nets keep the advice.
+    facts = {'outline_segments': [], 'pour_nets': ['3V3', '+5V'],
+             'footprints': [_fp('U2', 'RF:E22-900M22S', 10, 10,
+                                [('1', '3V3', 10, 10), ('2', 'TX', 11, 10),
+                                 ('3', 'RX', 12, 10), ('4', 'GND', 13, 10)],
+                                value='LoRa module')]}
+    rep = placement_audit.audit(facts, {})
+    assert rep['first_nets_extra'] == ['TX', 'RX'], rep['first_nets_extra']

@@ -66,6 +66,8 @@ def audit(facts, library):
     by_ref = {f['ref']: f for f in fps}
     report = {'footprints': {}, 'materialise': [], 'first_nets_extra': [],
               'gaps': [], 'unresolved': []}
+    pour_nets = set(facts.get('pour_nets') or [])   # #77: pour-carried
+    # rails are never first_nets material, whatever class the part is
     for fp in fps:
         ref = fp['ref']
         lib = library.get(fp.get('fpid')) if library else None
@@ -174,7 +176,7 @@ def audit(facts, library):
         if cls in ('rf_module', 'gnss_module'):
             for p in fp.get('pads') or []:
                 n = p.get('net')
-                if n and n not in _GROUND_NETS and n not in report['first_nets_extra']:
+                if n and n not in _GROUND_NETS and n not in pour_nets and n not in report['first_nets_extra']:
                     report['first_nets_extra'].append(n)
         report['footprints'][ref] = item
     return report

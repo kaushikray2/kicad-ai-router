@@ -45,7 +45,7 @@ RULE_PROPERTIES = ('AIRuleDecapMm', 'AIRuleEdgeClearanceMm', 'AIRuleClass')
 # no explicit AIRuleClass property exists.
 CLASS_PATTERNS = (
     ('gnss_module', re.compile(r'gnss|gps|lc76|sam-m|neo-m|ublox|u-blox', re.I)),
-    ('rf_module', re.compile(r'\brf\b|lora|sx12|e22-|ble|wifi|esp32|nrf|antenna|module', re.I)),
+    ('rf_module', re.compile(r'\brf\b|lora|sx12|e22-|ble|wifi|esp32|nrf|antenna', re.I)),  # #77: no bare 'module' -- it classified every module-named part (sensor modules, power modules) as RF
     ('crystal', re.compile(r'crystal|xtal|\bosc\b|resonator', re.I)),
     ('switcher', re.compile(r'buck|boost|switching|smps|dc-dc|dcdc', re.I)),
 )

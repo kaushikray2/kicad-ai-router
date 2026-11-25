@@ -3501,6 +3501,8 @@ def cmd_auditgeom(board_path):
     import math as _math
     b = pcbnew.LoadBoard(board_path)
     out = {'footprints': [], 'outline_segments': []}
+    out['pour_nets'] = sorted({z.GetNetname() for z in b.Zones()
+                               if not z.GetIsRuleArea() and z.GetNetname()})
     for d in b.GetDrawings():
         if d.GetLayer() != pcbnew.Edge_Cuts:
             continue
