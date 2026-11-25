@@ -48,7 +48,7 @@ class RouterDialog(wx.Dialog):
         add('No tracks on layers', self.layers_ctrl)
         self.cost_ctrl = wx.TextCtrl(panel, value=self.cfg.get('layer_cost', ''))  # v1.11 (#73)
         add('Layer costs (e.g. In1.Cu=10,In2.Cu=10)', self.cost_ctrl)
-        self.strip_ctrl = wx.CheckBox(panel, label='Strip existing routing into the working copy first')
+        self.strip_ctrl = wx.CheckBox(panel, label='Strip existing routing first (removes unlocked tracks/arcs and dangling vias; locked routing and free/stitching vias are kept)')  # v1.11.5 (#119): the label says exactly what is removed
         self.strip_ctrl.SetValue(bool(self.cfg.get('strip_existing', True)))
         add('', self.strip_ctrl)
         self.backend_ctrl = wx.CheckBox(panel, label='Run on the Docker backend instead of locally')

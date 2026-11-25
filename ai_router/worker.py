@@ -126,6 +126,12 @@ def cmd_summary(board_path, fast=False):
                 seen.append(ids)
         result.append({'net': n, 'pads': len(pads), 'components': comp})
     tracks = list(b.GetTracks())
+    # v1.11.5 (#119): lock/free-via census -- the pipeline's gate compares the
+    # delivered board against the input board on these two counts (the R1
+    # invariance check: strip and the routing stages must never LOSE either).
+    locked_items = sum(1 for t in tracks if t.IsLocked())
+    _zl = _zone_layers_by_net(b)
+    free_vias = sum(1 for t in tracks if t.Type() == pcbnew.PCB_VIA_T and _via_is_free(t, _zl))
     pour_nets = sorted({z.GetNetname() for z in b.Zones() if z.GetNetname()})
     ncu = b.GetCopperLayerCount()
     copper_layers = (['F.Cu'] + ['In%d.Cu' % i for i in range(1, ncu - 1)] + ['B.Cu']) if ncu > 1 else ['F.Cu']
@@ -179,7 +185,7 @@ def cmd_summary(board_path, fast=False):
                 'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
                 'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
                 'tracks_by_layer': tracks_by_layer, 'track_length_by_layer': {k: round(v, 1) for k, v in track_length_by_layer.items()}, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
-                'footprints': len(list(b.GetFootprints()))}
+                'footprints': len(list(b.GetFootprints())), 'locked_items': locked_items, 'free_vias': free_vias}
     # v1.2.2 congestion features (for the strategy dataset): ratsnest
     # MST crossings between different nets + RUDY peak/p95 of net
     # bounding boxes on a 32x32 grid.
@@ -230,7 +236,7 @@ def cmd_summary(board_path, fast=False):
             'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
             'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
             'tracks_by_layer': tracks_by_layer, 'track_length_by_layer': {k: round(v, 1) for k, v in track_length_by_layer.items()}, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
-            'footprints': len(list(b.GetFootprints()))}
+            'footprints': len(list(b.GetFootprints())), 'locked_items': locked_items, 'free_vias': free_vias}
 
 # ---------------------------------------------------------------- scorecard
 def cmd_scorecard(board_path):
@@ -2494,20 +2500,83 @@ def cmd_refill(board_path, out_path):
     pcbnew.SaveBoard(out_path, b)
     return {'refilled': True}
 
+def _zone_layers_by_net(b):
+    # net -> set of copper layer ids its zones sit on (v1.11.5, #119:
+    # the free-via fallback and the summary census share this).
+    out = {}
+    for z in b.Zones():
+        n = z.GetNetname()
+        if not n: continue
+        try: lays = list(z.GetLayerSet().CuStack())
+        except Exception:
+            try: lays = [z.GetLayer()]
+            except Exception: lays = []
+        out.setdefault(n, set()).update(lays)
+    return out
+
+def _via_is_free(v, zone_layers):
+    # v1.11.5 (#119): a via the router did not place for connectivity:
+    # KiCad marks user-placed stitching / thermal vias FREE; where the
+    # flag reads False, fall back to the review's rule -- the via's
+    # net has a zone on one of the via's layers (a stitching via into
+    # its own pour).
+    try:
+        if v.GetIsFree(): return True
+    except Exception:
+        pass
+    for lid in zone_layers.get(v.GetNetname()) or ():
+        try:
+            if v.IsOnLayer(lid): return True
+        except Exception: continue
+    return False
+
 def cmd_strip(board_path, out_path):
+    # v1.11.5 (#119): strip used to remove EVERY track, arc and via --
+    # user-locked hand routing, stitching vias and thermal-via arrays
+    # silently vanished from every delivered board, and neither DRC
+    # nor the gate could see the loss (no rule requires them). Now:
+    # remove only UNLOCKED tracks/arcs, plus the vias that removal
+    # leaves dangling (touching no kept track and no pad). Locked
+    # items and free vias survive.
     b = pcbnew.LoadBoard(board_path)
-    tracks = b.GetTracks()  # snapshot ONCE: re-querying Tracks() after a Remove breaks in KiCad 10 pcbnew
-    n = len(tracks)
-    while tracks:
-        t = tracks.pop()
-        b.Remove(t)
-        del t
+    tracks = list(b.GetTracks())  # snapshot ONCE: re-querying Tracks() after a Remove breaks in KiCad 10 pcbnew
+    zone_layers = _zone_layers_by_net(b)
+    removed = 0
+    kept_tracks = []; vias = []
+    for t in tracks:
+        if t.Type() == pcbnew.PCB_VIA_T: vias.append(t); continue
+        if t.IsLocked(): kept_tracks.append(t)
+        else: b.Remove(t); removed += 1
+    segs = []
+    for t in kept_tracks:
+        st, en = t.GetStart(), t.GetEnd()
+        segs.append((t.GetLayer(), st.x, st.y, en.x, en.y))
+    pad_pts = set()
+    for fp in b.GetFootprints():
+        for pd in fp.Pads():
+            pad_pts.add((pd.GetPosition().x, pd.GetPosition().y, pd.GetNetname()))
+    def _via_connected(v):
+        x, y = v.GetPosition().x, v.GetPosition().y
+        if (x, y, v.GetNetname()) in pad_pts: return True
+        for (lay, sx, sy, ex, ey) in segs:
+            try:
+                if not v.IsOnLayer(lay): continue
+            except Exception: continue
+            if (sx == x and sy == y) or (ex == x and ey == y): return True
+            if (ex - sx) * (y - sy) == (ey - sy) * (x - sx) and min(sx, ex) <= x <= max(sx, ex) and min(sy, ey) <= y <= max(sy, ey): return True
+        return False
+    kept_locked = len(kept_tracks); kept_free = 0
+    for v in vias:
+        if v.IsLocked(): kept_locked += 1; continue
+        if _via_is_free(v, zone_layers): kept_free += 1; continue
+        if _via_connected(v): continue
+        b.Remove(v); removed += 1
     # NO refill here: the stripped board is an internal router input, and refilling it
     # before TraceMaker measurably fragments the pours (measured A/B 2026-11-21: pass 1
     # gate 22 unconnected / DIO1 split with refill vs 5 / 0 splits without). Refill
     # belongs at the gate (kicad-cli --refill-zones) and at finalize (user-facing save).
     pcbnew.SaveBoard(out_path, b)
-    return {'removed_tracks_vias': n}
+    return {'removed_tracks_vias': removed, 'kept_locked': kept_locked, 'kept_free_vias': kept_free}
 
 # --------------------------------------------------------------------
 # v1.5 phase (c) Stage B: joint candidate selection (0-1 ILP) across

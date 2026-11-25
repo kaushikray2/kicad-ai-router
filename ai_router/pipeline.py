@@ -162,7 +162,7 @@ class Pipeline:
         if cfg.get('strip_existing', True):
             self.base = os.path.join(self.workdir, 'base.kicad_pcb')
             r = self._worker('strip', '--board', src_copy, '--out', self.base)
-            self.log('Stripped existing routing: %s items removed' % r.get('removed_tracks_vias'))
+            self.log('Stripped existing routing: %s items removed; kept %s locked items, %s free vias' % (r.get('removed_tracks_vias'), r.get('kept_locked'), r.get('kept_free_vias')))  # v1.11.5 (#119)
         else:
             self.base = src_copy
         self.current = self.base
@@ -600,6 +600,22 @@ class Pipeline:
                 if _lay in _banned_names:
                     banned_exempt_own_plane += (_tbln.get(_lay) or {}).get(_net, 0)
         banned_layer_tracks = max(0, banned_layer_tracks - banned_exempt_own_plane)
+        # v1.11.5 (#119): invariance census -- locked items and free
+        # vias on the INPUT board vs this board. Strip keeps both by
+        # construction; a later stage losing one is a defect no DRC
+        # class can see, so every gate records the comparison and a
+        # loss warns. The same census serves the #45 invariance gate.
+        if getattr(self, '_input_census', None) is None:
+            try:
+                _is = self._worker('summary', '--board', self.board_path, '--fast')
+                self._input_census = {'locked_items': _is.get('locked_items'), 'free_vias': _is.get('free_vias')}
+            except Exception:
+                self._input_census = {'locked_items': None, 'free_vias': None}
+        _inv = {'input_locked_items': self._input_census.get('locked_items'), 'input_free_vias': self._input_census.get('free_vias'),
+                'locked_items': summ.get('locked_items'), 'free_vias': summ.get('free_vias')}
+        _inv['ok'] = not ((_inv['input_locked_items'] is not None and (_inv['locked_items'] or 0) < _inv['input_locked_items']) or
+                          (_inv['input_free_vias'] is not None and (_inv['free_vias'] or 0) < _inv['input_free_vias']))
+        if not _inv['ok']: self.log('WARNING: invariance census -- this board lost locked items or free vias vs the input: %s' % _inv)
         pour_nets = summ.get('pour_nets', [])
         split_nets = [n['net'] for n in summ['nets'] if n['components'] > 1 and n['net'] != 'GND']
         # v1.2.4: split_signal_nets excludes the board's actual pour nets
@@ -629,7 +645,7 @@ class Pipeline:
                           'vias': summ.get('vias'), 'wirelength_mm': summ.get('wirelength_mm'),
                           'classes': classes, 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
                           'signal_items': signal, 'split_nets': split_nets,
-                          'pour_nets': pour_nets, 'tracks_by_layer': _tbl, 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
+                          'pour_nets': pour_nets, 'invariance': _inv, 'tracks_by_layer': _tbl, 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
         self._record('gate', self.last_gate)
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
         return self.last_gate
@@ -870,6 +886,7 @@ class Pipeline:
         rec = {'final': final}
         if pre is not None:
             after = self.tool_gate(final)
+            rec['invariance'] = after.get('invariance')  # v1.11.5 (#119): the delivered board's lock/free-via census vs the input
             rec['fault_delta'] = fault_count(after) - fault_count(pre)
             if rec['fault_delta']:
                 self.log('finalize: refill changed the fault count by %+d' % rec['fault_delta'])
