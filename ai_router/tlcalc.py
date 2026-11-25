@@ -293,10 +293,13 @@ def microstrip(w, h, t, er, f_hz=0.0, tand=0.0, sigma=COPPER_SIGMA, mask=None):
 def embedded_microstrip(w, h, t, cover, er, f_hz=0.0, cover_er=None):
     """Microstrip buried under `cover` mm of dielectric.
 
-    eps_eff,emb = cover_er - (cover_er - eps_eff,surf) * exp(-2*cover/h)
-    -- the blend asymptotes to the COVER material's er (an infinitely
-    thick cover embeds the line in the cover material); cover_er
-    defaults to the substrate er, the original same-er form.  The
+    eps_eff,emb blends from eps_eff,surf toward the mixed limit
+    q*er + (1-q)*cover_er with q = (eps_eff,surf - 1)/(er - 1), at the
+    rate (1 - exp(-2*cover/h)) -- Wadell 1991 s3.5.4's form with the
+    asymptote corrected per #151 (the pre-fix form tended to the cover
+    material's own er, which raised Z0 on high-er substrates and moved
+    Z0 even for an er-1 cover).  cover_er defaults to the substrate er,
+    the original same-er form, where the two agree exactly.  The
     impedance is the surface static solution re-evaluated at
     eps_eff,emb.
     """
@@ -308,7 +311,16 @@ def embedded_microstrip(w, h, t, cover, er, f_hz=0.0, cover_er=None):
                         flags=flags)
     if cover_er is None:
         cover_er = er
-    er_eff_e = cover_er - (cover_er - er_eff_s) * math.exp(-2.0 * cover / h)
+    # #151 (B19): the blend must tend to the MIXED limit, not to the
+    # cover's own er -- adding dielectric over a bare line can only add
+    # capacitance (Z0 falls), and a cover of er 1 must change nothing.
+    # q is the substrate's share of the surface line's field energy
+    # above er 1; the infinitely thick cover sees q of the substrate
+    # and (1-q) of the cover material.  With cover_er == er this is
+    # exactly Wadell's same-er embedded form.
+    q = (er_eff_s - 1.0) / (er - 1.0) if er > 1.0 else 1.0
+    er_eff_inf = q * er + (1.0 - q) * cover_er
+    er_eff_e = er_eff_s + (er_eff_inf - er_eff_s) * (1.0 - math.exp(-2.0 * cover / h))
     # The geometry's air (er=1) impedance over the embedded eps_eff: the
     # surface Z0 rescaled by sqrt(eps_eff,surf / eps_eff,emb).
     z0_e = z0_h_1 / math.sqrt(er_eff_e)
