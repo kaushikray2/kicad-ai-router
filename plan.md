@@ -92,6 +92,20 @@ mapone clean on both backends; the Nomad self-test at 0 unconnected /
 baseline now that the portfolio actually runs on backend jobs. The
 zorinbox backend container moved to a 16-CPU host the same day.
 
+### Off-plan — layer-cost plumbing, v1.11.0 (2026-11-24)
+
+Issue #73: graded layer pricing joins the binary ban/free layer
+law. `layer_cost` (engine syntax, e.g. `In1.Cu=10,In2.Cu=10`) is
+plumbed to every TraceMaker invocation and priced per cell in
+the worker grids; a priced layer leaves the effective ban set,
+an explicit spec disables layer-law auto escalation, and every
+run records its effective layer policy in the ledger. Born of
+the NAS three-way comparison, whose columns ran under unmatched
+layer rules. The rerun of that column at In1.Cu=10,In2.Cu=10 on
+this build is the feature's designated first benchmark — held
+for the owner's separate authorization after the bug-review
+pass.
+
 ## In progress
 
 - **P2.1b** (below) is next up, with #63 as its first step. Phase 2E

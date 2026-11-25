@@ -448,6 +448,51 @@ control run reproduced the identical 15). Fixtures: heal bridges
 
 The project is relicensed from MIT to **GPL-3.0-or-later** (SPDX: GPL-3.0-or-later), matching KiCad's own licensing. The change applies from this commit forward; releases through v1.10.2 were distributed under MIT, and copies already out there keep those terms. Sample boards in `docker/selftest/` remain under their original licenses.
 
+## v1.11.0 -- 2026-11-24
+
+Layer-cost plumbing (issue #73): layers can now be PRICED
+instead of only banned or free. New config key `layer_cost` in
+the engine's own syntax (`In1.Cu=10,In2.Cu=10`; factor an
+integer 1..1000, 1 = normal cost). Motivation: the 2026-11-24
+NAS three-way comparison ran its columns under unmatched layer
+rules -- the bare engines used all four copper layers freely
+while the plugin banned both inner layers -- and the shipped
+stack had no supported way to express the owner's ruling
+(inner layers allowed, at high cost). TraceMaker already spoke
+`--layer-cost`; nothing in the plugin reached it.
+
+- Pipeline: strict spec parsing (any malformed token rejects
+  the whole spec with a log warning; treated as off, never
+  raises), name resolution against the board's alias map, and
+  the conflict rule -- a priced layer is NOT banned: it leaves
+  the effective `no_tracks_on` set, and the gate's
+  banned-layer census keys off that effective set. Every run
+  records its effective layer policy in the ledger
+  ('layer_policy' entry). `--layer-cost` rides on every engine
+  command line (route passes, portfolio variants, windowed
+  re-route) and into the worker legs that route.
+- Worker: the finish/long/ilp/heal grids keep priced layers
+  routable and charge the factor per cell in both A* searches
+  (the unit-cost heuristic stays admissible; factors are >= 1);
+  a layer sent as both banned and priced is priced. stitch is
+  unchanged -- it places vias and draws no tracks.
+- An explicit `layer_cost` disables `layer_law_policy` 'auto'
+  escalation, the explicit-`no_tracks_on` precedent.
+- Dialog: a 'Layer costs' field beside 'No tracks on layers';
+  backend routing whitelist + run_job carry the key into
+  backend jobs, and plugin-submitted jobs include it in their
+  overrides.
+- tests/test_layer_cost.py covers parsing, resolution,
+  command-line construction (flag present on every engine
+  invocation; byte-identical lines when unset), the conflict
+  rule, the gate census, the auto disable, backend build_cfg
+  and worker Grid pricing. Suite 6/6 files pass.
+
+The feature's first benchmark -- the NAS plugin column rerun
+at In1.Cu=10,In2.Cu=10 on this build, measured identically to
+the original three-way -- is queued behind the owner's
+bug-review pass and will be reported with the comparison.
+
 ## v1.10.2 -- 2026-11-24
 
 Hotfix for a defect in v1.10.1's #50 fix, found by the fix's own

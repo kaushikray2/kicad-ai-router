@@ -8,7 +8,7 @@ import tarfile, threading, time, urllib.request, uuid, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-BACKEND_VERSION = '1.10.2'
+BACKEND_VERSION = '1.11.0'
 SCHEMA_VERSION = 1
 DATA = os.environ.get('AIR_DATA_DIR', '/data')
 PORT = int(os.environ.get('AIR_PORT', '8731'))
