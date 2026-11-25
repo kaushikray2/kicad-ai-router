@@ -726,11 +726,23 @@ class Pipeline:
             prev = self.current
             self.current = outp
             after = self.tool_gate()
-            bad = _treatment_key(after) > kb or (extra_ok is not None and not extra_ok(before, after))
+            ka = _treatment_key(after)
+            # #134 (B9): DOMINANCE, not lexicographic order -- a
+            # treatment is adopted only if it is no worse in EVERY
+            # component (faults, unconnected, splits).  The old
+            # lexicographic comparison adopted a treatment that
+            # removed one fault while adding unconnected items,
+            # and no later stage could recover them (the N17
+            # pattern, cf. #58).
+            dominated = all(a <= b for a, b in zip(ka, kb))
+            bad = not dominated or (extra_ok is not None and not extra_ok(before, after))
             if bad:
                 self.current = prev
                 self.last_gate = before
-                r = dict(r); r['status'] = 'reverted_faults'
+                r = dict(r)
+                r['status'] = ('reverted_dominance'
+                               if dominated is False and ka <= kb
+                               else 'reverted_faults')
             else:
                 self.last_gate = after
                 adopted = True

@@ -4123,6 +4123,11 @@ def cmd_power_widen(board_path, spec):
             if t is None or t.GetNetname() != net:
                 refused.append({'uuid': uuid, 'why': 'not found'})
                 continue
+            if t.IsLocked():
+                # #134 (B9): locked copper is never modified
+                # (cmd_meander has skipped it since #100)
+                refused.append({'uuid': uuid, 'why': 'locked'})
+                continue
             if w <= mm(t.GetWidth()) + 1e-9:
                 refused.append({'uuid': uuid, 'why': 'not wider'})
                 continue
@@ -4191,6 +4196,12 @@ def cmd_smooth(board_path, net):
         if len(ts) != 2 or (vx, vy) in via_pos or (vx, vy) in pad_pos:
             continue
         t1, t2 = ts
+        if t1.IsLocked() or t2.IsLocked():
+            # #134 (B9): smoothing rewrites both tracks at the
+            # vertex -- locked copper is never modified
+            skipped.append({'x': round(vx / 1e6, 2), 'y': round(vy / 1e6, 2),
+                            'why': 'locked'})
+            continue
         if t1.GetLayer() != t2.GetLayer() or abs(t1.GetWidth() - t2.GetWidth()) > 1000:
             continue
         def _other(t):
