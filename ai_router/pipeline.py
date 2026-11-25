@@ -907,7 +907,11 @@ class Pipeline:
             cls = c.get('class')
             diel = (c.get('diel_below') if cls != 'surface_bottom'
                     else c.get('diel_above')) or c.get('diel_above') or c.get('diel_below') or {}
-            layers[c['name']] = {'class': cls,
+            # #152 (B23): key by the BOARD's layer name, as #84 did
+            # for the power stage -- routed segments carry board
+            # names, so canonical keys silently missed renamed
+            # layers and member_stats fell back to er 4.5 stripline.
+            layers[c.get('board_name') or c['name']] = {'class': cls,
                                  'er': diel.get('er') or 4.5,
                                  'h_mm': diel.get('thickness_mm') or 0.2,
                                  'thickness_mm': c.get('thickness_mm') or 0.035}
@@ -966,22 +970,13 @@ class Pipeline:
                 if m['within_tolerance']:
                     continue
                 # #99: the need comes from whichever criteria
-                # actually FAIL (the old if/elif took the mm branch
-                # whenever both tolerances existed, so a delay-only
-                # failure computed need <= 0 and was skipped).
-                need = None
-                if m['delta_mm'] is not None and entry.get('tolerance_mm') is not None \
-                        and m['delta_mm'] > entry['tolerance_mm']:
-                    need = m['delta_mm'] - entry['tolerance_mm']
-                if m['delta_ps'] is not None and entry.get('tolerance_ps') is not None \
-                        and m['delta_ps'] > entry['tolerance_ps']:
-                    # convert the ps shortfall at this member's own
-                    # delay rate (its longest-layer eps dominates;
-                    # use its average ps/mm)
-                    st = stats[net]
-                    rate = (st['delay_ps'] / st['length_mm']) if st['length_mm'] else 6.0
-                    cand = (m['delta_ps'] - entry['tolerance_ps']) / rate
-                    need = cand if need is None else max(need, cand)
+                # actually FAIL.  #152 (B23): it now aims at the
+                # CENTRE of the tolerance band (lengthmatch.
+                # meander_need), not the edge -- edge-aimed tuning
+                # could round to just outside the band.
+                st = stats[net]
+                rate = (st['delay_ps'] / st['length_mm']) if st['length_mm'] else 6.0
+                need = _lengthmatch.meander_need(m, entry, rate)
                 if need is None or need <= 0:
                     continue
                 r = self._eng_gate_try('meander', ['--net', net, '--add-mm', '%.3f' % need],

@@ -68,10 +68,19 @@ def evaluate_group(entry, members):
         target = {'length_mm': None, 'delay_ps': v, 'from_net': None}
     out = {'name': entry.get('name'), 'target_mode': mode, 'target': target,
            'tolerance_mm': tol_mm, 'tolerance_ps': tol_ps, 'members': {}}
+    # #152 (B23): fail closed when the target mode has no tolerance
+    # of its own quantity -- validation rejects such entries, and an
+    # entry that reaches here unvalidated must not pass everyone.
+    if mode == 'length' and tol_mm is None:
+        out['error'] = ('target_mode=length without tolerance_mm: '
+                        'no check grades the members')
+    if mode == 'delay' and tol_ps is None:
+        out['error'] = ('target_mode=delay without tolerance_ps: '
+                        'no check grades the members')
     for net, st in members.items():
         d_mm = (target['length_mm'] - st['length_mm']) if target['length_mm'] is not None else None
         d_ps = (target['delay_ps'] - st['delay_ps']) if target['delay_ps'] is not None else None
-        ok = True
+        ok = 'error' not in out
         if d_mm is not None and tol_mm is not None and abs(d_mm) > tol_mm:
             ok = False
         if d_ps is not None and tol_ps is not None and abs(d_ps) > tol_ps:
@@ -84,3 +93,30 @@ def evaluate_group(entry, members):
                                'delta_ps': round(d_ps, 2) if d_ps is not None else None,
                                'within_tolerance': ok}
     return out
+
+
+MEANDER_EPS_MM = 0.01   # stated: rounding guard on the centre aim
+
+
+def meander_need(member, entry, rate_ps_per_mm):
+    """Millimetres of meander to add to a FAILING member so it
+    lands at the CENTRE of its tolerance band (shortfall -> 0),
+    less MEANDER_EPS_MM of rounding guard.  The need derives from
+    whichever declared criteria actually fail (#99), converted at
+    the member's own delay rate; None when nothing fails.
+
+    #152 (B23): the previous aim was the band EDGE (shortfall minus
+    tolerance), so the worker's rounding could leave a tuned member
+    just outside the band it was tuned into."""
+    need = None
+    d_mm = member.get('delta_mm')
+    d_ps = member.get('delta_ps')
+    tol_mm = entry.get('tolerance_mm')
+    tol_ps = entry.get('tolerance_ps')
+    if d_mm is not None and tol_mm is not None and d_mm > tol_mm:
+        need = d_mm - MEANDER_EPS_MM
+    if d_ps is not None and tol_ps is not None and d_ps > tol_ps:
+        if rate_ps_per_mm:
+            cand = d_ps / rate_ps_per_mm - MEANDER_EPS_MM
+            need = cand if need is None else max(need, cand)
+    return need

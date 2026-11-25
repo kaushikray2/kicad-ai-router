@@ -361,6 +361,14 @@ def _check_length_group(entry, idx):
         out['target_value'] = float(v)
     if entry.get('tolerance_mm') is None and entry.get('tolerance_ps') is None:
         raise MarkingsError('%s: a tolerance is required ("tolerance_mm" and/or "tolerance_ps")' % where)
+    # #152 (B23): the tolerance TYPE must match the target mode -- a
+    # length target graded only by tolerance_ps (or a delay target
+    # only by tolerance_mm) applies NO check at all and every member
+    # 'passes', however far out it is.
+    if mode == 'length' and entry.get('tolerance_mm') is None:
+        raise MarkingsError('%s: target_mode=length requires "tolerance_mm" ("tolerance_ps" alone grades nothing)' % where)
+    if mode == 'delay' and entry.get('tolerance_ps') is None:
+        raise MarkingsError('%s: target_mode=delay requires "tolerance_ps" ("tolerance_mm" alone grades nothing)' % where)
     for key in ('tolerance_mm', 'tolerance_ps'):
         if entry.get(key) is not None:
             if not _num(entry[key]) or entry[key] < 0:
