@@ -2779,6 +2779,26 @@ def _sexpr_at(text, start):
     return parse(start)
 
 
+def _ply_props(atoms):
+    props = {'thickness_mm': None, 'material': None, 'er': None,
+             'loss_tangent': None}
+    for sub in atoms:
+        if not (isinstance(sub, list) and sub):
+            continue
+        if sub[0] == 'thickness' and len(sub) > 1:
+            try: props['thickness_mm'] = float(sub[1])
+            except Exception: pass
+        elif sub[0] == 'material' and len(sub) > 1:
+            props['material'] = sub[1]
+        elif sub[0] == 'epsilon_r' and len(sub) > 1:
+            try: props['er'] = float(sub[1])
+            except Exception: pass
+        elif sub[0] == 'loss_tangent' and len(sub) > 1:
+            try: props['loss_tangent'] = float(sub[1])
+            except Exception: pass
+    return props
+
+
 def _stackup_entries(board_path):
     try:
         with open(board_path, encoding='utf-8', errors='replace') as f:
@@ -2799,22 +2819,40 @@ def _stackup_entries(board_path):
         e = {'name': node[1] if len(node) > 1 else '', 'type': None,
              'thickness_mm': None, 'material': None, 'er': None,
              'loss_tangent': None}
+        base_atoms, sublayers = [], []
         for sub in node[2:]:
-            if not (isinstance(sub, list) and sub):
-                continue
-            if sub[0] == 'type' and len(sub) > 1:
+            if isinstance(sub, list) and sub and sub[0] == 'addsublayer':
+                sublayers.append(sub[1:])
+            else:
+                base_atoms.append(sub)
+        for sub in base_atoms:
+            if isinstance(sub, list) and sub and sub[0] == 'type' and len(sub) > 1:
                 e['type'] = sub[1]
-            elif sub[0] == 'thickness' and len(sub) > 1:
-                try: e['thickness_mm'] = float(sub[1])
-                except Exception: pass
-            elif sub[0] == 'material' and len(sub) > 1:
-                e['material'] = sub[1]
-            elif sub[0] == 'epsilon_r' and len(sub) > 1:
-                try: e['er'] = float(sub[1])
-                except Exception: pass
-            elif sub[0] == 'loss_tangent' and len(sub) > 1:
-                try: e['loss_tangent'] = float(sub[1])
-                except Exception: pass
+        # #143 (B17): KiCad writes a multi-ply dielectric as ONE layer
+        # entry whose extra plies ride in (addsublayer ...) children;
+        # reading only the top-level atoms read the dielectric as its
+        # last-written ply.  Combine the plies: thicknesses add,
+        # epsilon_r combines as the series mean sum(t)/sum(t/er) (the
+        # field under a strip is mostly vertical), loss tangent is the
+        # thickness-weighted mean.
+        plies = [_ply_props(base_atoms)] + [_ply_props(x) for x in sublayers]
+        ths = [(q['thickness_mm'], q['er']) for q in plies
+               if q['thickness_mm'] is not None]
+        if ths:
+            e['thickness_mm'] = sum(t for t, _er in ths)
+        pairs = [(t, er) for t, er in ths if er]
+        if pairs:
+            e['er'] = sum(t for t, _e in pairs) / sum(t / er for t, er in pairs)
+        else:
+            ers = [q['er'] for q in plies if q['er'] is not None]
+            if ers: e['er'] = ers[0]
+        lts = [(q['thickness_mm'], q['loss_tangent']) for q in plies
+               if q['loss_tangent'] is not None]
+        if lts:
+            tot = sum(t for t, _l in lts if t is not None)
+            e['loss_tangent'] = (sum((t or 0.0) * lt for t, lt in lts) / tot) if tot else lts[0][1]
+        mats = [q['material'] for q in plies if q['material'] is not None]
+        if mats: e['material'] = mats[0]
         entries.append(e)
     return entries
 
