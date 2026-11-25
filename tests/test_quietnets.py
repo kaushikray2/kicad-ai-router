@@ -111,3 +111,10 @@ def test_seg_hits_rect_corner_crossing():
     assert Q._seg_hits_rect(item, rect, 0.0) is True
     far = ('seg', -5.0, -5.0, -1.0, -1.0, 0.0)
     assert Q._seg_hits_rect(far, rect, 0.0) is False
+
+
+def test_analog_reference_profiles_allow_gnd():
+    # #97: ground is the return for analog/reference quiet nets,
+    # not an intruder (the digital profile already allows it).
+    assert 'GND' in Q.resolve({'net': 'X', 'profile': 'analog'})['allow_nets']
+    assert 'GND' in Q.resolve({'net': 'X', 'profile': 'reference'})['allow_nets']

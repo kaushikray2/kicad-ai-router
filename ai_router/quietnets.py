@@ -22,9 +22,9 @@ PROFILES = {
     'crystal': {'isolation_mm': 1.0, 'land_keepout': True,
                 'load_cap_return': True, 'allow_nets': ['GND']},
     'analog': {'isolation_mm': 1.5, 'land_keepout': False,
-               'load_cap_return': False, 'allow_nets': []},
+               'load_cap_return': False, 'allow_nets': ['GND']},
     'reference': {'isolation_mm': 2.0, 'land_keepout': False,
-                  'load_cap_return': False, 'allow_nets': []},
+                  'load_cap_return': False, 'allow_nets': ['GND']},
 }
 _DEFAULT = {'isolation_mm': 1.0, 'land_keepout': False,
             'load_cap_return': False, 'allow_nets': []}
