@@ -448,6 +448,48 @@ control run reproduced the identical 15). Fixtures: heal bridges
 
 The project is relicensed from MIT to **GPL-3.0-or-later** (SPDX: GPL-3.0-or-later), matching KiCad's own licensing. The change applies from this commit forward; releases through v1.10.2 were distributed under MIT, and copies already out there keep those terms. Sample boards in `docker/selftest/` remain under their original licenses.
 
+## v1.11.2 -- 2026-11-25
+
+Fixes from the cross-check of the layer-cost review against v1.11.1
+(f8c2502). Every claim was verified at code level against the tip
+before filing; every fix carries a fail-before/pass-after regression
+test:
+
+- #101: tool_gate paid for two `summary --fast` worker runs per step
+  board (its own census fetch plus a layer-info cache miss). The
+  gate's summary now seeds the layer-info cache.
+- #102: tool_stitch never received --layer-cost. The v1.11.0
+  exclusion rationale ('stitch places vias only') was wrong --
+  _bridge_island draws track bridges on the Grid. Stitch forwards
+  the price like every other leg; the correction is recorded on #73.
+- #103: a net's own-plane layers passed via extra_layers were charged
+  the layer_cost factor in astar/cutset_astar, so pricing a layer
+  made its own nets' bridges dearer than under the hard ban
+  (monotonicity inversion). Vouched layers travel at unit cost.
+- #104: an explicitly empty ban set re-banned In1.Cu in worker Grids
+  ('' was treated as unset). Legs now pass the board-resolved
+  effective ban set, and the worker parses '' as an explicit empty
+  set, skipping empty tokens (a trailing comma crashed Grid before).
+- #105: the worker --layer-cost CLI accepted factors the config
+  parser rejects (0, negative, >1000); both parsers now enforce the
+  same guards (non-empty name, digits only, 1..1000).
+- #106: the backend config page had no layer_cost field; wired
+  render/load/save like no_tracks_on (the server already persisted
+  the key).
+- #107: planner keepback stamps gained #75 parity -- footprint
+  Edge.Cuts in the edge stamp, and same-net drills in the hole
+  stamp's hole_to_hole via band (track bands stay foreign-only).
+- #108: removed the dead v1.8.2 config-forwarding loop in
+  run_job.main() -- dead since #74 moved forwarding into build_cfg.
+- #109: FILED, awaiting a design ruling -- opt-in freerouting/krt
+  portfolio candidates ignore layer_cost and pay no gate penalty
+  for priced-layer tracks. Not fixed here.
+- One review finding was verified BY DESIGN and dropped: run_auto
+  disabling layer-law auto escalation when layer_cost is set,
+  before resolving layer names. The behaviour is asserted by
+  test_layer_cost.py and matches the explicit-no_tracks_on
+  precedent in orchestrator.run_auto. No ticket, no change.
+
 ## v1.11.1 -- 2026-11-24
 
 Fixes from the 2026-11-24 external audit, each verified against the

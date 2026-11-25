@@ -106,6 +106,22 @@ this build is the feature's designated first benchmark — held
 for the owner's separate authorization after the bug-review
 pass.
 
+### Off-plan -- layer-cost review fixes, v1.11.2 (2026-11-25)
+
+A second external review cross-checked the v1.11.0 layer-cost
+shipment claim by claim; verified against f8c2502 and fixed as
+#101-#108 (gate double-summary, stitch layer-cost forwarding --
+the v1.11.0 'vias only' rationale was wrong and is corrected on
+#73, own-plane extra_layers pricing inversion, empty-ban-set
+handling across pipeline and worker, worker CLI factor guards,
+config-page layer_cost field, planner keepback parity with #75,
+dead run_job loop). One finding was verified by-design and
+dropped (run_auto's pre-resolution auto-escalation disable).
+#109 (opt-in freerouting/krt candidates ignore layer_cost and
+pay no gate penalty for priced-layer tracks) is filed and awaits
+a design ruling. The NAS rerun remains held for the owner's
+separate authorization.
+
 ## In progress
 
 - **P2.1b** (below) is next up, with #63 as its first step. Phase 2E
