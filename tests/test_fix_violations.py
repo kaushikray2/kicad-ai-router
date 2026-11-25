@@ -124,6 +124,36 @@ check('cmd: nothing fixed -> status none, no output file', r['status'] == 'none'
 r = w.cmd_fix_violations(p0, os.path.join(tmp, 'out.kicad_pcb'), [{'type': 'track_dangling', 'x': 40, 'y': 20, 'nets': ['A']}])
 check('cmd: rip of A main track re-closes (still fixed)', r['status'] in ('ok', 'none'))  # informational: geometry-dependent
 
+# --- stale fill inside a batch (#162) ------------------------------------
+# GND pour split by a moat cut by net X's stub. Fix 1 rips the stub
+# (X stays connected via its detour). Fix 2 rips the GND track that
+# crosses the moat: with fresh fill the pour itself reconnects the
+# pads and the rip stands; judged against the stale (moated) fill
+# the net reads split, the bridge is keepout-blocked, and the fix
+# rolls back.
+b = pcbnew.BOARD()
+gnd = pcbnew.NETINFO_ITEM(b, 'GND'); b.Add(gnd); gc2 = gnd.GetNetCode()
+xn = pcbnew.NETINFO_ITEM(b, 'X'); b.Add(xn); xc = xn.GetNetCode()
+z = pcbnew.ZONE(b); z.SetLayer(pcbnew.F_Cu); z.SetNetCode(gc2); z.SetMinThickness(NM(0.25))
+o = z.Outline(); o.NewOutline(); ch = o.Outline(0)
+for (x, y) in [(10, 10), (50, 10), (50, 30), (10, 30)]: ch.Append(pcbnew.VECTOR2I(NM(x), NM(y)))
+ch.SetClosed(True); b.Add(z)
+mk_pad(b, gc2, 15, 20); mk_pad(b, gc2, 45, 20)
+mk_track(b, gc2, 15, 20, 45, 20)
+mk_pad(b, xc, 30, 4); mk_pad(b, xc, 30, 36)
+mk_track(b, xc, 30, 4, 5, 4); mk_track(b, xc, 5, 4, 5, 36); mk_track(b, xc, 5, 36, 30, 36)
+mk_track(b, xc, 30, 4, 30, 32)  # the moat-cutting stub
+ka = pcbnew.ZONE(b); ka.SetIsRuleArea(True); ka.SetDoNotAllowTracks(True); ka.SetDoNotAllowVias(True)
+ka.SetDoNotAllowPads(False); ka.SetDoNotAllowFootprints(False)
+ls = pcbnew.LSET(); ls.AddLayer(pcbnew.F_Cu); ls.AddLayer(pcbnew.B_Cu); ka.SetLayerSet(ls)
+o = ka.Outline(); o.NewOutline(); ch = o.Outline(0)
+for (x, y) in [(12, 8), (48, 8), (48, 32), (12, 32)]: ch.Append(pcbnew.VECTOR2I(NM(x), NM(y)))
+ch.SetClosed(True); b.Add(ka)
+w.refill(b)
+check('moat fixture: X stub rip stands', w._fix_one_violation(b, 'X', 30, 32) is True)
+r = w._fix_one_violation(b, 'GND', 30, 20)
+check('pour rip judged on fresh fill stands (#162)', r is True and tracks_of(b, 'GND') == [] and ncomp(b, 'GND') == 1)
+
 # --- locked copper + arcs (#159) ---------------------------------------
 def keepout_all(b):
     ka = pcbnew.ZONE(b); ka.SetIsRuleArea(True); ka.SetDoNotAllowTracks(True); ka.SetDoNotAllowVias(True)
