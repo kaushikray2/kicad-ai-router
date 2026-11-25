@@ -130,3 +130,21 @@ def test_pour_carried_load():
     plan = powerplan.plan_power(_tree(rail), _parsed(), facts, LAYERS, CORNERS, {'V5': {}})
     d = plan['rails']['V5']['loop_drops'][0]
     assert d['pour_carried'] is True and d['unrouted'] is False
+
+
+def test_unreachable_stub_load_is_unreachable():
+    # #82: a load on a disconnected island WITH a stub track is in
+    # g.adj but in no Dijkstra dist map.  It must come back as
+    # paths None (unreachable) -- the old prev/adj test returned [],
+    # which the loop-drop reporter read as drop_v 0.0 / ok True.
+    class G:
+        adj = {5: [(0, 9)], 9: [(0, 5)]}
+        edges = [{'kind': 'track', 'length': 1.0}]
+    ec, paths = powerplan._attribute(G(), {}, {}, [
+        {'id': 'U7', 'node': 5, 'currents': {'BASE': (1.0, 0.5)}}])
+    assert paths['U7'] is None, paths
+    # a load sitting ON a source node (in dist, no prev entry) is a
+    # genuine zero-length path, not an unreachable one
+    ec, paths = powerplan._attribute(G(), {5: 0.0}, {}, [
+        {'id': 'U8', 'node': 5, 'currents': {'BASE': (1.0, 0.5)}}])
+    assert paths['U8'] == [], paths

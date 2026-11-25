@@ -144,14 +144,18 @@ def _point_in_poly(x, y, poly):
     return inside
 
 
-def _attribute(g, prev, contributors):
+def _attribute(g, dist, prev, contributors):
     """contributors: [{id, node, currents: {mode: (peak, sust)}}].
     Returns (edge_currents, paths): edge_currents[eid][mode] =
-    [peak, sust]; paths[id] = [eid] or None when unreachable."""
+    [peak, sust]; paths[id] = [eid] or None when unreachable.
+    Reachability is dist membership (#82): a node on a disconnected
+    island with a stub track is in g.adj but in no dist map -- the
+    old prev/adj test handed it an empty path, which the loop-drop
+    reporter then read as drop_v 0.0 / ok True."""
     ec = {}
     paths = {}
     for c in contributors:
-        if c['node'] is None or (c['node'] not in prev and c['node'] not in g.adj):
+        if c['node'] is None or c['node'] not in dist:
             paths[c['id']] = None
             continue
         eids = _path(prev, c['node'])
@@ -223,8 +227,8 @@ def plan_power(tree, parsed, facts_by_net, layers, corners, entries_by_net):
             for ref in rail['source_pins']:
                 for pin in tree['return_pins'].get(ref, []):
                     sources += ret_pads.get((pin[0], str(pin[1])), [])
-        _d, ret_prev = _dijkstra(ret_graph, sources)
-        ret_ec, ret_paths = _attribute(ret_graph, ret_prev, contribs)
+        ret_dist, ret_prev = _dijkstra(ret_graph, sources)
+        ret_ec, ret_paths = _attribute(ret_graph, ret_dist, ret_prev, contribs)
     else:
         ret_paths = {}
     out = {'rails': {}, 'widen': {}, 'via_adds': [], 'assumptions': assumptions,
@@ -293,7 +297,7 @@ def _plan_rail(net, rail, entry, facts, tree, parsed, copper, surface,
         contribs.append({'id': e['ref'], 'node': node, 'currents': cur, 'edge': e})
         rep['contributions'].append({'ref': e['ref'], 'kind': 'edge_input',
                                      'edge_kind': e['kind'], 'source': 'tree'})
-    ec, paths = _attribute(g, prev, contribs)
+    ec, paths = _attribute(g, _dist, prev, contribs)
     design = _design(ec)
     t_op = corners['ambient_c'] + corners['delta_t_c']
     if not rail['complete']:
