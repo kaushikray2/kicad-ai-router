@@ -45,6 +45,29 @@ def _parse_no_tracks_raw(spec):
         else: banned.add(_i)
     return banned, unresolved
 
+def _parse_layer_cost_raw(spec):
+    # v1.11.2 (#105): split a --layer-cost value into (factor by
+    # canonical layer id, unresolved (name, factor) pairs), applying
+    # the guards the pipeline's parse_layer_cost enforces --
+    # non-empty name, digits-only factor, 1..1000 inclusive. Before
+    # this, the worker accepted any integer int() would parse: 0
+    # (travel on a 'priced' layer becomes free), negatives (negative
+    # A* step costs) and >1000 all reached Grid._lfac when a spec
+    # arrived without passing through the pipeline first. A
+    # guarded-out token prices nothing, the worker's standing salvage
+    # rule for unparseable tokens.
+    by_id = {}; unresolved = []
+    for _tok in spec.split(','):
+        _nm, _eq, _fc = _tok.partition('=')
+        _nm = _nm.strip(); _fc = _fc.strip()
+        if not _nm or not _fc.isdigit(): continue
+        _f = int(_fc)
+        if not (1 <= _f <= 1000): continue
+        _i = _layer_id_from_name(_nm)
+        if _i is None: unresolved.append((_nm, _f))
+        else: by_id[_i] = _f
+    return by_id, unresolved
+
 def _resolve_banned_on_board(b, names):
     # v1.9 (M4): resolve non-canonical --no-tracks-on names against
     # THIS board. A board may name its copper layers freely (the
@@ -2746,14 +2769,7 @@ def main():
     if a.layer_cost:
         global LAYER_COST_RAW, LAYER_COST_BY_ID, LAYER_COST_UNRESOLVED
         LAYER_COST_RAW = a.layer_cost
-        LAYER_COST_BY_ID = {}; LAYER_COST_UNRESOLVED = []
-        for _tok in a.layer_cost.split(','):
-            _nm, _eq, _fc = _tok.partition('=')
-            try: _f = int(_fc.strip())
-            except Exception: continue  # the pipeline validates the spec; an unparseable token here prices nothing
-            _i = _layer_id_from_name(_nm)
-            if _i is None: LAYER_COST_UNRESOLVED.append((_nm.strip(), _f))
-            else: LAYER_COST_BY_ID[_i] = _f
+        LAYER_COST_BY_ID, LAYER_COST_UNRESOLVED = _parse_layer_cost_raw(a.layer_cost)
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
