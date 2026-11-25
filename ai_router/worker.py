@@ -3791,33 +3791,53 @@ def cmd_auditgeom(board_path):
 
 def cmd_audit_zones(board_path, spec):
     # Materialise library rule-area zones onto the working copy
-    # (#42): board-level rule areas with the library keepout flags,
-    # recorded with footprint provenance by the caller.
+    # (#42). v1.11.5 (#132): zones are NAMED 'AIR:<ref>:<fpid>' and
+    # a name already on the board is recognised and skipped, so
+    # re-runs never duplicate them; layer names resolve through
+    # BOARD.GetLayerID (no hand-built name map), and for a
+    # bottom-side (flipped) footprint the LIBRARY layer set is
+    # flipped with pcbnew.FlipLayer -- a library 'F.Cu' rule area
+    # belongs on B.Cu when the part sits on the back.
     b = pcbnew.LoadBoard(board_path)
-    name2lid = {}
+    fps = {}
+    for fp in b.GetFootprints():
+        try: fps[fp.GetReference()] = fp
+        except Exception: pass
+    existing = set()
+    for z in b.Zones():
+        try: existing.add(z.GetZoneName())
+        except Exception: pass
+    cu_ids = []
     for lid in range(pcbnew.PCB_LAYER_ID_COUNT):
         try:
-            name2lid[b.GetLayerName(lid)] = lid
-        except Exception:
-            pass
-    added = []
+            if b.GetLayerName(lid).endswith('.Cu'): cu_ids.append(lid)
+        except Exception: pass
+    added = []; already = []
     for item in (spec or []):
+        ref = item.get('ref'); fpid = item.get('fpid') or ''
+        name = 'AIR:%s:%s' % (ref, fpid)
+        if name in existing:
+            already.append({'ref': ref, 'layers': item.get('layers'), 'name': name})
+            continue
+        fp = fps.get(ref)
+        flipped = bool(fp is not None and fp.IsFlipped())
+        lids = []
+        for ln in item.get('layers') or []:
+            # #79: KiCad library files write layer wildcards.
+            if ln == '*.Cu':
+                lids += list(cu_ids)
+            elif ln == 'F&B.Cu':
+                lids += [pcbnew.F_Cu, pcbnew.B_Cu]
+            else:
+                lid = b.GetLayerID(ln)
+                if lid >= 0: lids.append(lid)
+        if flipped:
+            lids = [pcbnew.FlipLayer(lid) for lid in lids]
         z = pcbnew.ZONE(b)
         ls = pcbnew.LSET()
-        for ln in item.get('layers') or []:
-            # #79: KiCad library files write layer wildcards; the old
-            # exact-match test silently produced zones with an EMPTY
-            # layer set for "*.Cu" / "F&B.Cu" specs.
-            if ln == '*.Cu':
-                names = [n for n in name2lid if n.endswith('.Cu')]
-            elif ln == 'F&B.Cu':
-                names = ['F.Cu', 'B.Cu']
-            else:
-                names = [ln]
-            for n in names:
-                if n in name2lid:
-                    ls.AddLayer(name2lid[n])
+        for lid in dict.fromkeys(lids): ls.AddLayer(lid)
         z.SetLayerSet(ls)
+        z.SetZoneName(name)
         z.SetIsRuleArea(True)
         ko = item.get('keepout') or {}
         z.SetDoNotAllowTracks(bool(ko.get('tracks')))
@@ -3829,10 +3849,11 @@ def cmd_audit_zones(board_path, spec):
         for (x, y) in item.get('outline') or []:
             chain.Append(nm(x), nm(y))
         b.Add(z)
-        added.append({'ref': item.get('ref'), 'layers': item.get('layers')})
+        existing.add(name)
+        added.append({'ref': ref, 'layers': item.get('layers'), 'name': name})
     if added:
         pcbnew.SaveBoard(board_path, b)
-    return {'added': added}
+    return {'added': added, 'already_present': already}
 
 
 def cmd_meander(board_path, net, add_mm):

@@ -43,11 +43,20 @@ RULE_PROPERTIES = ('AIRuleDecapMm', 'AIRuleEdgeClearanceMm', 'AIRuleClass')
 # these classes whose footprint carries NO rules is a library
 # gap.  Matched against the footprint's library name + value when
 # no explicit AIRuleClass property exists.
+# v1.11.5 (#132): whole-word alternatives use underscore-aware
+# lookarounds -- (?<![a-z0-9]) / (?![a-z0-9]) -- because KiCad
+# names join words with '_' (a plain \b would miss 'LoRa_Module',
+# while the bare substring matched 'ble' inside 'blend'/'bucket',
+# 'lora' inside 'Colorado', 'gps' inside 'EGPS'). Part-number
+# stems stay bare on purpose: a trailing boundary would break
+# real matches (nRF52, SX1276, antennas).
+_W = r'(?<![a-z0-9])'
+_E = r'(?![a-z0-9])'
 CLASS_PATTERNS = (
-    ('gnss_module', re.compile(r'gnss|gps|lc76|sam-m|neo-m|ublox|u-blox', re.I)),
-    ('rf_module', re.compile(r'\brf\b|lora|sx12|e22-|ble|wifi|esp32|nrf|antenna', re.I)),  # #77: no bare 'module' -- it classified every module-named part (sensor modules, power modules) as RF
+    ('gnss_module', re.compile(r'gnss|' + _W + r'gps' + _E + r'|lc76|sam-m|neo-m|ublox|u-blox', re.I)),
+    ('rf_module', re.compile(r'\brf\b|' + _W + r'lora' + _E + r'|sx12|e22-|' + _W + r'ble' + _E + r'|' + _W + r'wifi' + _E + r'|esp32|nrf|antenna', re.I)),  # #77: no bare 'module' -- it classified every module-named part (sensor modules, power modules) as RF
     ('crystal', re.compile(r'crystal|xtal|\bosc\b|resonator', re.I)),
-    ('switcher', re.compile(r'buck|boost|switching|smps|dc-dc|dcdc', re.I)),
+    ('switcher', re.compile(_W + r'buck' + _E + r'|' + _W + r'boost' + _E + r'|switching|smps|dc-dc|dcdc', re.I)),
 )
 
 
@@ -123,6 +132,22 @@ def parse_fp_lib_table(text, prj_dir, env=None):
     return out
 
 
+def _global_fp_lib_tables():
+    # v1.11.5 (#132): the user-global fp-lib-table lives in a
+    # per-platform KiCad config dir -- the old lookup was
+    # Linux-only, so on Windows/macOS library rules silently never
+    # resolved (the audit reported every part unresolved).
+    import sys
+    vers = ('10.0', '9.0', '8.0')
+    if sys.platform.startswith('win'):
+        base = os.environ.get('APPDATA')
+        if not base: return []
+        return [os.path.join(base, 'kicad', v, 'fp-lib-table') for v in vers]
+    if sys.platform == 'darwin':
+        return [os.path.expanduser('~/Library/Preferences/kicad/%s/fp-lib-table' % v) for v in vers]
+    return [os.path.expanduser('~/.config/kicad/%s/fp-lib-table' % v) for v in vers]
+
+
 def load_library_rules(board_path, lib_tables=None):
     """Resolve every fp-lib-table in scope for a board and return
     {nickname: dir}.  Project table first, then the user-global
@@ -130,13 +155,12 @@ def load_library_rules(board_path, lib_tables=None):
     prj = os.path.dirname(os.path.abspath(board_path))
     tables = list(lib_tables or [])
     cand = [os.path.join(prj, 'fp-lib-table')]
-    for ver in ('10.0', '9.0', '8.0'):
-        cand.append(os.path.expanduser('~/.config/kicad/%s/fp-lib-table' % ver))
+    cand += _global_fp_lib_tables()
     tables += [p for p in cand if os.path.exists(p)]
     merged = {}
     for p in tables:
         try:
-            for k, v in parse_fp_lib_table(open(p).read(), prj).items():
+            for k, v in parse_fp_lib_table(open(p, encoding='utf-8').read(), prj).items():
                 merged.setdefault(k, v)
         except Exception:
             continue

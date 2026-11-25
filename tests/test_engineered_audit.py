@@ -3,10 +3,14 @@ real fp-lib-table + .pretty library on disk.
 
 U1 (GNSS module) carries an F.Cu keepout on its board copy; the
 library footprint carries the same F.Cu zone PLUS a B.Cu zone
-the board copy lacks -> exactly one zone materialises, with
-library provenance in the ledger.  U2's pad intrudes into U1's
-keepout.  Y1's crystal library footprint carries no rules ->
-library gap.  No markings sidecar: the audit is independent."""
+the board copy lacks.  U2's pad intrudes into U1's keepout.
+Y1's crystal library footprint carries no rules -> library gap.
+
+v1.11.5 (#132): the audit is REPORT-ONLY by default -- on this
+unmarked board Pipeline.__init__ must leave the base file
+byte-identical and first_nets empty.  With placement_audit =
+'apply' the missing zone materialises through the gate, named
+AIR:<ref>:<fpid>, and a re-run does not duplicate it."""
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest
@@ -94,27 +98,85 @@ def _build(tmp):
 
 @pytest.mark.skipif(not os.path.exists('/usr/lib/python3/dist-packages/pcbnew.py'),
                     reason='pcbnew unavailable')
-def test_placement_audit_end_to_end(tmp_path):
+def test_audit_report_only_by_default(tmp_path):
     board = _build(tmp_path)
+    before = open(board, 'rb').read()
     from ai_router.pipeline import Pipeline
     pipe = Pipeline({'strip_existing': False, 'tracemaker_path': '/nonexistent'},
                     board, lambda m: None)
     rep = pipe._audit
     assert rep and rep['status'] == 'ok', rep
+    # the REPORT is complete: the missing zone is listed, the
+    # intrusion and the library gap are found
     mats = rep['materialise']
     assert len(mats) == 1 and mats[0]['ref'] == 'U1' and mats[0]['layers'] == ['B.Cu'], mats
     assert mats[0]['outline'][2] == [42.0, 30.0]
-    assert rep['materialised'] == [{'ref': 'U1', 'layers': ['B.Cu']}]
     kinds = [c['kind'] for c in rep['footprints']['U1']['checks']]
     assert 'keepout_intrusion' in kinds
     assert rep['footprints']['U1']['properties_from'] == 'library'
     assert rep['gaps'] == [{'ref': 'Y1', 'fpid': 'Xtal:Crystal_SMD', 'class': 'crystal'}]
-    assert 'RF_OUT' in pipe._engineered_first_nets()
+    # ...but NOTHING was applied: no zone written, no first_nets
+    # reordering, base file byte-identical
+    assert rep['applied'] is False and rep['materialised'] == [], rep
+    assert open(pipe.base, 'rb').read() == before, 'base file changed by a report-only audit'
+    assert pipe._engineered_first_nets() == [], pipe._engineered_first_nets()
     steps = [e.get('step') for e in pipe.ledger]
-    assert 'placement_materialise' in steps and 'placement_audit' in steps
-    # the materialised zone is really on the working copy
+    assert 'placement_audit' in steps and 'placement_materialise' not in steps, steps
+    import pcbnew
+    b2 = pcbnew.LoadBoard(pipe.current)
+    assert [z for z in b2.Zones() if z.GetIsRuleArea()] == []
+
+
+@pytest.mark.skipif(not os.path.exists('/usr/lib/python3/dist-packages/pcbnew.py'),
+                    reason='pcbnew unavailable')
+def test_audit_apply_materialises_named_zone_once(tmp_path):
+    board = _build(tmp_path)
+    from ai_router.pipeline import Pipeline
+    cfg = {'strip_existing': False, 'tracemaker_path': '/nonexistent', 'placement_audit': 'apply'}
+    pipe = Pipeline(cfg, board, lambda m: None)
+    rep = pipe._audit
+    assert rep['applied'] is True
+    assert rep['materialised'] == [{'ref': 'U1', 'layers': ['B.Cu'], 'name': 'AIR:U1:Mod:GNSS_Module'}], rep['materialised']
+    assert 'RF_OUT' in pipe._engineered_first_nets()
+    assert pipe.base == pipe.current  # gate-adopted zones rebase
+    steps = [e.get('step') for e in pipe.ledger]
+    assert 'placement_materialise' in steps
     import pcbnew
     b2 = pcbnew.LoadBoard(pipe.current)
     rule_areas = [z for z in b2.Zones() if z.GetIsRuleArea()]
     assert len(rule_areas) == 1
+    assert rule_areas[0].GetZoneName() == 'AIR:U1:Mod:GNSS_Module'
     assert [b2.GetLayerName(l) for l in rule_areas[0].GetLayerSet().CuStack()] == ['B.Cu']
+    # re-run on the delivered base: the AIR: name is recognised,
+    # no duplicate zone appears
+    pipe2 = Pipeline(cfg, pipe.base, lambda m: None)
+    b3 = pcbnew.LoadBoard(pipe2.current)
+    assert len([z for z in b3.Zones() if z.GetIsRuleArea()]) == 1
+
+
+@pytest.mark.skipif(not os.path.exists('/usr/lib/python3/dist-packages/pcbnew.py'),
+                    reason='pcbnew unavailable')
+def test_audit_zones_flip_bottom_part(tmp_path):
+    # worker level: a library F.Cu rule area for a BOTTOM-side
+    # footprint must land on B.Cu (FlipLayer), named AIR:<ref>:<fpid>
+    import pcbnew
+    from ai_router.worker import cmd_audit_zones
+    b = pcbnew.BOARD(); b.SetCopperLayerCount(2)
+    f = pcbnew.FOOTPRINT(b); f.SetReference('U9'); f.SetFPIDAsString('Mod:GNSS_Module')
+    f.SetPosition(pcbnew.VECTOR2I(_nm(20), _nm(20)))
+    b.Add(f)
+    f.Flip(pcbnew.VECTOR2I(_nm(20), _nm(20)), True)
+    assert f.IsFlipped()
+    path = str(tmp_path / 'flip.kicad_pcb')
+    pcbnew.SaveBoard(path, b)
+    spec = [{'ref': 'U9', 'fpid': 'Mod:GNSS_Module', 'layers': ['F.Cu'],
+             'keepout': {'tracks': True, 'vias': True, 'copperpour': True},
+             'outline': [[15, 15], [25, 15], [25, 25], [15, 25]]}]
+    r = cmd_audit_zones(path, spec)
+    assert r['added'] and r['added'][0]['name'] == 'AIR:U9:Mod:GNSS_Module', r
+    b2 = pcbnew.LoadBoard(path)
+    zs = [z for z in b2.Zones() if z.GetIsRuleArea()]
+    assert len(zs) == 1
+    assert [b2.GetLayerName(l) for l in zs[0].GetLayerSet().CuStack()] == ['B.Cu'], 'library F.Cu not flipped to B.Cu for a bottom part'
+    r2 = cmd_audit_zones(path, spec)
+    assert r2['added'] == [] and len(r2['already_present']) == 1, r2

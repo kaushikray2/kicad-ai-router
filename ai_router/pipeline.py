@@ -162,12 +162,17 @@ class Pipeline:
             self.log('Engineered nets: setup failed (%s) -- continuing unmarked' % e)
             self._record('engineered_nets', {'error': str(e)})
         self._audit = None
+        self._audit_apply = False
         try:
             self.tool_placement_audit()
         except Exception as e:
             # The audit must never break a route either.
             self.log('Placement audit failed (%s) -- continuing without it' % e)
             self._record('placement_audit', {'error': str(e)})
+        if self.current != self.base:
+            # v1.11.5 (#132): a gate-adopted audit materialisation
+            # becomes part of the base every pass starts from.
+            self.base = self.current
         try:
             _mk = _markings.load_markings(self.board_path)
             if _mk is not None and (_mk.hv_domains or _mk.quiet):
@@ -236,7 +241,14 @@ class Pipeline:
             base = list(eng.get('first_nets') or [])
         else:
             base = []
-        extra = ((getattr(self, '_audit', None) or {}).get('first_nets_extra') or [])
+        # v1.11.5 (#132): the audit's extras join ONLY when the audit
+        # is in apply mode (markings present, or placement_audit =
+        # 'apply'). By default the audit is report-only: an unmarked
+        # board's routing order must not change because a library
+        # footprint happened to classify as an RF module.
+        extra = []
+        if getattr(self, '_audit_apply', False):
+            extra = ((getattr(self, '_audit', None) or {}).get('first_nets_extra') or [])
         return base + [n for n in extra if n not in base]
 
     def _engineered_setup(self):
@@ -773,10 +785,11 @@ class Pipeline:
         # #42: pre-routing placement audit + library-rule
         # materialisation.  Runs on the working copy after strip,
         # before any route pass.  The audit never moves a part; it
-        # reports placement facts, writes library rule-area zones
-        # the board copy lacks onto the working copy (with
-        # provenance in the ledger), and contributes first_nets
-        # advice for RF-class parts.
+        # reports placement facts.  v1.11.5 (#132): REPORT-ONLY by
+        # default -- library rule-area zones are written (through
+        # the gate, with provenance in the ledger) and first_nets
+        # advice for RF-class parts is contributed ONLY when a
+        # markings sidecar exists or placement_audit == 'apply'.
         if _placement_audit is None or _library_rules is None:
             return {'status': 'unavailable'}
         if not self.cfg.get('placement_audit', True):
@@ -795,7 +808,7 @@ class Pipeline:
             p = _library_rules.library_footprint_path(libs, fpid)
             if p:
                 try:
-                    library[fpid] = _library_rules.parse_footprint_rules(open(p).read())
+                    library[fpid] = _library_rules.parse_footprint_rules(open(p, encoding='utf-8').read())  # v1.11.5 (#132): utf-8, as the tables
                 except Exception:
                     library[fpid] = None
             else:
@@ -803,24 +816,50 @@ class Pipeline:
         rep = _placement_audit.audit(facts, library)
         rep['status'] = 'ok'
         self._audit = rep
-        if rep.get('materialise'):
+        # v1.11.5 (#132): REPORT-ONLY by default. The audit runs on
+        # every board and its report is always recorded, but writing
+        # zones into the base and reordering first_nets are side
+        # effects an unmarked board never asked for: they apply only
+        # when a markings sidecar exists for the board, or the
+        # placement_audit setting explicitly says 'apply'.
+        apply = (self.cfg.get('placement_audit') == 'apply')
+        if not apply and _markings is not None:
+            try:
+                apply = _markings.load_markings(self.board_path) is not None
+            except Exception:
+                apply = False
+        self._audit_apply = bool(apply)
+        rep['applied'] = self._audit_apply
+        rep['materialised'] = []
+        if rep.get('materialise') and self._audit_apply:
             p = os.path.join(self.workdir, 'audit_zones.json')
             with open(p, 'w') as fh:
                 json.dump(rep['materialise'], fh)
-            r = self._worker('audit_zones', '--board', self.current, '--spec', p)
-            rep['materialised'] = r.get('added') or []
-            for m in rep['materialise']:
-                self._record('placement_materialise',
-                             {'ref': m['ref'], 'provenance': m['provenance'],
-                              'layers': m['layers'], 'keepout': m['keepout']})
-            self.log('placement audit: materialised %d library rule zones'
-                     % len(rep['materialised']))
+            # Through the gate, like every other board mutation: the
+            # zones land on a candidate and are adopted only if the
+            # acceptance key does not regress.
+            r = self._eng_gate_try('audit_zones', ['--spec', p], 'audit_zones')
+            if r.get('adopted'):
+                rep['materialised'] = r.get('added') or []
+                for m in rep['materialise']:
+                    self._record('placement_materialise',
+                                 {'ref': m['ref'], 'provenance': m['provenance'],
+                                  'layers': m['layers'], 'keepout': m['keepout']})
+                self.log('placement audit: materialised %d library rule zones (gate-adopted)'
+                         % len(rep['materialised']))
+            else:
+                self.log('placement audit: zone materialisation reverted by the gate (%s)'
+                         % r.get('status'))
+        elif rep.get('materialise'):
+            self.log('placement audit: %d library rule zones reported only '
+                     '(no markings, placement_audit not "apply")' % len(rep['materialise']))
         bad = sum(1 for it in rep['footprints'].values()
                   for c in it['checks'] if c.get('ok') is False
                   or c['kind'] == 'keepout_intrusion')
         self._record('placement_audit',
                      {'footprints': len(rep['footprints']),
                       'failed_checks': bad,
+                      'applied': self._audit_apply,
                       'gaps': [g['ref'] for g in rep['gaps']],
                       'first_nets_extra': rep['first_nets_extra']})
         self.log('placement audit: %d footprints, %d failed checks, %d library gaps'
@@ -1520,6 +1559,13 @@ class Pipeline:
         eng_first = self._engineered_first_nets()
         if eng_first:
             first_nets = eng_first + [n for n in first_nets if n not in eng_first]
+        if str(self.cfg.get('first_nets_policy', 'auto')).lower() == 'none':
+            # v1.11.5 (#132): the policy is applied AFTER the extras
+            # are merged -- 'none' means no first_nets advice at all,
+            # engineered extras included (the prepend used to bypass
+            # the policy entirely). The 64-net cap likewise applies
+            # to the merged list, below.
+            first_nets = []
         if len(first_nets) > 64:  # TraceMaker rejects advice files with >64 first_nets
             self.log('first_nets capped at 64 (was %d)' % len(first_nets))
             first_nets = first_nets[:64]
