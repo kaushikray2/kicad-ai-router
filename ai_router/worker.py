@@ -2890,14 +2890,9 @@ def cmd_hvgeom(board_path):
     outline, the rest = cutouts/slots)."""
     b = pcbnew.LoadBoard(board_path)
     refill(b)
-    layers = []
-    lset = b.GetEnabledLayers()
-    for lid in range(pcbnew.PCB_LAYER_ID_COUNT):
-        if not lset.Contains(lid):
-            continue
-        nm_ = b.GetLayerName(lid)
-        if nm_ and nm_.endswith('.Cu') and nm_ not in layers:
-            layers.append(nm_)
+    # stack order from copper_stack (raw layer IDs are NOT in
+    # stack order on KiCad 10 -- B.Cu would sort second)
+    layers = [b.GetLayerName(lid) for lid in copper_stack(b)]
     lid_of = {}
     for lid in range(pcbnew.PCB_LAYER_ID_COUNT):
         nm_ = b.GetLayerName(lid)
@@ -2935,15 +2930,17 @@ def cmd_hvgeom(board_path):
                 'h': mm(p.GetSize().y), 'layers': pl})
     for z in b.Zones():
         n = z.GetNetname()
-        if not n or not z.GetIsFilled():
+        if not n:
             continue
-        poly = z.GetFilledPolysList(z.GetLayer())
-        for oi in range(poly.OutlineCount()):
-            pts = [(mm(pt.x), mm(pt.y))
-                   for pt in poly.Outline(oi).CPoints()]
-            if len(pts) >= 3:
-                rec(n)['zones'].append(
-                    {'layer': b.GetLayerName(z.GetLayer()), 'pts': pts})
+        for lay in layers:
+            if not z.GetLayerSet().Contains(lid_of[lay]):
+                continue
+            poly = z.GetFilledPolysList(lid_of[lay])
+            for oi in range(poly.OutlineCount()):
+                pts = [(mm(pt.x), mm(pt.y))
+                       for pt in poly.Outline(oi).CPoints()]
+                if len(pts) >= 3:
+                    rec(n)['zones'].append({'layer': lay, 'pts': pts})
     segs = []
     ec = lid_of.get('Edge.Cuts')
     pre_loops = []

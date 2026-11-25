@@ -46,6 +46,7 @@ try:
     from ai_router import placement_audit as _placement_audit
     from ai_router import lengthmatch as _lengthmatch
     from ai_router import hvdomains as _hvdomains
+    from ai_router import quietnets as _quietnets
 except Exception:
     try:
         import markings as _markings
@@ -59,6 +60,7 @@ except Exception:
         import placement_audit as _placement_audit
         import lengthmatch as _lengthmatch
         import hvdomains as _hvdomains
+        import quietnets as _quietnets
     except Exception:
         _markings = None
         _tlcalc = None
@@ -169,6 +171,8 @@ class Pipeline:
             _mk = _markings.load_markings(self.board_path)
             if _mk is not None and _mk.hv_domains:
                 self._hv_materialise(_mk)
+            if _mk is not None and _mk.quiet:
+                self._quiet_materialise(_mk)
         except Exception as e:
             self.log('HV materialise failed (%s) -- continuing' % e)
 
@@ -1225,12 +1229,121 @@ class Pipeline:
                         'ref': 'AIR-HV-%s' % d['name']})
         if not spec:
             return None
+        sp = os.path.join(self.workdir, 'hv_zones.json')
+        with open(sp, 'w') as f:
+            json.dump(spec, f)
         res = self._worker('audit_zones', '--board', self.current,
-                           '--spec', json.dumps(spec))
+                           '--spec', sp)
         out = {'zones': len((res or {}).get('added') or []),
                'note': 'rule areas are not net-selective; they also '
                        'constrain the owning domain fanout'}
         self.ledger.append({'tool': 'hv_materialise', **out})
+        return out
+
+    def _quiet_ctx(self, facts):
+        layers = facts.get('layers') or []
+        items, zones, pads, vias = {}, {}, [], []
+        for net, nf in (facts.get('nets') or {}).items():
+            for layer in layers:
+                it, fi = self._hv_items(facts, net, layer)
+                if it:
+                    items[(net, layer)] = it
+                if fi:
+                    zones[(net, layer)] = fi
+            for p in nf.get('pads', []):
+                pads.append({'ref': p.get('ref'), 'net': net,
+                             'x': p['x'], 'y': p['y'], 'w': p['w'],
+                             'h': p['h'], 'layers': p.get('layers') or []})
+            for v in nf.get('vias', []):
+                vias.append({'net': net, 'x': v['x'], 'y': v['y'],
+                             'd': v['d']})
+        return {'layers': layers, 'items': items, 'pads': pads,
+                'vias': vias, 'zones': zones}
+
+    def tool_quiet_nets(self):
+        """#71: isolation gates for quiet markings -- intrusions
+        with locations, load-cap ground returns, guard continuity.
+        Report-only: never moves copper."""
+        if _quietnets is None or _hvdomains is None:
+            return None
+        try:
+            mk = _markings.load_markings(self.board_path)
+        except Exception as e:
+            return {'error': 'markings_error: %s' % e}
+        if mk is None or not mk.quiet:
+            return None
+        facts = self._worker('hvgeom', '--board', self.current)
+        if not facts:
+            return {'error': 'hvgeom_failed'}
+        ctx = self._quiet_ctx(facts)
+        results = [_quietnets.evaluate(e, ctx) for e in mk.quiet]
+        rep = {'limitation': 'geometric isolation only -- no coupling '
+                             'simulation, no dB claims',
+               'results': results}
+        self._eng_quiet_report = rep
+        self.log('quiet nets: %d entrie(s), %d intrusion(s)' % (
+            len(results), sum(len(r['intrusions']) for r in results)))
+        return rep
+
+    def _quiet_materialise(self, mk):
+        """Opt-in pre-route keepouts (#71): rule areas around the
+        quiet copper's pads (and the marked component's land),
+        expanded by the isolation distance, on every copper layer.
+        Not net-selective -- stated in the report."""
+        ents = [e for e in mk.quiet if e.get('materialise')]
+        if not ents or _quietnets is None:
+            return None
+        facts = self._worker('hvgeom', '--board', self.current)
+        if not facts:
+            return None
+        layers = facts.get('layers') or []
+        if not layers:
+            return None
+        pads_by_net = {}
+        pads_by_ref = {}
+        for net, nf in (facts.get('nets') or {}).items():
+            for p in nf.get('pads', []):
+                p = dict(p, net=net)
+                pads_by_net.setdefault(net, []).append(p)
+                pads_by_ref.setdefault(p.get('ref'), []).append(p)
+        spec = []
+        for e in ents:
+            cfg = _quietnets.resolve(e)
+            iso = cfg['isolation_mm']
+            rects = []
+            if e.get('ref'):
+                ps = pads_by_ref.get(e['ref']) or []
+                if ps:
+                    r = max(max(p['w'], p['h']) for p in ps) / 2.0
+                    rects.append([min(p['x'] for p in ps) - r - iso,
+                                  min(p['y'] for p in ps) - r - iso,
+                                  max(p['x'] for p in ps) + r + iso,
+                                  max(p['y'] for p in ps) + r + iso])
+                nets = {p['net'] for p in ps if p['net']}
+            else:
+                nets = {e['net']}
+            for n in nets:
+                for p in pads_by_net.get(n, []):
+                    r = max(p['w'], p['h']) / 2.0 + iso
+                    rects.append([p['x'] - r, p['y'] - r,
+                                  p['x'] + r, p['y'] + r])
+            for (x1, y1, x2, y2) in rects:
+                spec.append({
+                    'outline': [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+                    'layers': layers,
+                    'keepout': {'tracks': True, 'vias': True,
+                                'copperpour': True},
+                    'ref': 'AIR-QUIET-%s' % cfg['name']})
+        if not spec:
+            return None
+        sp = os.path.join(self.workdir, 'quiet_zones.json')
+        with open(sp, 'w') as f:
+            json.dump(spec, f)
+        res = self._worker('audit_zones', '--board', self.current,
+                           '--spec', sp)
+        out = {'zones': len((res or {}).get('added') or []),
+               'note': 'rule areas are not net-selective'}
+        self.ledger.append({'tool': 'quiet_materialise', **out})
         return out
 
     def engineered_report(self, final_board):
@@ -1278,6 +1391,9 @@ class Pipeline:
         audit = getattr(self, '_audit', None)
         if audit is not None:
             rep['placement_audit'] = audit
+        qrep = getattr(self, '_eng_quiet_report', None)
+        if qrep is not None:
+            rep['quiet_nets'] = qrep
         hvrep = getattr(self, '_eng_hv_report', None)
         if hvrep is not None:
             rep['hv_domains'] = hvrep

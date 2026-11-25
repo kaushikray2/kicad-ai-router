@@ -10,6 +10,9 @@ V = pcbnew.VECTOR2I
 NM = 1000000
 
 
+_MAT = False
+
+
 def _build(path, planted=True):
     b = pcbnew.BOARD()
     nets = {}
@@ -62,7 +65,8 @@ def _build(path, planted=True):
     t = t[:i + len('(setup')] + '\n    ' + stack + t[i + len('(setup'):]
     open(path, 'w').write(t)
     mk = {'version': 1, 'hv_domains': [
-        {'name': 'HV', 'nets': ['HV1', 'HV2'], 'voltage_v': 400},
+        {'name': 'HV', 'nets': ['HV1', 'HV2'], 'voltage_v': 400,
+         'materialise': _MAT},
         {'name': 'LV', 'nets': ['LV1', 'LV2'], 'voltage_v': 0}]}
     with open(path.replace('.kicad_pcb', '.ai-router-markings.json'), 'w') as f:
         json.dump(mk, f)
@@ -101,3 +105,21 @@ def test_hv_planted_violation_caught_and_located(tmp_path):
     v = [v for v in pair['violations'] if v['kind'] == 'clearance'][0]
     assert v['required_mm'] == 2.5 and abs(v['actual_mm'] - 2.0) < 0.01
     assert abs(v['at'][0] - 15.0) < 1.5 and abs(v['at'][1] - 34.0) < 0.6
+
+
+
+def test_hv_materialise_creates_keepouts(tmp_path):
+    global _MAT
+    _MAT = True
+    try:
+        board = str(tmp_path / 'hv.kicad_pcb')
+        _build(board, planted=False)
+        pipe = Pipeline({'strip_existing': False,
+                         'tracemaker_path': '/nonexistent'},
+                        board, lambda m: None)
+    finally:
+        _MAT = False
+    entries = [e for e in pipe.ledger if e.get('tool') == 'hv_materialise']
+    assert entries and entries[0]['zones'] >= 1, pipe.ledger
+    b = pcbnew.LoadBoard(pipe.current)
+    assert [z for z in b.Zones() if z.GetIsRuleArea()]
