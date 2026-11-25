@@ -1,0 +1,56 @@
+# v1.11.5 (#122): the suite used to run only when someone ran it by
+# hand, and a later commit could quietly undo an earlier fix. CI now
+# runs the tests on every push, inside the backend image (Ubuntu
+# 24.04 + KiCad 10.0.8, which carries pcbnew/numpy/scipy), and
+# validates the PCM package + repository index on every build.
+name: CI
+
+on:
+  push:
+    branches: [main, engineered-nets]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the backend image
+        run: docker build -f docker/Dockerfile -t ai-router-backend .
+      - name: Run pytest inside the image
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src ai-router-backend bash -c \
+            "python3 -m pip install --break-system-packages -q pytest && python3 -m pytest tests -q"
+
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build the PCM package and validate the repository index
+        run: |
+          python3 -m pip install -q jsonschema
+          python3 build_package.py
+          python3 - <<'PYEOF'
+          import glob, json, os, re, sys, urllib.request, zipfile
+          import jsonschema
+          version = re.search(r"^VERSION = '([^']+)'", open('build_package.py').read(), re.M).group(1)
+          zip_path = os.path.join('pcm', 'ai-router-%s.zip' % version)
+          names = set(zipfile.ZipFile(zip_path).namelist())
+          want = {'plugins/ai_router/' + os.path.basename(p) for p in glob.glob('ai_router/*.py')}
+          missing = sorted(want - names)
+          assert not missing, 'package zip is missing modules: %s' % missing
+          packages = json.load(open('pcm-repo/packages.json'))
+          advertised = [v['version'] for p in packages['packages'] for v in p['versions']]
+          assert advertised == [version], 'packages.json advertises %s, VERSION is %s' % (advertised, version)
+          req = urllib.request.Request('https://go.kicad.org/pcm/schemas/v2', headers={'User-Agent': 'ai-router-ci'})
+          schema = json.load(urllib.request.urlopen(req))
+          defs = schema['definitions']
+          repository = json.load(open('pcm-repo/repository.json'))
+          jsonschema.validate(repository, {'$ref': '#/definitions/Repository', 'definitions': defs})
+          for pkg in packages['packages']:
+              jsonschema.validate(pkg, {'$ref': '#/definitions/Package', 'definitions': defs})
+          print('package OK: %s, %d modules, index valid against PCM v2 schema' % (zip_path, len(want)))
+          PYEOF
