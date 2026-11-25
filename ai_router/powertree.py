@@ -19,7 +19,13 @@ are therefore never summed.  Load kinds corner as: constant-current
 as declared; resistive scaled to Vmax; constant-power at Vmin.
 A load with no declared current is UNKNOWN: the rail reports its
 known sum plus the unknown list, and no current is invented.
+
+Regulator types are buck|ldo|switch.  A BOOST is declared as
+'buck': the edge current is a power balance
+(Pout / (eta * Vin_min), with Vout at its MAXIMUM), which
+holds for a boost exactly as for a buck (#136).
 """
+import math
 
 
 class PowerTreeError(Exception):
@@ -290,6 +296,10 @@ def build_tree(parsed, power_entries, return_net='GND'):
             for n in set(in_rails) | set(out_rails):
                 rails[n]['complete'] = False
         reg_handled.add(ref)
+    pin_count = {}
+    for _pins in net_pins.values():
+        for (r, _p, _t) in _pins:
+            pin_count[r] = pin_count.get(r, 0) + 1
     for ref, ns in sorted(comp_nets.items()):
         if ref in reg_handled:
             continue
@@ -318,7 +328,23 @@ def build_tree(parsed, power_entries, return_net='GND'):
                 flags.append({'kind': 'regulator_type_undeclared', 'ref': ref,
                               'note': 'pass-through (switch) assumed'})
             else:
-                kind, spec = 'conduit', {}
+                # #136 (B11): infer 'conduit' only for a two-pin
+                # passive (ferrite, 0-ohm, a divider resistor) --
+                # the shape that really is a pass-through.  Any
+                # other undeclared part spanning two rails (an MCU
+                # with VDD+VDDA, a level shifter, a dual-supply
+                # op-amp) is NOT a conduit: flag it and build no
+                # edge, instead of silently double-counting the
+                # downstream current upstream and seeding the
+                # part's pin as a source in powerplan.
+                if pin_count.get(ref) == 2:
+                    kind, spec = 'conduit', {}
+                else:
+                    flags.append({'kind': 'undeclared_multi_rail_part',
+                                  'ref': ref, 'nets': sorted(ns),
+                                  'note': 'no conduit inferred; declare '
+                                          'the part or split its supplies'})
+                    continue
         # direction from pin evidence where it exists
         frm = to = None
         src_on = [n for n in (a, b) if any(r == ref and t == 'power_out'
@@ -390,7 +416,10 @@ def _cornered(load, rail_voltage, which):
     """One load's current at the WCCA corner for its kind."""
     i = load['peak_a'] if which == 'peak_a' else load['sustained_a']
     if which == 'sustained_a':
-        i = i * load.get('duty', 1.0)
+        # #136 (B11): heating goes with I^2 R, so the thermal
+        # equivalent of a duty-cycled load is I*sqrt(D), not the
+        # I*D average (4 A at 25% duty heats like 2 A, not 1 A).
+        i = i * math.sqrt(load.get('duty', 1.0))
     kind = load.get('kind', 'constant_current')
     if kind == 'constant_current' or not rail_voltage:
         return i
@@ -450,7 +479,9 @@ def compute_currents(tree):
                 flags.append({'kind': 'buck_voltage_undeclared', 'ref': e['ref'],
                               'note': 'pass-through assumed'})
                 return down
-            return vout['nominal_v'] * down / (e['spec']['eta_min'] * vin['min_v'])
+            # #136 (B11): worst-case input current is at MAXIMUM
+            # output voltage, not nominal.
+            return vout['max_v'] * down / (e['spec']['eta_min'] * vin['min_v'])
         return down  # switch / conduit: pass-through
 
     for net, r in rails.items():

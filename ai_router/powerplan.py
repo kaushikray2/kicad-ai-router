@@ -316,6 +316,30 @@ def _plan_rail(net, rail, entry, facts, tree, parsed, copper, surface,
                                      'edge_kind': e['kind'], 'source': 'tree'})
     ec, paths = _attribute(g, _dist, prev, contribs)
     design = _design(ec)
+    # #136 (B11): a protective edge floors BOTH sides at its
+    # rating -- edge_input already floors the input side; the
+    # downstream conductor is the copper the fuse protects, so
+    # the segments incident to the fuse's downstream pins are
+    # sized for at least the rating as well.
+    for e in tree['edges']:
+        if e.get('to') != net or e['kind'] != 'protective':
+            continue
+        rating = (e.get('spec') or {}).get('rating_a') or 0.0
+        if not rating:
+            continue
+        src_nodes = set()
+        for (r, pp) in e.get('out_pins', []):
+            src_nodes.update(pad_nodes.get((r, str(pp)), []))
+        for node in src_nodes:
+            for (_m, eid) in g.adj.get(node, []):
+                if g.edges[eid]['kind'] != 'track':
+                    continue
+                pk, su = design.get(eid, (0.0, 0.0))
+                design[eid] = (max(pk, rating), max(su, rating))
+        rep['assumptions'].append(
+            'protective %s rating %.3g A floors the segments incident '
+            'to its downstream pins (the conductor the fuse protects)'
+            % (e['ref'], rating))
     # #83: sizing budget = the rail's declared drop_budget_v (the
     # same one the loop-drop verdict below uses), apportioned by
     # length share against the rail's longest attributed path --

@@ -1072,6 +1072,18 @@ class Pipeline:
             self._record('power', {'status': 'tree_failed', 'error': str(e)})
             return self._eng_power_plan
         su = self._worker('stackup', '--board', self.current)
+        if not (su or {}).get('copper'):
+            # #136 (B11): the board file carries no stackup -- say
+            # so and skip, instead of sizing against an empty layer
+            # set and dying downstream with KeyError 'F.Cu'.
+            self._eng_power_plan = {
+                'status': 'needs_stackup',
+                'note': 'board file carries no stackup (worker '
+                        'reasons: %s); power sizing skipped rather '
+                        'than sized against an invented stackup'
+                        % ((su or {}).get('reasons') or 'no copper layers')}
+            self._record('power', {'status': 'needs_stackup'})
+            return self._eng_power_plan
         layers = {}
         cu_total = 0.0
         for c in ((su or {}).get('copper') or []):
@@ -1121,6 +1133,16 @@ class Pipeline:
             self.log('power_vias: %d placed, adopted=%s'
                      % (len(r.get('placed') or []), r.get('adopted')))
         plan['applied'] = applied
+        # #136 (B11): the plan was stored before the gates ran --
+        # mark every widened segment with its gate outcome so the
+        # report shows adopted vs reverted per segment, not only
+        # in aggregate under 'applied'.
+        _outcome = ('adopted' if (applied.get('widen') or {}).get('adopted')
+                    else 'reverted')
+        for _net, _uuids in (plan.get('widen') or {}).items():
+            for _seg in (plan['rails'].get(_net) or {}).get('segments', []):
+                if _seg.get('uuid') in _uuids:
+                    _seg['widen_outcome'] = _outcome
         self._record('power', {'status': 'ok',
                                'rails': sorted(plan['rails']),
                                'widen_segments': sum(len(v) for v in plan['widen'].values()),
