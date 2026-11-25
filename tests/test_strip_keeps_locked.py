@@ -91,4 +91,25 @@ assert res.get('removed_tracks_vias') == 3, 'exactly the unlocked track + 2 dang
 summ = w.cmd_summary(outp, fast=True)
 assert summ.get('locked_items') == 2, 'summary census locked_items must be 2, got %r' % summ.get('locked_items')
 assert summ.get('free_vias') == 10, 'summary census free_vias must be 10, got %r' % summ.get('free_vias')
+# prune is the other removal path: a locked item in a dead component
+# (touching no pad or zone) must still survive it
+b3 = pcbnew.BOARD()
+n3 = pcbnew.NETINFO_ITEM(b3, 'NET3'); b3.Add(n3); c3 = n3.GetNetCode()
+def track3(x1, y1, x2, y2, locked=False):
+    t = pcbnew.PCB_TRACK(b3)
+    t.SetStart(pcbnew.VECTOR2I(NM(x1), NM(y1))); t.SetEnd(pcbnew.VECTOR2I(NM(x2), NM(y2)))
+    t.SetWidth(NM(0.25)); t.SetLayer(pcbnew.F_Cu); t.SetNetCode(c3)
+    if locked: t.SetLocked(True)
+    b3.Add(t); return t
+track3(10, 10, 20, 10, locked=True)
+track3(30, 10, 40, 10)
+v3 = pcbnew.PCB_VIA(b3); v3.SetPosition(pcbnew.VECTOR2I(NM(50), NM(10))); v3.SetDrill(NM(0.3)); v3.SetWidth(NM(0.6))
+v3.SetNetCode(c3); v3.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu); v3.SetLocked(True); b3.Add(v3)
+inp3 = os.path.join(d, 'prune-in.kicad_pcb'); outp3 = os.path.join(d, 'prune-out.kicad_pcb')
+pcbnew.SaveBoard(inp3, b3)
+res3 = w.cmd_prune(inp3, outp3)
+b4 = pcbnew.LoadBoard(outp3)
+left = list(b4.GetTracks())
+assert res3.get('pruned') == 1, 'only the unlocked dead track is pruned, got %r' % res3
+assert len(left) == 2 and all(t.IsLocked() for t in left), 'locked track + locked via survive prune, got %d items' % len(left)
 print('PASS test_strip_keeps_locked')

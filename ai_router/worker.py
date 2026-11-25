@@ -2491,6 +2491,7 @@ def cmd_prune(board_path, out_path):
     before = pad_comps()
     dead = []
     for t in list(b.GetTracks()):
+        if t.IsLocked(): continue  # v1.11.5 (#119): prune is a removal path too -- locked copper is the user's, even when it is a dead component (the gate's invariance census counts any locked loss as a defect)
         items = conn.GetConnectedItems(t)
         if not any(it.Type() == pcbnew.PCB_PAD_T or it.Type() == pcbnew.PCB_ZONE_T for it in items):
             dead.append(t)
