@@ -70,10 +70,19 @@ def main():
     with open(os.path.join(repo_dir, 'packages.json'), 'w') as f: json.dump(packages, f, indent=2)
     import shutil, time
     shutil.copy(zip_path, os.path.join(repo_dir, zip_name))
+    # v1.11.5 (#120): PCM v2 requires schema_version and a packages
+    # RESOURCE (url + sha256 of packages.json + update_timestamp).
+    # Without them KiCad cannot follow the repository to its package
+    # index at all -- the update channel was silently broken.
+    packages_blob = open(os.path.join(repo_dir, 'packages.json'), 'rb').read()
     repository = {'$schema': 'https://go.kicad.org/pcm/schemas/v2',
+                  'schema_version': 2,
                   'name': 'SiliconBrane AI Router (LAN)',
                   'maintainer': {'name': 'SiliconBrane Inc', 'contact': {'email': 'ray@siliconbrane.com'}},
-                  'url': REPO_BASE_URL, 'kicad_version': '10.0'}
+                  'url': REPO_BASE_URL, 'kicad_version': '10.0',
+                  'packages': {'url': REPO_BASE_URL + '/packages.json',
+                               'sha256': hashlib.sha256(packages_blob).hexdigest(),
+                               'update_timestamp': int(time.time())}}
     with open(os.path.join(repo_dir, 'repository.json'), 'w') as f: json.dump(repository, f, indent=2)
     print('zip: %s (%d bytes, sha256 %s)' % (zip_path, len(blob), sha[:16]))
     print('repo index regenerated: pcm-repo/{packages.json, repository.json, %s}' % zip_name)
