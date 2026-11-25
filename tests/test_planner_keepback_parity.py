@@ -3,6 +3,8 @@ exact checker enforces (#75): footprint-embedded Edge.Cuts in
 _stamp_edge_keepback, and same-net drills in _stamp_hole_keepback's
 via band (hole_to_hole binds same-net pairs; the track band stays
 foreign-only because hole_clearance is a copper rule).
+#113: existing VIA drills join both bands -- the #75 checker's
+adrills/fdrills scan GetTracks; the stamp originally did not.
 Run: python3 tests/test_planner_keepback_parity.py  (needs pcbnew)"""
 import importlib.machinery, importlib.util, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ai_router'))
@@ -51,5 +53,24 @@ w._stamp_hole_keepback(b, g, blocked2, via_block2, 0.25, 0.15, net='GND')
 j, i = cell(20.0, 30.0)
 assert via_block2[j, i], 'same-net TH pad did not stamp the via band (hole_to_hole)'
 assert not blocked2[0, j, i], 'same-net pad stamped the track band -- hole_clearance is foreign-only'
+
+# --- hole stamp: existing VIA drills count too (#113)
+sig = pcbnew.NETINFO_ITEM(b, 'SIG'); b.Add(sig); sig_code = sig.GetNetCode()
+def _via(x, y, cd):
+    v = pcbnew.PCB_VIA(b)
+    v.SetPosition(pcbnew.VECTOR2I(NM(x), NM(y)))
+    v.SetDrill(NM(0.3)); v.SetWidth(NM(0.6))
+    v.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+    v.SetNetCode(cd); b.Add(v)
+_via(30, 30, sig_code)   # foreign via, drill 0.3
+_via(10, 30, code)       # same-net (GND) via, drill 0.3
+blocked3 = np.zeros((g.nl, g.NY, g.NX), dtype=bool); via_block3 = np.zeros((g.NY, g.NX), dtype=bool)
+w._stamp_hole_keepback(b, g, blocked3, via_block3, 0.25, 0.15, net='GND')
+j, i = cell(30.0, 30.0)
+assert blocked3[0, j, i], 'foreign via drill did not stamp the track band (hole_clearance)'
+assert via_block3[j, i], 'foreign via drill did not stamp the via band'
+j, i = cell(10.0, 30.0)
+assert via_block3[j, i], 'same-net via drill did not stamp the via band (hole_to_hole)'
+assert not blocked3[0, j, i], 'same-net via drill stamped the track band -- hole_clearance is foreign-only'
 
 print('planner keepback parity OK')
