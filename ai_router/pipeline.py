@@ -893,16 +893,23 @@ class Pipeline:
             for net, m in ev['members'].items():
                 if m['within_tolerance']:
                     continue
+                # #99: the need comes from whichever criteria
+                # actually FAIL (the old if/elif took the mm branch
+                # whenever both tolerances existed, so a delay-only
+                # failure computed need <= 0 and was skipped).
                 need = None
-                if m['delta_mm'] is not None and (entry.get('tolerance_mm') is not None):
+                if m['delta_mm'] is not None and entry.get('tolerance_mm') is not None \
+                        and m['delta_mm'] > entry['tolerance_mm']:
                     need = m['delta_mm'] - entry['tolerance_mm']
-                elif m['delta_ps'] is not None and entry.get('tolerance_ps') is not None:
+                if m['delta_ps'] is not None and entry.get('tolerance_ps') is not None \
+                        and m['delta_ps'] > entry['tolerance_ps']:
                     # convert the ps shortfall at this member's own
                     # delay rate (its longest-layer eps dominates;
                     # use its average ps/mm)
                     st = stats[net]
                     rate = (st['delay_ps'] / st['length_mm']) if st['length_mm'] else 6.0
-                    need = (m['delta_ps'] - entry['tolerance_ps']) / rate
+                    cand = (m['delta_ps'] - entry['tolerance_ps']) / rate
+                    need = cand if need is None else max(need, cand)
                 if need is None or need <= 0:
                     continue
                 r = self._eng_gate_try('meander', ['--net', net, '--add-mm', '%.3f' % need],
