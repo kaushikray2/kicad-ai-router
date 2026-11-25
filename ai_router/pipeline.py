@@ -109,6 +109,14 @@ def cost_tail(g):
     w = (g or {}).get('cost_weighted_wirelength_mm')
     return 0.0 if w is None else float(w)
 
+def starved_delta(g):
+    # v1.11.5 (#116): the routing-caused starved_thermal delta the
+    # gate baked into this record (CP_delta style: the board's own
+    # base count subtracted, floored at 0 -- pre-existing
+    # placement-caused thermals are not the routing's to answer
+    # for). Absent on records from before the tier existed: 0.
+    return int((g or {}).get('starved_thermal_delta') or 0)
+
 def _accept_key(g):
     # v1.8.2 (#16): step acceptance is lexicographic -- a step is kept
     # only if it is no worse in (copper faults, unconnected items,
@@ -126,8 +134,15 @@ def _accept_key(g):
     # because no decision site consulted the price (NAS layer-cost
     # run: engine passes placed In1.Cu segments, the delivered board
     # had none).
+    # v1.11.5 (#116): starved_thermal as its own tier after the
+    # fault/connectivity block and before the cost tail -- a step
+    # that starves pour thermals at equal faults/connectivity is
+    # now rejected (the NAS layer-cost runs added +11/+8 starved
+    # thermals while every key improved or tied), but the tier can
+    # never trade a fault or a connection away, and it keys on the
+    # routing-caused DELTA, so inherited base thermals don't block.
     return (fault_count(g), 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
-            len((g or {}).get('split_nets') or []), cost_tail(g))
+            len((g or {}).get('split_nets') or []), starved_delta(g), cost_tail(g))
 
 def fault_count(g):
     c = (g or {}).get('classes') or {}
@@ -638,12 +653,22 @@ class Pipeline:
         if _cost_pairs and summ.get('track_length_by_layer') is not None:
             _fac = dict(_cost_pairs)
             _cost_weighted = round(sum(l * _fac.get(nm, 1) for nm, l in _tll.items()), 1)
+        # v1.11.5 (#116): starved_thermal / isolated_copper are
+        # reported on every gate; starved_thermal is also keyed, as
+        # the routing-caused delta against the base board's own
+        # count (the first gate of the base board sets the reference;
+        # isolated_copper stays report-only -- mostly pour-shape
+        # noise).
+        _st = int(classes.get('starved_thermal') or 0)
+        if board == self.base and getattr(self, '_base_starved', None) is None:
+            self._base_starved = _st
+        _st_delta = max(0, _st - int(getattr(self, '_base_starved', _st) or 0))
         self.last_gate = {'violations_total': total, 'unconnected_total': unc,
                           'violations_excl_unconnected': total,  # v1.8.2 (#18): the KiCad header total ALREADY excludes unconnected items (proven on a live report); subtracting them again undercounted
                           'board_sha256': hashlib.sha256(open(board, 'rb').read()).hexdigest(),
                           'copper_violations': sum(classes.get(k, 0) for k in COPPER_CLASSES),
                           'vias': summ.get('vias'), 'wirelength_mm': summ.get('wirelength_mm'),
-                          'classes': classes, 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
+                          'classes': classes, 'starved_thermal': _st, 'starved_thermal_delta': _st_delta, 'isolated_copper': int(classes.get('isolated_copper') or 0), 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
                           'signal_items': signal, 'split_nets': split_nets,
                           'pour_nets': pour_nets, 'invariance': _inv, 'tracks_by_layer': _tbl, 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
         self._record('gate', self.last_gate)

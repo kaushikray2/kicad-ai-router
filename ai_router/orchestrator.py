@@ -10,9 +10,9 @@ try:
 except ImportError:
     from llm_client import LLMClient, LLMError
 try:
-    from .pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost
+    from .pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta
 except ImportError:
-    from pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost
+    from pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta
 try:
     from config import DEFAULTS as _CFG_DEFAULTS
 except Exception:
@@ -164,7 +164,10 @@ def _final_key(g):
     # order is deliberate (#37) and unchanged; the tail only breaks
     # full ties, so between two passes equal on the gate the cheaper
     # one now wins instead of whichever came first.
-    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), cost_tail(g))
+    # v1.11.5 (#116): the starved-thermal delta tier joins the final
+    # key too, after faults and before the cost tail (same subordination
+    # as in _accept_key).
+    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), starved_delta(g), cost_tail(g))
 
 def run_auto(cfg, pipe, log):
     # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54
