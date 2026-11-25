@@ -147,6 +147,10 @@ class Markings:
         return None
 
     @property
+    def quiet(self):
+        return self.data.get('quiet', [])
+
+    @property
     def hv_domains(self):
         return self.data.get('hv_domains', [])
 
@@ -193,6 +197,9 @@ def validate(data):
             out[name] = [_check_differential_entry(e, i) for i, e in enumerate(entries)]
         elif name == 'power':
             out[name] = [_check_power_entry(e, i) for i, e in enumerate(entries)]
+        elif name == 'quiet':
+            out[name] = [_check_quiet_entry(e, i)
+                         for i, e in enumerate(entries)]
         elif name == 'hv_domains':
             out[name] = [_check_hv_domain(e, i)
                          for i, e in enumerate(entries)]
@@ -260,6 +267,36 @@ def _check_differential_entry(entry, idx):
 
 def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_quiet_entry(entry, idx):
+    p = 'quiet[%d]' % idx
+    e = entry
+    if not isinstance(e, dict):
+        raise MarkingsError('%s: entry must be an object' % p)
+    has_net = isinstance(e.get('net'), str) and bool(e.get('net'))
+    has_ref = isinstance(e.get('ref'), str) and bool(e.get('ref'))
+    if has_net == has_ref:
+        raise MarkingsError('%s: declare exactly one of "net" or '
+                            '"ref" (a component whose pins are quiet)' % p)
+    if e.get('profile') is not None and e['profile'] not in (
+            'crystal', 'analog', 'reference'):
+        raise MarkingsError('%s: "profile" must be crystal|analog|'
+                            'reference' % p)
+    if 'isolation_mm' in e and (not _num(e['isolation_mm'])
+                                or e['isolation_mm'] <= 0):
+        raise MarkingsError('%s: "isolation_mm" must be a number > 0' % p)
+    if 'guard_net' in e and not (isinstance(e['guard_net'], str)
+                                 and e['guard_net']):
+        raise MarkingsError('%s: "guard_net" must be a net name' % p)
+    if 'allow_nets' in e and (not isinstance(e['allow_nets'], list)
+                              or not all(isinstance(n, str)
+                                         for n in e['allow_nets'])):
+        raise MarkingsError('%s: "allow_nets" must be a list of net '
+                            'names' % p)
+    if 'materialise' in e and not isinstance(e['materialise'], bool):
+        raise MarkingsError('%s: "materialise" must be a boolean' % p)
+    return dict(e)
 
 
 def _check_hv_domain(entry, idx):
