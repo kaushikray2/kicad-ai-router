@@ -15,8 +15,11 @@ import pipeline
 
 def NM(v): return int(v * 1e6)
 
+_refseq = [0]
 def mk_pad(b, net, code, x, y):
     fp = pcbnew.FOOTPRINT(b)
+    _refseq[0] += 1
+    fp.SetReference('U%d' % _refseq[0])  # _pad_clusters keys pads by Ref.Number
     p = pcbnew.PAD(fp)
     p.SetPosition(pcbnew.VECTOR2I(NM(x), NM(y))); p.SetSize(pcbnew.VECTOR2I(NM(1.0), NM(1.0)))
     p.SetShape(pcbnew.PAD_SHAPE_RECT); p.SetAttribute(pcbnew.PAD_ATTRIB_SMD)
@@ -110,6 +113,64 @@ p.cfg = {'pour_skeleton': False}
 check('legs carry nothing when off (pre-feature command lines)', p._leg_skeleton_args() == [])
 p.cfg = {}
 check('reservation defaults on', p._leg_skeleton_args() == ['--skeleton'])
+
+# --- accept-key ordering: intrusions price after connectivity --------
+import orchestrator
+def G(faults, unc, intr):
+    return {'classes': {'clearance': faults}, 'unconnected_total': unc, 'split_nets': [], 'skeleton_intrusions': intr}
+check('a connection beats intrusions', pipeline._accept_key(G(5, 2, 7)) < pipeline._accept_key(G(5, 3, 0)))
+check('a real fault beats intrusion-freedom', pipeline._accept_key(G(5, 2, 7)) < pipeline._accept_key(G(6, 2, 0)))
+check('intrusions break ties', pipeline._accept_key(G(5, 2, 3)) < pipeline._accept_key(G(5, 2, 7)))
+check('final key mirrors the order', orchestrator._final_key(G(5, 2, 7)) < orchestrator._final_key(G(6, 2, 0)) and orchestrator._final_key(G(5, 2, 7)) < orchestrator._final_key(G(5, 3, 0)))
+check('fault_count still counts intrusions in full', pipeline.fault_count(G(5, 2, 7)) == 12)
+
+# --- yield: a leg that can only connect through a corridor ------------
+# GND pour band across the whole board; its skeleton edge spans the
+# board at y=20. SIG's pads sit above/below the band: every path
+# crosses the corridor, so the reserved plan fails and the command
+# must yield (route anyway, intrusion priced by the gate). SIG2's
+# pads are both above the band: routed without yielding.
+def mk_yield_board():
+    b = pcbnew.BOARD()
+    gnd = pcbnew.NETINFO_ITEM(b, 'GND'); b.Add(gnd); gc = gnd.GetNetCode()
+    sig = pcbnew.NETINFO_ITEM(b, 'SIG'); b.Add(sig); sc = sig.GetNetCode()
+    sg2 = pcbnew.NETINFO_ITEM(b, 'SIG2'); b.Add(sg2); s2 = sg2.GetNetCode()
+    z = pcbnew.ZONE(b)
+    _zls = pcbnew.LSET(); _zls.AddLayer(pcbnew.F_Cu); _zls.AddLayer(pcbnew.B_Cu)
+    z.SetLayerSet(_zls); z.SetNetCode(gc); z.SetMinThickness(NM(0.25))
+    o = z.Outline(); o.NewOutline()
+    ch = o.Outline(0)
+    for (x, y) in [(0, 10), (100, 10), (100, 30), (0, 30)]:
+        ch.Append(pcbnew.VECTOR2I(NM(x), NM(y)))
+    ch.SetClosed(True)
+    b.Add(z)
+    # TH pads: the pour's connection points exist on BOTH layers, so
+    # both layers carry the reservation (an SMD-only pour would
+    # leave the other layer legitimately crossable -- a track there
+    # does not sever this layer's fill).
+    for (x, y) in [(5, 20), (95, 20)]:
+        fp = pcbnew.FOOTPRINT(b)
+        _refseq[0] += 1; fp.SetReference('U%d' % _refseq[0])
+        p = pcbnew.PAD(fp)
+        p.SetPosition(pcbnew.VECTOR2I(NM(x), NM(y))); p.SetSize(pcbnew.VECTOR2I(NM(1.6), NM(1.6)))
+        p.SetShape(pcbnew.PAD_SHAPE_CIRCLE); p.SetAttribute(pcbnew.PAD_ATTRIB_PTH)
+        _pls = pcbnew.LSET(); _pls.AddLayer(pcbnew.F_Cu); _pls.AddLayer(pcbnew.B_Cu)
+        p.SetLayerSet(_pls); p.SetDrillSize(pcbnew.VECTOR2I(NM(0.8), NM(0.8)))
+        p.SetNumber('1'); p.SetNetCode(gc); fp.Add(p); b.Add(fp)
+    mk_pad(b, sig, sc, 50, 5); mk_pad(b, sig, sc, 50, 35)
+    mk_pad(b, sg2, s2, 20, 5); mk_pad(b, sg2, s2, 80, 5)
+    return b
+yp = os.path.join(tmp, 'yield.kicad_pcb')
+pcbnew.SaveBoard(yp, mk_yield_board())
+yout = os.path.join(tmp, 'yield-out.kicad_pcb')
+res = run_worker('finish_leg', '--board', yp, '--out', yout, '--net', 'SIG', '--skeleton')
+check('corridor-only leg routes via the yield', res.get('status') == 'routed' and res.get('skeleton_yield') is True)
+ys = run_worker('summary', '--board', yout, '--fast', '--skeleton')
+check('the yielded leg pays the census', (ys.get('skeleton_intrusions') or 0) >= 1)
+res2 = run_worker('finish_leg', '--board', yp, '--out', yout, '--net', 'SIG2', '--skeleton')
+check('unblocked leg routes without yielding', res2.get('status') == 'routed' and 'skeleton_yield' not in res2)
+res3 = run_worker('finish_leg', '--board', yp, '--out', yout, '--net', 'SIG')
+check('no reservation -> no yield marker', res3.get('status') == 'routed' and 'skeleton_yield' not in res3)
 
 print('FAILURES: %s' % fails if fails else 'ALL PASS')
 sys.exit(1 if fails else 0)
