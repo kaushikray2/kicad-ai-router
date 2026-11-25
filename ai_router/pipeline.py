@@ -153,6 +153,7 @@ class Pipeline:
         self.current = self.base
         self._record('setup', {'base': self.base})
         self._eng = None
+        self._domains_path = None  # #80: set by _domain_setup when materialise markings exist
         try:
             self._engineered_setup()
         except Exception as e:
@@ -169,12 +170,10 @@ class Pipeline:
             self._record('placement_audit', {'error': str(e)})
         try:
             _mk = _markings.load_markings(self.board_path)
-            if _mk is not None and _mk.hv_domains:
-                self._hv_materialise(_mk)
-            if _mk is not None and _mk.quiet:
-                self._quiet_materialise(_mk)
+            if _mk is not None and (_mk.hv_domains or _mk.quiet):
+                self._domain_setup(_mk)
         except Exception as e:
-            self.log('HV materialise failed (%s) -- continuing' % e)
+            self.log('Domain setup failed (%s) -- continuing' % e)
 
     # ------------------------------------------------------------ internals
     def _record(self, step, data):
@@ -1196,59 +1195,104 @@ class Pipeline:
             len(pairs), sum(len(p['violations']) for p in pairs)))
         return rep
 
-    def _hv_materialise(self, mk):
-        """Opt-in pre-route keepouts (#70): for domains marked
-        materialise, a no-track/via/pour rule area around each pad,
-        expanded by the largest required spacing vs the other
-        domains.  KiCad rule areas are not net-selective: the
-        keepout also constrains the owning domain's own fanout --
-        stated in the report."""
-        doms = [d for d in mk.hv_domains if d.get('materialise')]
-        if not doms or _hvdomains is None:
+    def _domain_setup(self, mk):
+        # #80 (supersedes the #70/#71 materialise step): markings
+        # flagged materialise used to be written onto the board as
+        # solid rule areas around the marked nets' own pads -- but
+        # KiCad rule areas are not net-selective, so the areas sealed
+        # the pads and the marked nets were unroutable.  The same
+        # geometry is now computed as rects and handed to the
+        # finisher/repair legs, whose Grid stamps them for every
+        # routed net except the entry's own/allowed nets
+        # (worker.Grid.build).  The TraceMaker passes no longer see
+        # rule areas; the post-route hv/quiet checkers remain the
+        # authoritative gate for anything the engine leaves behind.
+        if _hvdomains is None and _quietnets is None:
             return None
-        H = _hvdomains
         facts = self._worker('hvgeom', '--board', self.current)
         if not facts:
             return None
         layers = facts.get('layers') or []
         if not layers:
             return None
-        spec = []
-        for d in doms:
-            req = 0.0
-            for o in mk.hv_domains:
-                if o is d:
+        entries = []
+        if _hvdomains is not None:
+            H = _hvdomains
+            for d in [d for d in mk.hv_domains if d.get('materialise')]:
+                req = 0.0
+                for o in mk.hv_domains:
+                    if o is d:
+                        continue
+                    dv = abs(d['voltage_v'] - o['voltage_v'])
+                    if dv > 0:
+                        req = max(req, H.required_spacing_mm(
+                            dv, H.column_for(
+                                True, d.get('coating', 'uncoated'),
+                                d.get('altitude_m', 0))))
+                if req <= 0:
                     continue
-                dv = abs(d['voltage_v'] - o['voltage_v'])
-                if dv > 0:
-                    req = max(req, H.required_spacing_mm(
-                        dv, H.column_for(True, d.get('coating', 'uncoated'),
-                                         d.get('altitude_m', 0))))
-            if req <= 0:
-                continue
-            for net in d['nets']:
-                nf = facts.get('nets', {}).get(net) or {}
+                rects = []
+                for net in d['nets']:
+                    nf = facts.get('nets', {}).get(net) or {}
+                    for p in nf.get('pads', []):
+                        r = max(p['w'], p['h']) / 2.0 + req
+                        x, y = p['x'], p['y']
+                        rects.append({'rect': [x - r, y - r, x + r, y + r],
+                                      'layers': p.get('layers') or [layers[0]]})
+                if rects:
+                    entries.append({'kind': 'hv', 'name': d['name'],
+                                    'nets': list(d['nets']),
+                                    'rects': rects})
+        if _quietnets is not None:
+            pads_by_net, pads_by_ref = {}, {}
+            for net, nf in (facts.get('nets') or {}).items():
                 for p in nf.get('pads', []):
-                    r = max(p['w'], p['h']) / 2.0 + req
-                    x, y = p['x'], p['y']
-                    spec.append({
-                        'outline': [[x - r, y - r], [x + r, y - r],
-                                    [x + r, y + r], [x - r, y + r]],
-                        'layers': p.get('layers') or [layers[0]],
-                        'keepout': {'tracks': True, 'vias': True,
-                                    'copperpour': True},
-                        'ref': 'AIR-HV-%s' % d['name']})
-        if not spec:
+                    p = dict(p, net=net)
+                    pads_by_net.setdefault(net, []).append(p)
+                    pads_by_ref.setdefault(p.get('ref'), []).append(p)
+            for e in [e for e in mk.quiet if e.get('materialise')]:
+                cfg = _quietnets.resolve(e)
+                iso = cfg['isolation_mm']
+                raw = []
+                if e.get('ref'):
+                    ps = pads_by_ref.get(e['ref']) or []
+                    nets = {p['net'] for p in ps if p['net']}
+                    if ps:
+                        r = max(max(p['w'], p['h']) for p in ps) / 2.0
+                        raw.append([min(p['x'] for p in ps) - r - iso,
+                                    min(p['y'] for p in ps) - r - iso,
+                                    max(p['x'] for p in ps) + r + iso,
+                                    max(p['y'] for p in ps) + r + iso])
+                else:
+                    nets = {e['net']}
+                for n in nets:
+                    for p in pads_by_net.get(n, []):
+                        r = max(p['w'], p['h']) / 2.0 + iso
+                        raw.append([p['x'] - r, p['y'] - r,
+                                    p['x'] + r, p['y'] + r])
+                allowed = set(nets) | set(cfg['allow_nets'] or [])
+                if cfg.get('guard_net'):
+                    allowed.add(cfg['guard_net'])
+                if raw:
+                    entries.append({'kind': 'quiet', 'name': cfg['name'],
+                                    'nets': sorted(allowed),
+                                    'rects': [{'rect': r, 'layers': layers}
+                                              for r in raw]})
+        if not entries:
             return None
-        sp = os.path.join(self.workdir, 'hv_zones.json')
+        sp = os.path.join(self.workdir, 'domains.json')
         with open(sp, 'w') as f:
-            json.dump(spec, f)
-        res = self._worker('audit_zones', '--board', self.current,
-                           '--spec', sp)
-        out = {'zones': len((res or {}).get('added') or []),
-               'note': 'rule areas are not net-selective; they also '
-                       'constrain the owning domain fanout'}
-        self.ledger.append({'tool': 'hv_materialise', **out})
+            json.dump(entries, f)
+        self._domains_path = sp
+        out = {'entries': len(entries),
+               'rects': sum(len(e['rects']) for e in entries),
+               'note': 'net-selective Grid enforcement (#80): no rule '
+                       'areas written; post-route hv/quiet checkers '
+                       'remain the gate'}
+        self.ledger.append({'tool': 'domain_enforce', **out})
+        self.log('domain enforcement: %d entr(ies), %d rect(s) -- '
+                 'finisher/repair legs only, no rule areas'
+                 % (out['entries'], out['rects']))
         return out
 
     def _quiet_ctx(self, facts):
@@ -1295,67 +1339,6 @@ class Pipeline:
         self.log('quiet nets: %d entrie(s), %d intrusion(s)' % (
             len(results), sum(len(r['intrusions']) for r in results)))
         return rep
-
-    def _quiet_materialise(self, mk):
-        """Opt-in pre-route keepouts (#71): rule areas around the
-        quiet copper's pads (and the marked component's land),
-        expanded by the isolation distance, on every copper layer.
-        Not net-selective -- stated in the report."""
-        ents = [e for e in mk.quiet if e.get('materialise')]
-        if not ents or _quietnets is None:
-            return None
-        facts = self._worker('hvgeom', '--board', self.current)
-        if not facts:
-            return None
-        layers = facts.get('layers') or []
-        if not layers:
-            return None
-        pads_by_net = {}
-        pads_by_ref = {}
-        for net, nf in (facts.get('nets') or {}).items():
-            for p in nf.get('pads', []):
-                p = dict(p, net=net)
-                pads_by_net.setdefault(net, []).append(p)
-                pads_by_ref.setdefault(p.get('ref'), []).append(p)
-        spec = []
-        for e in ents:
-            cfg = _quietnets.resolve(e)
-            iso = cfg['isolation_mm']
-            rects = []
-            if e.get('ref'):
-                ps = pads_by_ref.get(e['ref']) or []
-                if ps:
-                    r = max(max(p['w'], p['h']) for p in ps) / 2.0
-                    rects.append([min(p['x'] for p in ps) - r - iso,
-                                  min(p['y'] for p in ps) - r - iso,
-                                  max(p['x'] for p in ps) + r + iso,
-                                  max(p['y'] for p in ps) + r + iso])
-                nets = {p['net'] for p in ps if p['net']}
-            else:
-                nets = {e['net']}
-            for n in nets:
-                for p in pads_by_net.get(n, []):
-                    r = max(p['w'], p['h']) / 2.0 + iso
-                    rects.append([p['x'] - r, p['y'] - r,
-                                  p['x'] + r, p['y'] + r])
-            for (x1, y1, x2, y2) in rects:
-                spec.append({
-                    'outline': [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
-                    'layers': layers,
-                    'keepout': {'tracks': True, 'vias': True,
-                                'copperpour': True},
-                    'ref': 'AIR-QUIET-%s' % cfg['name']})
-        if not spec:
-            return None
-        sp = os.path.join(self.workdir, 'quiet_zones.json')
-        with open(sp, 'w') as f:
-            json.dump(spec, f)
-        res = self._worker('audit_zones', '--board', self.current,
-                           '--spec', sp)
-        out = {'zones': len((res or {}).get('added') or []),
-               'note': 'rule areas are not net-selective'}
-        self.ledger.append({'tool': 'quiet_materialise', **out})
-        return out
 
     def engineered_report(self, final_board):
         # #67 Step 1 per-net verification report.  Verifies geometry and
@@ -1892,6 +1875,12 @@ class Pipeline:
         self.log('reroute_window %s: %s (key %s -> %s)' % (net, st, kb, ka))
         return {'status': st, 'net': net, 'gate': after}
 
+    def _leg_domain_args(self):
+        # #80: the finisher/repair legs receive the domain spec so
+        # their Grids can enforce HV/quiet spacing net-selectively.
+        p = getattr(self, '_domains_path', None)
+        return ['--domains', p] if p else []
+
     def tool_finish_leg(self, net):
         outp = self._out('finish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
         # The finisher self-verifies connectivity only; its grid planner
@@ -1902,7 +1891,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
         extra = ['--attempt-select'] if self.cfg.get('attempt_select') else []
-        r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *extra)
+        r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_domain_args(), *extra)
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -1924,7 +1913,7 @@ class Pipeline:
         outp = self._out('longfinish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
+        r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_domain_args())
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -1950,7 +1939,7 @@ class Pipeline:
         outp = self._out('ilprepair')
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
+        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_domain_args())
         if r.get('routed') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -1978,6 +1967,7 @@ class Pipeline:
             outp = self._out('healed')
             kb = _accept_key(cur_gate)
             args = ['--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu'))]
+            args += self._leg_domain_args()
             if net: args += ['--nets', net]
             r = self._worker('heal', *args)
             agg['per_net'][net or '*'] = r.get('status')
@@ -2007,7 +1997,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
         outp = self._out('stitched')
-        r = self._worker('stitch', '--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
+        r = self._worker('stitch', '--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_domain_args())
         if os.path.exists(outp):
             prev = self.current
             self.current = outp

@@ -13,6 +13,14 @@ import pcbnew
 BANNED_LAYER_IDS = None
 NO_TRACKS_ON_RAW = None
 NO_TRACKS_ON_UNRESOLVED = []  # v1.9 (M4): --no-tracks-on names the canonical table could not resolve; Grid resolves them against the actual board or fails loud
+# #80: net-selective domain enforcement -- the pipeline hands the
+# finisher/repair legs a JSON spec of HV-domain / quiet-net isolation
+# rects (domains.json); Grid.build stamps them for every routed net
+# except the entry's own/allowed nets.  Replaces the pre-route rule
+# areas, which were not net-selective and sealed the marked nets' own
+# pads.  Empty when no materialise markings are in force.
+DOMAINS_RAW = None
+DOMAINS = []
 
 def _layer_id_from_name(n):
     n = n.strip()
@@ -408,6 +416,33 @@ class Grid:
                         if no_tracks:
                             for li in klayers: blocked[li, j, i] = True
                         if no_vias: via_block[j, i] = True
+        if DOMAINS and target is not None:
+            # #80: the rect edge is already pad-edge + required
+            # spacing (the retired rule areas' geometry); grow it by
+            # the track half-width for blocked and by the via radius
+            # for via_block, matching how KiCad tested copper
+            # against the zones.  The entry's own/allowed nets are
+            # exempt -- that exemption is the whole point.
+            tw2 = self.inf - self.clr_plan
+            for ent in DOMAINS:
+                if target in (ent.get('nets') or []): continue
+                for rc in ent.get('rects') or []:
+                    x1, y1, x2, y2 = rc['rect']
+                    lis = []
+                    for nm in (rc.get('layers') or []):
+                        lid = _layer_id_from_name(nm)
+                        if lid is not None and lid in self.lidx:
+                            lis.append(self.lidx[lid])
+                    i0, i1 = max(0, int((x1 - self.via_r - X0) / PITCH)), min(NX - 1, int((x2 + self.via_r - X0) / PITCH) + 1)
+                    j0, j1 = max(0, int((y1 - self.via_r - Y0) / PITCH)), min(NY - 1, int((y2 + self.via_r - Y0) / PITCH) + 1)
+                    for j in range(j0, j1 + 1):
+                        for i in range(i0, i1 + 1):
+                            dx = max(x1 - gx[i], 0.0, gx[i] - x2)
+                            dy = max(y1 - gy[j], 0.0, gy[j] - y2)
+                            d = math.hypot(dx, dy)
+                            if d < tw2:
+                                for li in lis: blocked[li, j, i] = True
+                            if d < self.via_r: via_block[j, i] = True
         def stamp_pad(layers, cx, cy, kind, a, bb, rot, cr):
             ext = math.hypot(a, bb)
             rad = ext + INF; radv = ext + self.via_r + self.clr_plan
@@ -1231,6 +1266,7 @@ def cmd_finish_leg(board_path, out_path, net, attempt_select=False):
                              '--board', board_in, '--net', net,
                              '--victims', ','.join(victims), '--result', ppath]
                     if NO_TRACKS_ON_RAW: pline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+                    if DOMAINS_RAW: pline += ['--domains', DOMAINS_RAW]
                     try:
                         subprocess.run(pline, capture_output=True, text=True, timeout=600)
                         pres = json.load(open(ppath))
@@ -1251,6 +1287,7 @@ def cmd_finish_leg(board_path, out_path, net, attempt_select=False):
                        '--board', board_in, '--out', out_path, '--net', net,
                        '--victims', ','.join(victims), '--result', rpath]
             if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+            if DOMAINS_RAW: cmdline += ['--domains', DOMAINS_RAW]
             try:
                 subprocess.run(cmdline, capture_output=True, text=True, timeout=300)
                 res = json.load(open(rpath))
@@ -1504,6 +1541,7 @@ def cmd_long_leg(board_path, out_path, net):
         cmdline = [sys.executable, os.path.abspath(__file__), 'long_attempt',
                    '--board', board_in, '--out', out_path, '--net', net, '--result', rpath]
         if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+        if DOMAINS_RAW: cmdline += ['--domains', DOMAINS_RAW]
         try:
             subprocess.run(cmdline, capture_output=True, text=True, timeout=900)
             res = json.load(open(rpath))
@@ -1981,6 +2019,7 @@ def cmd_heal(board_path, out_path, only=None):
                            '--dst', '%s:%.2f:%.2f' % (','.join(map(str, dl)), dx, dy),
                            '--result', rpath]
                 if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+                if DOMAINS_RAW: cmdline += ['--domains', DOMAINS_RAW]
                 try:
                     subprocess.run(cmdline, capture_output=True, text=True, timeout=300)
                     res = json.load(open(rpath))
@@ -2551,6 +2590,7 @@ def cmd_ilp_repair(board_path, out_path, nets):
                        '--board', cur, '--out', tmp_out, '--net', cand['net'],
                        '--victims', ','.join(cand['victims']), '--result', rpath]
             if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+            if DOMAINS_RAW: cmdline += ['--domains', DOMAINS_RAW]
             try:
                 subprocess.run(cmdline, capture_output=True, text=True, timeout=600)
                 res = json.load(open(rpath))
@@ -4032,6 +4072,7 @@ def main():
     ap.add_argument('--result')
     ap.add_argument('--spec')
     ap.add_argument('--no-tracks-on')
+    ap.add_argument('--domains')
     ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
     if a.no_tracks_on:
@@ -4042,6 +4083,10 @@ def main():
             _i = _layer_id_from_name(_x)
             if _i is None: NO_TRACKS_ON_UNRESOLVED.append(_x.strip())
             else: BANNED_LAYER_IDS.add(_i)
+    if a.domains:
+        global DOMAINS_RAW, DOMAINS
+        DOMAINS_RAW = a.domains
+        with open(a.domains) as _f: DOMAINS = json.load(_f)
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'stackup': res = cmd_stackup(a.board, [n for n in (a.nets or '').split(',') if n])
     elif a.cmd == 'rf_vias':
