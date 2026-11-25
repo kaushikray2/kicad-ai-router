@@ -489,7 +489,8 @@ class Grid:
         # including the banned GND plane, whose blocked plane is
         # nearly empty, so heal/finish paths ran tracks straight
         # across it and the pour refill hid them from DRC.
-        allowed = self.routable | set(extra_layers)
+        extra = set(extra_layers)
+        allowed = self.routable | extra
         si = self.cell(*start_xy); gi = self.cell(*goal_xy)
         starts = [(l, si[1], si[0]) for l in start_layers if l in allowed]
         # v1.8.1 (#11): a blocked goal cell is unreachable -- exclude it
@@ -520,7 +521,7 @@ class Grid:
                     # between two blocked orthogonal neighbours -- it passes
                     # within p/sqrt(2) of their corners (v3 audit, bug #6).
                     if dj and di and (blocked[li, j + dj, i] or blocked[li, j, i + di]): continue
-                    nd = dcur + (1.41421356 if dj and di else 1.0) * self._lfac[li]; nb = (li, nj, ni)  # v1.11 (#73): travel on a priced layer costs its factor per cell (1 = unpriced, the old cost exactly; the heuristic stays unit-cost, admissible since factors are >= 1)
+                    nd = dcur + (1.41421356 if dj and di else 1.0) * (1.0 if li in extra else self._lfac[li]); nb = (li, nj, ni)  # v1.11 (#73): travel on a priced layer costs its factor per cell (1 = unpriced, the old cost exactly; the heuristic stays unit-cost, admissible since factors are >= 1). v1.11.2 (#103): a layer the caller vouches for via extra_layers -- a net's OWN plane, at every call site -- travels at unit cost; pricing it inverted the policy (an own-plane bridge dearer than under the hard ban the price replaced)
                     if nd < dist.get(nb, 1e18): dist[nb] = nd; prev[nb] = node; heapq.heappush(pq, (nd + _h(nj, ni), nd, nb))
             if not via_block[j, i]:
                 # A through via pierces every layer: transition to any
@@ -685,7 +686,8 @@ class Grid:
             nid[0] += 1
             prev[nid[0]] = (parent, li, j, i, mask)
             heapq.heappush(pq, (cost + _h(j, i), cost, nid[0]))
-        allowed = self.routable | set(extra_layers)
+        extra = set(extra_layers)
+        allowed = self.routable | extra
         for l in start_layers:
             if l in allowed: push(0.0, l, si[1], si[0], 0, 0)
         goalset = {(l, gi[1], gi[0]) for l in goal_layers if l in allowed and not blocked[l, gi[1], gi[0]]}
@@ -703,7 +705,7 @@ class Grid:
                 if not (0 <= nj < self.NY and 0 <= ni < self.NX) or blocked[li, nj, ni]: continue
                 if dj and di and (blocked[li, j + dj, i] or blocked[li, j, i + di]): continue
                 add, nmask = _charge(owner.get((li, nj, ni), 0), mask)
-                push(dcur + (1.41421356 if dj and di else 1.0) * self._lfac[li] + add, li, nj, ni, nmask, this)  # v1.11 (#73): priced-layer factor, as in astar
+                push(dcur + (1.41421356 if dj and di else 1.0) * (1.0 if li in extra else self._lfac[li]) + add, li, nj, ni, nmask, this)  # v1.11 (#73): priced-layer factor, as in astar; v1.11.2 (#103): extra (own-plane) layers at unit cost, as in astar
             if not via_block[j, i]:
                 vo = via_owner.get((j, i), 0)
                 for ol in allowed:
