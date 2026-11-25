@@ -289,6 +289,14 @@ def _fix_one_violation(b, net, x, y, radius=3.0):
     # True: the net is no more split than before, and every drawn
     # item passed _new_items_clean inside _bridge_plan. Whether the
     # fault itself is gone is the pipeline gate's call.
+    # #162: refill first -- inside a cmd_fix_violations batch, an
+    # earlier fault's rip/repair changes what this net's fill
+    # should be, and the cached fill polygons do not move until a
+    # refill; judging this fault against the pre-batch fill counts
+    # clusters the fill no longer has (and misses the connection
+    # the fresh fill would have made), so valid pour fixes rolled
+    # back. Zone-less boards skip the cost.
+    if list(b.Zones()): refill(b)
     conn = b.GetConnectivity(); conn.Build(b)
     pads, clusters = _pad_clusters(b, conn, net)
     if not pads: return False
