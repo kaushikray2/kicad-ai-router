@@ -3504,11 +3504,15 @@ class _ViaSites:
         # #78: same-net drill facts for the hole_to_hole test in ok()
         self.vdrills = [(mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2, t.GetNetname())
                         for t in b.GetTracks() if t.Type() == pcbnew.PCB_VIA_T]
-        self.pad_drills = [(mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(p.GetDrillSize().x), mm(p.GetDrillSize().y)) / 2)
+        # #111: EVERY pad drill, with its net -- ok() owes foreign
+        # drills the hole rules, not just the copper ones.
+        self.pad_drills = [(mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(p.GetDrillSize().x), mm(p.GetDrillSize().y)) / 2, p.GetNetname())
                            for fp in b.GetFootprints() for p in fp.Pads()
-                           if p.GetNetname() == gnd and p.GetDrillSize().x > 0]
+                           if p.GetDrillSize().x > 0]
         try: self.h2h = mm(b.GetDesignSettings().m_HoleToHoleMin)
         except Exception: self.h2h = 0.25
+        try: self.hole_clr = mm(b.GetDesignSettings().m_HoleClearance)
+        except Exception: self.hole_clr = 0.25
         try: self.edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
         except Exception: self.edge_clr = 0.5
         self.edge_segs = []
@@ -3534,6 +3538,19 @@ class _ViaSites:
                     return True
         return False
 
+    def _hole_ok(self, x, y, hx, hy, hdr):
+        # #111 (residual of #78): a FOREIGN drill is owed the hole
+        # rules, not the copper ones -- hole_clearance (its drill
+        # edge to this via's copper edge) and hole_to_hole (drill
+        # edge to drill edge).  An NPTH pad carries ~no copper, so
+        # the pad-SDF copper test in ok() is nearly blind to it: a
+        # candidate could pass ok() and still fail DRC, rolling the
+        # whole rf_vias/power_vias pass back at the gate.
+        d = math.hypot(x - hx, y - hy)
+        if d < hdr + self.hole_clr + self.vw / 2: return False
+        if d < hdr + self.h2h + self.vd / 2: return False
+        return True
+
     def ok(self, x, y):
         r = self.vw / 2
         for (n, prm) in self.pads:
@@ -3549,10 +3566,16 @@ class _ViaSites:
         # cmd_power_vias ring neighbours land 0.31 mm apart with
         # 0.6 mm vias (physically overlapping barrels).
         for (vx, vy, dr, n) in self.vdrills:
-            if n == self.gnd and math.hypot(x - vx, y - vy) < dr + self.vd / 2 + self.h2h:
+            if n == self.gnd:
+                if math.hypot(x - vx, y - vy) < dr + self.vd / 2 + self.h2h:
+                    return False
+            elif not self._hole_ok(x, y, vx, vy, dr):
                 return False
-        for (px_, py_, dr) in self.pad_drills:
-            if math.hypot(x - px_, y - py_) < dr + self.vd / 2 + self.h2h:
+        for (px_, py_, dr, n) in self.pad_drills:
+            if n == self.gnd:
+                if math.hypot(x - px_, y - py_) < dr + self.vd / 2 + self.h2h:
+                    return False
+            elif not self._hole_ok(x, y, px_, py_, dr):
                 return False
         for (ex1, ey1, ex2, ey2) in self.edge_segs:
             if seg_pt(x, y, ex1, ey1, ex2, ey2) < r + self.edge_clr:
