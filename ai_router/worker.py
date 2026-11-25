@@ -978,7 +978,7 @@ def _bridge_plan(b, net, before, margins=(12, 20)):
                     g.inf = bw / 2 + g.clr_plan
                 blocked, via_block = g.build({net}, target=net)
                 _stamp_edge_keepback(b, g, blocked, via_block, bw, vd / 2)
-                _stamp_hole_keepback(b, g, blocked, via_block, bw, vdr / 2, net=net)
+                _stamp_hole_keepback(b, g, blocked, via_block, bw, vdr / 2, net=net, vr_pad=vd / 2)
                 g.free_disc(blocked, via_block, S[1], S[2], layers=tuple(S[3]))
                 g.free_disc(blocked, via_block, Gp[1], Gp[2], layers=tuple(Gp[3]))
                 _stamp_inner_via_blocks(b, via_block, g, {net})
@@ -1152,7 +1152,7 @@ def _finish_attempt(board_path, out_path, net, A, Bp, simp, victims, window):
                             g2.inf = bw_v / 2 + g2.clr_plan
                         blocked, via_block = g2.build({v}, target=v)
                         _stamp_edge_keepback(b, g2, blocked, via_block, bw_v, _bvd / 2)
-                        _stamp_hole_keepback(b, g2, blocked, via_block, bw_v, _bvdr / 2, net=v)
+                        _stamp_hole_keepback(b, g2, blocked, via_block, bw_v, _bvdr / 2, net=v, vr_pad=_bvd / 2)
                         g2.free_disc(blocked, via_block, S[1], S[2], layers=tuple(S[3]))
                         g2.free_disc(blocked, via_block, Gp[1], Gp[2], layers=tuple(Gp[3]))
                         _stamp_inner_via_blocks(b, via_block, g2, {v})
@@ -1198,7 +1198,7 @@ def _plan_attempts(board_path, net):
         blocked, via_block = grid0.build(ignore, target=net)
         _tw = net_class_width(b0, net, W_TRACK)
         _stamp_edge_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[0] / 2)
-        _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net)
+        _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net, vr_pad=net_class_via(b0, net)[0] / 2)
         grid0.free_disc(blocked, via_block, *start_xy, layers=tuple(A[3]))
         grid0.free_disc(blocked, via_block, *goal_xy, layers=tuple(Bp[3]))
         # Stamp inner-track via blocks AFTER freeing the pad discs: a
@@ -1379,7 +1379,7 @@ def _plan_path(board_path, net, victims, bump=0.0):
     blocked, via_block = grid0.build(ignore, target=net)
     _tw = net_class_width(b0, net, W_TRACK)
     _stamp_edge_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[0] / 2)
-    _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net)
+    _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net, vr_pad=net_class_via(b0, net)[0] / 2)
     grid0.free_disc(blocked, via_block, *start_xy, layers=tuple(A[3]))
     grid0.free_disc(blocked, via_block, *goal_xy, layers=tuple(Bp[3]))
     _stamp_inner_via_blocks(b0, via_block, grid0, ignore)
@@ -1460,7 +1460,8 @@ def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
         else:
             for li in range(g.nl): blocked[li] |= band
 
-def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None):
+def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None, vr_pad=None):
+    if vr_pad is None: vr_pad = vr_drill  # callers predating #117 pass only the drill radius
     # Drilled holes pierce every layer, and hole_clearance (drill
     # edge to foreign copper) is a separate rule from copper
     # clearance. NPTH pads carry ~no copper, so pad stamping leaves
@@ -1468,7 +1469,13 @@ def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None):
     # tracks 0.244/0.245 mm from two NPTH holes vs the 0.250 rule --
     # a miss neither the grid nor the exact checker models. Stamp
     # every drilled pad's hole at drill_r + hole_clr + tw/2 (tracks,
-    # all layers) and drill_r + hole_clr + vr_drill (via centres).
+    # all layers) and drill_r + hole_clr + vr_pad (via centres --
+    # hole_clearance measures COPPER to hole, so the via's copper
+    # radius, exactly as the #75 checker computes it; v1.11.5 #117:
+    # this stamp used the DRILL radius and under-reserved by half
+    # the annular ring, proposing via sites the checker then
+    # rejected. The hole-to-hole band below keeps the drill radius:
+    # that rule is drill-to-drill.)
     try: hole_clr = mm(b.GetDesignSettings().m_HoleClearance)
     except Exception: hole_clr = 0.25
     if hole_clr <= 0: return
@@ -1504,7 +1511,7 @@ def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None):
     band_t = np.zeros((g.NY, g.NX), dtype=bool); band_v = np.zeros((g.NY, g.NX), dtype=bool)
     for (cx, cy, dr) in holes:
         stamp_disc(cx, cy, dr + hole_clr + tw / 2, band_t)
-        stamp_disc(cx, cy, dr + hole_clr + vr_drill, band_v)
+        stamp_disc(cx, cy, dr + hole_clr + vr_pad, band_v)
     # v1.11.2 (#107): hole_to_hole is a physical drill-separation
     # rule and binds SAME-net drills too -- #75 taught the checker
     # (adrills), but this stamp skipped the planned net's own pads
@@ -1586,7 +1593,7 @@ def cmd_long_attempt(board_path, out_path, net):
                 g.inf = tw / 2 + g.clr_plan
             blocked, via_block = g.build({net}, target=net)
             _stamp_edge_keepback(b0, g, blocked, via_block, tw, vr)
-            _stamp_hole_keepback(b0, g, blocked, via_block, tw, net_class_via(b0, net)[1] / 2, net=net)
+            _stamp_hole_keepback(b0, g, blocked, via_block, tw, net_class_via(b0, net)[1] / 2, net=net, vr_pad=net_class_via(b0, net)[0] / 2)
             g.free_disc(blocked, via_block, *start_xy, layers=tuple(A[3]))
             g.free_disc(blocked, via_block, *goal_xy, layers=tuple(Bp[3]))
             _stamp_inner_via_blocks(b0, via_block, g, {net})
@@ -1852,7 +1859,7 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
         # v1.8.1 (#11): keepbacks BEFORE free_disc (the v1.7.1 order) --
         # stamped after, they re-blocked the freed start/goal discs.
         _stamp_edge_keepback(b, g, blocked, via_block, bw, _vd0 / 2)
-        _stamp_hole_keepback(b, g, blocked, via_block, bw, _vdr0 / 2, net=net)
+        _stamp_hole_keepback(b, g, blocked, via_block, bw, _vdr0 / 2, net=net, vr_pad=_vd0 / 2)
         g.free_disc(blocked, via_block, fx, fy, layers=fl)
         g.free_disc(blocked, via_block, dx, dy, layers=dl)
         _stamp_inner_via_blocks(b, via_block, g, {net})
@@ -1899,7 +1906,7 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
             g2 = Grid(b, (max(min(xs) - 2, wx[0]), min(max(xs) + 2, wx[1]), max(min(ys) - 2, wx[2]), min(max(ys) + 2, wx[3])), track_w=bw, via_r=net_class_via(b, net)[0] / 2)
             bl, vb = g2.build({net}, target=net)
             _stamp_edge_keepback(b, g2, bl, vb, bw, _vd0 / 2)
-            _stamp_hole_keepback(b, g2, bl, vb, bw, _vdr0 / 2, net=net)
+            _stamp_hole_keepback(b, g2, bl, vb, bw, _vdr0 / 2, net=net, vr_pad=_vd0 / 2)
             g2.free_disc(bl, vb, fx, fy, layers=fl)
             g2.free_disc(bl, vb, dx, dy, layers=dl)
             _stamp_inner_via_blocks(b, vb, g2, {net})
@@ -2209,7 +2216,7 @@ def _bridge_island(b, conn, netname, pad):
     if li is None: li = grid.nl - 1
     blocked, via_block = grid.build({netname}, target=netname)
     _stamp_edge_keepback(b, grid, blocked, via_block, draw_w, _vd0 / 2)
-    _stamp_hole_keepback(b, grid, blocked, via_block, draw_w, _vdr0 / 2, net=netname)
+    _stamp_hole_keepback(b, grid, blocked, via_block, draw_w, _vdr0 / 2, net=netname, vr_pad=_vd0 / 2)
     goal = None
     by_layer = {}
     for (gl, ps, oi, _pts) in goals: by_layer.setdefault(gl, []).append((ps, oi))

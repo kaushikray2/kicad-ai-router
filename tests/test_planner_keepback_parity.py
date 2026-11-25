@@ -5,6 +5,10 @@ via band (hole_to_hole binds same-net pairs; the track band stays
 foreign-only because hole_clearance is a copper rule).
 #113: existing VIA drills join both bands -- the #75 checker's
 adrills/fdrills scan GetTracks; the stamp originally did not.
+#117: the via hole-clearance band is stamped at the via PAD radius
+(the checker measures copper-to-hole; the drill radius
+under-reserved by half the annular ring) -- probed at a cell
+between the two radii.
 Run: python3 tests/test_planner_keepback_parity.py  (needs pcbnew)"""
 import importlib.machinery, importlib.util, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ai_router'))
@@ -76,5 +80,25 @@ assert via_block3[j, i], 'foreign via drill did not stamp the via band'
 j, i = cell(10.0, 30.0)
 assert via_block3[j, i], 'same-net via drill did not stamp the via band (hole_to_hole)'
 assert not blocked3[0, j, i], 'same-net via drill stamped the track band -- hole_clearance is foreign-only'
+
+# --- hole stamp: the via band uses the via PAD radius (#117)
+# Foreign TH pad, drill 0.8 (dr 0.4) at (20, 20); hole_clr 0.25.
+# Old band: 0.4 + 0.25 + vr_drill 0.15 = 0.80. Checker band:
+# 0.4 + 0.25 + vr_pad 0.30 = 0.95. The cell at (20.9, 20) sits at
+# 0.90 -- between the two radii: the old planner allowed a via
+# centre there and the checker then rejected the finished leg.
+hv = pcbnew.NETINFO_ITEM(b, 'HV'); b.Add(hv); hv_code = hv.GetNetCode()
+fp3 = pcbnew.FOOTPRINT(b)
+pad3 = pcbnew.PAD(fp3)
+pad3.SetSize(pcbnew.VECTOR2I(NM(1.5), NM(1.5)))
+pad3.SetDrillSize(pcbnew.VECTOR2I(NM(0.8), NM(0.8)))
+pad3.SetPosition(pcbnew.VECTOR2I(NM(20), NM(20)))
+pad3.SetNetCode(hv_code); fp3.Add(pad3); b.Add(fp3)
+blocked4 = np.zeros((g.nl, g.NY, g.NX), dtype=bool); via_block4 = np.zeros((g.NY, g.NX), dtype=bool)
+w._stamp_hole_keepback(b, g, blocked4, via_block4, 0.25, 0.15, net='GND', vr_pad=0.3)
+j, i = cell(20.9, 20.0)
+assert via_block4[j, i], 'cell between drill-radius and pad-radius bands not stamped -- planner still under-reserves (#117)'
+j, i = cell(21.0, 20.0)
+assert not via_block4[j, i], 'cell beyond the pad-radius band stamped -- band too wide'
 
 print('planner keepback parity OK')
