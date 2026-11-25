@@ -46,8 +46,8 @@ def test_creepage_detours_around_slot():
     b = [('disc', 45.0, 20.0, 1.0)]
     outline = [(5.0, 5.0), (55.0, 5.0), (55.0, 35.0), (5.0, 35.0)]
     slot = [(28.0, 12.0), (32.0, 12.0), (32.0, 28.0), (28.0, 28.0)]
-    straight = H.creepage_path(a, b, a + b, outline, [], pitch=0.25)
-    slotted = H.creepage_path(a, b, a + b, outline, [slot], pitch=0.25)
+    straight, _p1 = H.creepage_path(a, b, a + b, outline, [], pitch=0.25)
+    slotted, _p2 = H.creepage_path(a, b, a + b, outline, [slot], pitch=0.25)
     assert straight is not None and 26.5 < straight < 29.5
     # hand detour via the slot end: ~14.4 + 4 + 14.4 = 32.8
     assert slotted is not None and 30.5 < slotted < 35.5
@@ -82,7 +82,7 @@ def test_creepage_bridges_foreign_copper():
     a = [('disc', 0.0, 0.0, 1.0)]
     b = [('disc', 12.0, 0.0, 1.0)]
     m = [('disc', 6.0, 0.0, 2.0)]
-    cr = H.creepage_path(a, b, m, [], [], pitch=0.25)
+    cr, _p3 = H.creepage_path(a, b, m, [], [], pitch=0.25)
     assert cr is not None and 4.5 < cr < 7.5, cr
 
 
@@ -95,5 +95,5 @@ def test_creepage_no_diagonal_corner_cut():
     b = [('disc', 12.0, 0.0, 0.5)]
     r1 = [(4.9, -4.0), (6.125, -4.0), (6.125, 0.125), (4.9, 0.125)]
     r2 = [(6.125, 0.125), (7.1, 0.125), (7.1, 4.0), (6.125, 4.0)]
-    cr = H.creepage_path(a, b, [], [], [r1, r2], pitch=0.25)
+    cr, _p4 = H.creepage_path(a, b, [], [], [r1, r2], pitch=0.25)
     assert cr is None, cr

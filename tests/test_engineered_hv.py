@@ -104,7 +104,10 @@ def test_hv_planted_violation_caught_and_located(tmp_path):
     assert ('clearance', 'F.Cu') in kinds
     v = [v for v in pair['violations'] if v['kind'] == 'clearance'][0]
     assert v['required_mm'] == 2.5 and abs(v['actual_mm'] - 2.0) < 0.01
-    assert abs(v['at'][0] - 15.0) < 1.5 and abs(v['at'][1] - 34.0) < 0.6
+    # #146 (B21): with real pad shapes the closest point is the
+    # pad's corner/edge (y = centre - half-height = 33), not the
+    # inscribed-disc point the old model reported (y = 34)
+    assert abs(v['at'][0] - 15.0) < 1.5 and abs(v['at'][1] - 34.0) < 1.1
 
 
 
