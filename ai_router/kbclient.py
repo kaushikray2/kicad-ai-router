@@ -14,8 +14,12 @@ incomplete (resistances-only) instead of sizing on a guess.
 
 Estimate shape (interface version 1):
   {mpn, datasheet_rev, kind: 'peak'|'sustained', value_a,
-   conditions, citation: {document, revision, table, page},
-   confirmed: bool}
+   conditions, citation: {document, revision, table, page}}
+
+#137 (B12): an estimate is NEVER confirmed by the server.  Any
+'confirmed' field in server data is stripped at the cache
+boundary; the only confirmation that counts is the LOCAL record
+written by confirm() into the cache slot's 'confirmed' map.
 
 The cache key is MPN + datasheet revision -- MPN alone is an
 incorrect key (a value extracted from rev A does not describe
@@ -25,8 +29,10 @@ their citation, so a confirmed value keeps tracing to its
 datasheet in every later report.
 """
 import json
+import math
 import os
 import urllib.request
+from urllib.parse import urlparse
 
 INTERFACE_VERSION = 1
 _UA = 'kicad-ai-router-kbclient/1'
@@ -60,6 +66,15 @@ class KbCache:
 
     def store_estimates(self, estimates):
         for e in estimates:
+            # #137 (B12): server data is untrusted at this boundary
+            # -- a server-supplied 'confirmed' flag is stripped
+            # (confirmation is a local record only), and an
+            # estimate whose current is non-numeric, non-finite or
+            # negative is dropped outright: it could otherwise be
+            # confirmed into a sizing run later.
+            e = {k: v for k, v in e.items() if k != 'confirmed'}
+            if _valid_current(e.get('value_a')) is None:
+                continue
             k = cache_key(e['mpn'], e['datasheet_rev'])
             slot = self.data['entries'].setdefault(k, {'estimates': [], 'confirmed': {}})
             slot['estimates'] = [x for x in slot['estimates']
@@ -82,15 +97,29 @@ class KbCache:
         return False
 
     def confirmed(self, mpn, datasheet_rev, kind):
+        # #137 (B12): the authority is the LOCAL confirmation
+        # record in slot['confirmed'] (written by confirm()), never
+        # a flag on the estimate itself -- a cache file carrying a
+        # server-minted confirmed:true with no local record does
+        # not confirm anything.
         slot = self.data['entries'].get(cache_key(mpn, datasheet_rev)) or {}
+        rec = (slot.get('confirmed') or {}).get(kind)
+        if not rec:
+            return None
         for e in slot.get('estimates') or []:
-            if e.get('kind') == kind and e.get('confirmed'):
-                return e
+            if e.get('kind') == kind:
+                out = dict(e)
+                out['confirmed'] = True
+                if rec.get('citation'):
+                    out['citation'] = rec['citation']
+                return out
         return None
 
     def pending(self, mpn, datasheet_rev):
         slot = self.data['entries'].get(cache_key(mpn, datasheet_rev)) or {}
-        return [e for e in slot.get('estimates') or [] if not e.get('confirmed')]
+        done = slot.get('confirmed') or {}
+        return [e for e in slot.get('estimates') or []
+                if e.get('kind') not in done]
 
 
 class DictKb:
@@ -119,7 +148,16 @@ class HttpKb:
     the endpoint) -- the client itself only speaks http/https."""
 
     def __init__(self, url, timeout=20):
-        if not (url.startswith('http://') or url.startswith('https://')):
+        # #137 (B12): estimates steer copper sizing, so the path
+        # must not be silently interceptable -- https everywhere,
+        # plain http only for loopback endpoints (the bundled /
+        # self-hosted-on-this-machine case).
+        u = urlparse(url)
+        loopback = u.hostname in ('localhost', '127.0.0.1', '::1')
+        if u.scheme == 'http' and not loopback:
+            raise ValueError('KB endpoint must use https '
+                             '(plain http is allowed only for loopback endpoints)')
+        if u.scheme not in ('http', 'https'):
             raise ValueError('KB endpoint must be http(s)')
         self.url = url
         self.timeout = timeout
@@ -139,6 +177,16 @@ class HttpKb:
     def write_back_confirmation(self, mpn, datasheet_rev, kind):
         self._post({'action': 'confirm', 'version': INTERFACE_VERSION,
                     'mpn': mpn, 'datasheet_rev': datasheet_rev, 'kind': kind})
+
+
+def _valid_current(v):
+    """A KB current is usable only as a finite, non-negative
+    float (#137 (B12): NaN/inf used to flow straight into sizing)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) and f >= 0 else None
 
 
 def resolve_loads(entries, cache, kb=None):
@@ -178,12 +226,21 @@ def resolve_loads(entries, cache, kb=None):
                                     'outcome': 'kb_unconfirmed' if pending else 'kb_missing',
                                     'mpn': mpn, 'datasheet_rev': rev})
                 continue  # load removed: rail reports incomplete
-            s['peak_a'] = float(est['value_a'])
+            peak = _valid_current(est.get('value_a'))
+            if peak is None:
+                # #137 (B12): a confirmed-but-corrupt value (NaN,
+                # inf, negative, non-numeric) is never applied.
+                resolutions.append({'ref': ref, 'net': entry['net'],
+                                    'outcome': 'kb_invalid',
+                                    'mpn': mpn, 'datasheet_rev': rev})
+                continue  # load removed: rail reports incomplete
+            s['peak_a'] = peak
             s['source'] = 'kb'
             s['citation'] = est.get('citation')
             sus = cache.confirmed(mpn, rev, 'sustained') if cache else None
-            if sus is not None:
-                s['sustained_a'] = float(sus['value_a'])
+            sus_v = _valid_current(sus.get('value_a')) if sus is not None else None
+            if sus_v is not None:
+                s['sustained_a'] = sus_v
             else:
                 s['sustained_a'] = s['peak_a']  # conservative default, stated
             loads[ref] = s
