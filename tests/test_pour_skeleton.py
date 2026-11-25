@@ -3,7 +3,7 @@
 region, width = zone min-thickness + slack), the Grid stamp
 (corridors hard for foreign nets, open for the pour's own), the
 intrusion census (foreign copper in a corridor), and the pipeline
-wiring (fault_count counts intrusions; legs carry --skeleton only
+wiring (fault_count excludes intrusions since #158; legs carry --skeleton only
 when the config turns the reservation on).
 Run: python3 tests/test_pour_skeleton.py  (needs pcbnew)"""
 import importlib.machinery, importlib.util, json, os, subprocess, sys, tempfile
@@ -104,7 +104,7 @@ sk_cli = run_worker('skeleton', '--board', path)
 check('skeleton command reports the severed edge', sk_cli['skeletons'] and sk_cli['skeletons'][0]['severed_edges'] >= 1)
 
 # --- pipeline wiring ---------------------------------------------------
-check('fault_count counts intrusions', pipeline.fault_count({'classes': {}, 'skeleton_intrusions': 3}) == 3)
+check('fault_count excludes intrusions (#158)', pipeline.fault_count({'classes': {}, 'skeleton_intrusions': 3}) == 0)
 check('fault_count unchanged for old gate dicts', pipeline.fault_count({'classes': {}}) == 0)
 p = object.__new__(pipeline.Pipeline)
 p.cfg = {'pour_skeleton': True}
@@ -122,7 +122,9 @@ check('a connection beats intrusions', pipeline._accept_key(G(5, 2, 7)) < pipeli
 check('a real fault beats intrusion-freedom', pipeline._accept_key(G(5, 2, 7)) < pipeline._accept_key(G(6, 2, 0)))
 check('intrusions break ties', pipeline._accept_key(G(5, 2, 3)) < pipeline._accept_key(G(5, 2, 7)))
 check('final key mirrors the order', orchestrator._final_key(G(5, 2, 7)) < orchestrator._final_key(G(6, 2, 0)) and orchestrator._final_key(G(5, 2, 7)) < orchestrator._final_key(G(5, 3, 0)))
-check('fault_count still counts intrusions in full', pipeline.fault_count(G(5, 2, 7)) == 12)
+check('fault_count is real faults only (#158)', pipeline.fault_count(G(5, 2, 7)) == 5)
+check('skip guard: clean pour winner passes vs stripped base (#158)', pipeline.fault_count({'classes': {}, 'skeleton_intrusions': 13, 'unconnected_total': 0, 'split_nets': []}) <= pipeline.fault_count({'classes': {}}))
+check('conn key: +1 short never trades for -2 intrusions (#158)', pipeline._conn_key({'classes': {'shorting_items': 3}, 'unconnected_total': 5, 'split_nets': ['X'], 'skeleton_intrusions': 6}) > pipeline._conn_key({'classes': {'shorting_items': 2}, 'unconnected_total': 5, 'split_nets': ['X'], 'skeleton_intrusions': 8}))
 
 # --- yield: a leg that can only connect through a corridor ------------
 # GND pour band across the whole board; its skeleton edge spans the

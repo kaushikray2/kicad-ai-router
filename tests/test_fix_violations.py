@@ -142,5 +142,37 @@ check('diff: planted crossing is router-added', any(f['type'] in ('tracks_crossi
 check('diff: offender candidates carry both nets', any(set(f['nets']) == {'A', 'B'} for f in added))
 check('diff: base alone has no such fault', not any(f['type'] in ('tracks_crossing', 'shorting_items') for f in bas))
 
+
+# --- pipeline acceptance gate (#158) -----------------------------------
+# Drive the real tool_fix_violations with a stubbed worker/gate: a fix
+# that removes the only real fault while ADDING intrusions must stand
+# (intrusions price after real faults in the accept key). On the old
+# fault_count (intrusions folded in) the totals tied 11 -> 11 and the
+# fix was reverted.
+def _gate(classes, intr, unc):
+    return {'classes': classes, 'skeleton_intrusions': intr, 'unconnected_total': unc, 'split_nets': []}
+sp = object.__new__(pipeline.Pipeline)
+sp.workdir = tmp; sp.cfg = {}; sp._gseq = 0
+sp.current = pc; sp.base = pb
+sp.last_gate = _gate({'clearance': 1}, 10, 4)
+sp.log = lambda *a: None
+sp._record = lambda *a, **k: None
+sp._leg_ban_args = lambda: []
+sp._leg_layer_args = lambda: []
+sp._leg_skeleton_args = lambda: []
+sp._out = lambda name: os.path.join(tmp, 'stub-fixed.kicad_pcb')
+sp._drc_fault_items = lambda path: ([{'type': 'clearance', 'x': 40.0, 'y': 20.0, 'nets': ['A', 'B']}] if path == pc else [])
+def _fake_worker(*a, **k):
+    open(sp._out('fixed'), 'w').write('stub')
+    return {'fixed': [{'type': 'clearance'}], 'failed': []}
+sp._worker = _fake_worker
+sp.tool_gate = lambda *a, **k: _gate({}, 11, 4)
+r = sp.tool_fix_violations()
+check('accept: real fault fixed, +1 intrusion stands (#158)', r.get('status') == 'fixed')
+sp.tool_gate = lambda *a, **k: _gate({}, 11, None)
+sp.last_gate = _gate({'clearance': 1}, 10, 4); sp.current = pc
+r = sp.tool_fix_violations()
+check('accept: unknown unconnected count reverts (#158/#59)', r.get('status') == 'reverted')
+
 print('FAILURES:', fails if fails else 'none')
 sys.exit(1 if fails else 0)
