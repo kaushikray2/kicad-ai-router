@@ -258,6 +258,11 @@ def _track_key(t):
         dr = t.GetDrill()
         drm = mm(dr.x) if hasattr(dr, 'x') else mm(dr)
         return ('via', t.GetNetCode(), round(mm(t.GetPosition().x), 3), round(mm(t.GetPosition().y), 3), round(mm(t.GetWidth(pcbnew.F_Cu)), 3), round(drm, 3))
+    if t.Type() == pcbnew.PCB_ARC_T:
+        # #159: the midpoint is part of an arc's geometry -- keying
+        # it as a plain segment made rollback recreate it as a
+        # straight chord.
+        return ('arc', t.GetNetCode(), t.GetLayer(), round(mm(t.GetStart().x), 3), round(mm(t.GetStart().y), 3), round(mm(t.GetMid().x), 3), round(mm(t.GetMid().y), 3), round(mm(t.GetEnd().x), 3), round(mm(t.GetEnd().y), 3), round(mm(t.GetWidth()), 3))
     return ('seg', t.GetNetCode(), t.GetLayer(), round(mm(t.GetStart().x), 3), round(mm(t.GetStart().y), 3), round(mm(t.GetEnd().x), 3), round(mm(t.GetEnd().y), 3), round(mm(t.GetWidth()), 3))
 
 def _restore_key(b, key):
@@ -265,6 +270,11 @@ def _restore_key(b, key):
         _k, code, x, y, dia, drill = key
         v = pcbnew.PCB_VIA(b); v.SetPosition(pcbnew.VECTOR2I(nm(x), nm(y)))
         v.SetWidth(nm(dia)); v.SetDrill(nm(drill)); v.SetNetCode(code); b.Add(v)
+    elif key[0] == 'arc':
+        _k, code, lay, x1, y1, xm, ym, x2, y2, wdt = key
+        t = pcbnew.PCB_ARC(b)
+        t.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1))); t.SetMid(pcbnew.VECTOR2I(nm(xm), nm(ym))); t.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
+        t.SetWidth(nm(wdt)); t.SetLayer(lay); t.SetNetCode(code); b.Add(t)
     else:
         _k, code, lay, x1, y1, x2, y2, wdt = key
         t = pcbnew.PCB_TRACK(b)
@@ -286,6 +296,7 @@ def _fix_one_violation(b, net, x, y, radius=3.0):
     rip = []
     for t in list(b.GetTracks()):
         if t.GetNetname() != net: continue
+        if t.IsLocked(): continue  # #159: user-locked copper is never ripped (the #100/#119 class)
         if t.Type() == pcbnew.PCB_VIA_T:
             if math.hypot(mm(t.GetPosition().x) - x, mm(t.GetPosition().y) - y) < radius + mm(t.GetWidth(pcbnew.F_Cu)) / 2: rip.append(t)
         elif seg_pt(x, y, mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y)) < radius + mm(t.GetWidth()) / 2:
@@ -300,6 +311,7 @@ def _fix_one_violation(b, net, x, y, radius=3.0):
     for t in list(b.GetTracks()):
         if t.GetNetname() != net or t.Type() != pcbnew.PCB_VIA_T: continue
         if math.hypot(mm(t.GetPosition().x) - x, mm(t.GetPosition().y) - y) >= radius + 1.0: continue
+        if t.IsLocked(): continue  # #159: a locked via stays even when stranded
         if not [it for it in conn.GetConnectedItems(t) if it.Type() != pcbnew.PCB_PAD_T]:
             saved.append(_track_key(t)); b.RemoveNative(t)
     nets = b.GetNetsByName(); stack = copper_stack(b)
