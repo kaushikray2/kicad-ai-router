@@ -187,7 +187,12 @@ round-4 branch bugs #127/#128/#129/#130/#134-#138/#140/#142-
 report); #144's proven validity-flag part landed, its
 field-model stage remains open. Feature tickets verified
 implemented were closed as such: #67-#71 + #42 (branch,
-first-draft standard) and #73 (main).
+first-draft standard) and #73 (main). Addendum the same day:
+#154 -- the PCM repository add failed in KiCad 10 because
+repository.json's field shape diverged from the official
+repository (extra schema_version/url/kicad_version fields, no
+packages.update_time_utc); the generator and the served file
+are aligned (owner re-add confirmation outstanding).
 
 ## In progress
 
