@@ -166,8 +166,11 @@ HEALTHCHECK, cached /health version (#126). On the
 engineered-nets branch, the three merge blockers are fixed:
 #132 (audit report-only by default), #133 (treatment key),
 #150 (PCM glob + markings sidecar round-trip). Follow-ups:
-the NAS layer-cost factor sweep (1.25/1.5/2/3) once a backend
-is free; #138's merge-time remainder.
+the NAS layer-cost factor sweep (1.25/1.5/2/3) -- owner ruled
+config (a) 2026-11-25 (In1.Cu = f, In2.Cu = 1 on the NAS board),
+protocol pre-declared on #121, and the sweep is running on the
+scratch backend (ML350:8733) on v1.11.6; #138's merge-time
+remainder.
 
 ### Open-bug sweep (2026-11-25)
 
