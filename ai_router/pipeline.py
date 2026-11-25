@@ -434,12 +434,19 @@ class Pipeline:
                 signal.append({'nets': sorted(set(n for _k, n in items)), 'text': ' '.join(block.split())[:200]})
         return total, unc, classes, pour, signal
 
-    def _layer_info(self, board):
+    def _layer_info(self, board, summ=None):
         # v1.10.1 (#49): one cached summary per board for layer data.
+        # v1.11.2 (#101): a caller already holding this board's fast
+        # summary (tool_gate fetches one for its census) seeds the
+        # cache with it -- otherwise every gate of a fresh step board
+        # paid for a second summary subprocess. The cache stays
+        # lazily initialised via getattr: tests build Pipeline via
+        # object.__new__ and never run __init__.
         cache = getattr(self, '_layer_info_cache', None)
         if cache is None: cache = self._layer_info_cache = {}
         if board not in cache:
-            summ = self._worker('summary', '--board', board, '--fast')
+            if summ is None:
+                summ = self._worker('summary', '--board', board, '--fast')
             aliases = summ.get('layer_aliases') or {c.lower(): c for c in (summ.get('copper_layers') or [])}
             cache[board] = {'copper_layers': summ.get('copper_layers') or [], 'layer_aliases': aliases}
         return cache[board]
@@ -456,7 +463,7 @@ class Pipeline:
             self._cost_parse_cache = pairs
         return self._cost_parse_cache
 
-    def _effective_policy(self, board):
+    def _effective_policy(self, board, summ=None):
         # v1.11 (#73): the run's layer law for THIS board after the
         # layer_cost conflict rule -- a priced layer is NOT banned,
         # so costed layers leave the effective ban set. Returns
@@ -465,7 +472,7 @@ class Pipeline:
         # recorded in the ledger ('layer_policy') so a run proves
         # which policy governed it; the un-banning and any dropped
         # cost names are logged once per Pipeline.
-        info = self._layer_info(board)
+        info = self._layer_info(board, summ)
         aliases = info['layer_aliases']
         cost, unknown_costs = resolve_cost_names(self._cost_pairs(), aliases)
         cost_names = {n for n, _f in cost}
@@ -533,7 +540,7 @@ class Pipeline:
         # v1.11 (#73): the census keys off the EFFECTIVE ban set -- a
         # layer_cost-priced layer is not banned, so its tracks are
         # legal here exactly as they are on the engine command line.
-        _banned_names, _cost_pairs, _unknown_bans, _unknown_costs = self._effective_policy(board)
+        _banned_names, _cost_pairs, _unknown_bans, _unknown_costs = self._effective_policy(board, summ)  # v1.11.2 (#101): seed the layer-info cache with the summary above -- no second summary run for this board
         if _unknown_bans: self.log('WARNING: no_tracks_on names not on this board (census ignores them): %s' % _unknown_bans)
         banned_layer_tracks = sum(v for k, v in _tbl.items() if k in _banned_names)
         # v1.5.1: exempt a pour net's tracks on its OWN plane layer(s)
