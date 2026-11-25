@@ -46,7 +46,10 @@ def test_delay_only_failure_requests_meander():
         assert len(meanders) == 1, calls
         assert meanders[0][1] == 'NB', meanders
         add = float(meanders[0][meanders[0].index('--add-mm') + 1])
-        assert abs(add - 8.964) < 0.01, add   # (50-5) ps at NB's 5.02 ps/mm
+        # #152 (B23): the aim is now the band CENTRE, not the edge --
+        # the full 50 ps shortfall at NB's 5.02 ps/mm, less the
+        # 0.01 mm rounding guard (was (50-5)/rate = 8.964 edge aim).
+        assert abs(add - 9.950) < 0.01, add   # 50 ps at NB's 5.02 ps/mm
 
 if __name__ == '__main__':
     test_delay_only_failure_requests_meander(); print('length-match need OK')
