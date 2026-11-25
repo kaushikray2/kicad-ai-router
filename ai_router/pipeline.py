@@ -45,6 +45,60 @@ def resolve_ban_names(raw, aliases):
         elif c not in out: out.append(c)
     return out, unknown
 
+def parse_layer_cost(spec):
+    # v1.11 (#73): the layer_cost config spec, engine syntax:
+    # comma-separated LAYER=FACTOR pairs ('In1.Cu=10,In2.Cu=10'),
+    # factor an integer 1..1000 (1 = normal cost). Returns
+    # (pairs, error): pairs is a list of (name, factor) in spec
+    # order, [] for an empty/off spec; on ANY malformed token the
+    # whole spec is rejected -- (None, reason) -- and the caller
+    # treats layer_cost as off. Partial pricing would silently
+    # misprice a layer the user named, so there is no salvage mode.
+    if spec is None: return [], None
+    spec = str(spec).strip()
+    if not spec: return [], None
+    pairs, seen = [], set()
+    for tok in spec.split(','):
+        tok = tok.strip()
+        if not tok: continue
+        if '=' not in tok:
+            return None, 'token %r is not LAYER=FACTOR' % tok
+        name, _eq, fac = tok.partition('=')
+        name = name.strip(); fac = fac.strip()
+        if not name:
+            return None, 'token %r has an empty layer name' % tok
+        try:
+            f = int(fac)
+        except Exception:
+            return None, 'factor %r for layer %r is not an integer' % (fac, name)
+        if not fac.isdigit() or f < 1 or f > 1000:
+            return None, 'factor %r for layer %r is outside 1..1000' % (fac, name)
+        if name.lower() in seen:
+            return None, 'layer %r is priced twice' % name
+        seen.add(name.lower())
+        pairs.append((name, f))
+    if not pairs:
+        return None, 'spec %r names no layers' % spec
+    return pairs, None
+
+def resolve_cost_names(pairs, aliases):
+    # v1.11 (#73): resolve parsed layer_cost pairs against a board's
+    # alias map, the resolve_ban_names discipline -- canonical name
+    # out, unknown names reported (never silently dropped by this
+    # function; the caller warns and drops). Two spellings of one
+    # canonical layer: the first in spec order wins.
+    out, unknown, seen = [], [], set()
+    for name, fac in pairs or []:
+        c = (aliases or {}).get(str(name).strip().lower())
+        if c is None: unknown.append(name)
+        elif c not in seen:
+            seen.add(c); out.append((c, fac))
+    return out, unknown
+
+def format_layer_cost(pairs):
+    # Canonical spec string for --layer-cost / the ledger.
+    return ','.join('%s=%d' % (n, f) for n, f in pairs or [])
+
 def _accept_key(g):
     # v1.8.2 (#16): step acceptance is lexicographic -- a step is kept
     # only if it is no worse in (copper faults, unconnected items,
@@ -189,6 +243,8 @@ class Pipeline:
                    '--diff-pairs', '--si-rules', '--critical-auto', '--cut-report']
         if banned:
             cmdline += ['--no-tracks-on', ','.join(banned)]
+        _cost = self._layer_cost_spec(inp)  # v1.11 (#73)
+        if _cost: cmdline += ['--layer-cost', _cost]
         cmdline += ['--work', str(work or self.cfg.get('work', 20000000)), '--time', '3600']
         with open(log_path, 'w') as lf:
             p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=3900)
@@ -310,6 +366,8 @@ class Pipeline:
         cmdline = [self.cfg['tracemaker_path'], 'route', self.base, '-o', outp, flag,
                    '--soft-zones', '--keep-vias-off-pads', '--diff-pairs', '--si-rules', '--critical-auto']
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
+        _cost = self._layer_cost_spec(self.base)  # v1.11 (#73)
+        if _cost: cmdline += ['--layer-cost', _cost]
         cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
@@ -386,6 +444,61 @@ class Pipeline:
             cache[board] = {'copper_layers': summ.get('copper_layers') or [], 'layer_aliases': aliases}
         return cache[board]
 
+    def _cost_pairs(self):
+        # v1.11 (#73): parse the configured layer_cost spec ONCE per
+        # Pipeline. A malformed spec warns loudly and prices nothing
+        # -- layer_cost is off, exactly as if unset (never raises).
+        if getattr(self, '_cost_parse_cache', None) is None:
+            pairs, err = parse_layer_cost(self.cfg.get('layer_cost', ''))
+            if err:
+                self.log('WARNING: layer_cost %r is invalid (%s) -- treated as off' % (self.cfg.get('layer_cost'), err))
+                pairs = []
+            self._cost_parse_cache = pairs
+        return self._cost_parse_cache
+
+    def _effective_policy(self, board):
+        # v1.11 (#73): the run's layer law for THIS board after the
+        # layer_cost conflict rule -- a priced layer is NOT banned,
+        # so costed layers leave the effective ban set. Returns
+        # (effective_bans, cost_pairs, unknown_bans, unknown_costs),
+        # canonical names throughout. The first computation is
+        # recorded in the ledger ('layer_policy') so a run proves
+        # which policy governed it; the un-banning and any dropped
+        # cost names are logged once per Pipeline.
+        info = self._layer_info(board)
+        aliases = info['layer_aliases']
+        cost, unknown_costs = resolve_cost_names(self._cost_pairs(), aliases)
+        cost_names = {n for n, _f in cost}
+        raw = [x.strip() for x in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if x.strip()]
+        bans, unknown_bans = resolve_ban_names(raw, aliases)
+        removed = [b for b in bans if b in cost_names]
+        eff = [b for b in bans if b not in cost_names]
+        if removed and not getattr(self, '_cost_unban_logged', False):
+            self._cost_unban_logged = True
+            self.log('layer_cost: %s priced, not banned -- removed from the effective no_tracks_on set (configured bans: %s)' % (', '.join(removed), ','.join(bans) or 'none'))
+        if unknown_costs and not getattr(self, '_cost_unknown_logged', False):
+            self._cost_unknown_logged = True
+            self.log('WARNING: layer_cost names not on this board (dropped): %s (board layers: %s)' % (unknown_costs, info['copper_layers']))
+        if not getattr(self, '_policy_recorded', False):
+            self._policy_recorded = True
+            self._record('layer_policy', {'layer_cost': format_layer_cost(cost),
+                                          'no_tracks_on_effective': eff,
+                                          'no_tracks_on_configured': raw,
+                                          'layer_law_policy': str(self.cfg.get('layer_law_policy', 'auto'))})
+        return eff, cost, unknown_bans, unknown_costs
+
+    def _layer_cost_spec(self, board):
+        # Canonical '--layer-cost' argument for this board ('' = off).
+        return format_layer_cost(self._effective_policy(board)[1])
+
+    def _leg_layer_args(self):
+        # v1.11 (#73): extra worker-leg arguments carrying the run's
+        # layer_cost (board-resolved canonical spec, the same string
+        # the engine receives). [] when off -- leg command lines are
+        # then exactly what they were before the feature.
+        spec = self._layer_cost_spec(self.current)
+        return ['--layer-cost', spec] if spec else []
+
     def _banned_for(self, board):
         # v1.10.1 (#49): the layer law, resolved against THIS board.
         # A name that resolves (board spelling or canonical, any case)
@@ -396,12 +509,11 @@ class Pipeline:
         # warns, never silently dropped. (First cut raised instead of
         # warning; the scratch-backend smoke caught it failing every route on
         # 2-layer boards under the standing config.)
-        info = self._layer_info(board)
-        raw = [x.strip() for x in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if x.strip()]
-        canon, unknown = resolve_ban_names(raw, info['layer_aliases'])
+        eff, _cost, unknown, _unknown_costs = self._effective_policy(board)
         if unknown:
+            info = self._layer_info(board)
             self.log('WARNING: no_tracks_on names not on this board (ban vacuous here): %s (board layers: %s)' % (unknown, info['copper_layers']))
-        return canon
+        return eff
 
     def tool_gate(self, board=None):
         board = board or self.current
@@ -418,8 +530,10 @@ class Pipeline:
         # v1.10.1 (#49): census against the board-resolved canonical
         # names; unknown names warn here (a gate must always measure)
         # -- the route path fails loudly on them via _banned_for.
-        _raw_bans = [x.strip() for x in str(self.cfg.get('no_tracks_on', 'In1.Cu')).split(',') if x.strip()]
-        _banned_names, _unknown_bans = resolve_ban_names(_raw_bans, summ.get('layer_aliases') or {c.lower(): c for c in (summ.get('copper_layers') or [])})
+        # v1.11 (#73): the census keys off the EFFECTIVE ban set -- a
+        # layer_cost-priced layer is not banned, so its tracks are
+        # legal here exactly as they are on the engine command line.
+        _banned_names, _cost_pairs, _unknown_bans, _unknown_costs = self._effective_policy(board)
         if _unknown_bans: self.log('WARNING: no_tracks_on names not on this board (census ignores them): %s' % _unknown_bans)
         banned_layer_tracks = sum(v for k, v in _tbl.items() if k in _banned_names)
         # v1.5.1: exempt a pour net's tracks on its OWN plane layer(s)
@@ -491,6 +605,8 @@ class Pipeline:
                    '--advice', advice, '--soft-zones', '--keep-vias-off-pads',
                    '--diff-pairs', '--si-rules', '--critical-auto', '--cut-report']
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
+        _cost = self._layer_cost_spec(self.current)  # v1.11 (#73)
+        if _cost: cmdline += ['--layer-cost', _cost]
         cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
         log_path = os.path.join(self.workdir, 'tm-rw-%d.log' % self._oseq)
         try:
@@ -534,7 +650,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
         extra = ['--attempt-select'] if self.cfg.get('attempt_select') else []
-        r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *extra)
+        r = self._worker('finish_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *extra, *self._leg_layer_args())
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -556,7 +672,7 @@ class Pipeline:
         outp = self._out('longfinish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
+        r = self._worker('long_leg', '--board', self.current, '--out', outp, '--net', net, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_layer_args())
         if r.get('status') in ('routed', 'already_connected') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -582,7 +698,7 @@ class Pipeline:
         outp = self._out('ilprepair')
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
+        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_layer_args())
         if r.get('routed') and os.path.exists(outp):
             prev = self.current
             self.current = outp
@@ -610,6 +726,7 @@ class Pipeline:
             outp = self._out('healed')
             kb = _accept_key(cur_gate)
             args = ['--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu'))]
+            args += self._leg_layer_args()  # v1.11 (#73): heal routes bridges on the grid
             if net: args += ['--nets', net]
             r = self._worker('heal', *args)
             agg['per_net'][net or '*'] = r.get('status')
