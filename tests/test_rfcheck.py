@@ -162,3 +162,14 @@ def test_loss_and_enig_warnings():
 def test_unrouted_net_is_na():
     out = rfcheck.evaluate_net({}, BASE_CTX, _facts())
     assert len(out) == 1 and out[0]['severity'] == 'na', out
+
+
+def test_isolated_fragment_reported_once():
+    # #95: a two-segment isolated fragment has two dangling ends;
+    # stubs() must report it once, not once per end.
+    segs = [{'layer': 'F.Cu', 'x1': 0, 'y1': 0, 'x2': 5, 'y2': 0, 'w': 0.3, 'len': 5.0},
+            {'layer': 'F.Cu', 'x1': 5, 'y1': 0, 'x2': 5, 'y2': 5, 'w': 0.3, 'len': 5.0}]
+    g = rfcheck.PathGraph(segs, [], [], [])
+    st = g.stubs()
+    assert len(st) == 1, st
+    assert st[0]['kind'] == 'isolated' and abs(st[0]['len'] - 10.0) < 1e-9

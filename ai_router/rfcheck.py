@@ -127,8 +127,21 @@ class PathGraph:
             if eidx in seen:
                 continue
             ln, end, kind = self._walk(node, eidx)
-            # mark every edge of the chain as seen via a light re-walk
+            # mark every edge of the chain as seen (#95: only the
+            # first edge was marked, so a multi-segment isolated
+            # fragment was walked and reported again from its other
+            # dangling end).  Re-traverse with _walk's own rules.
             seen.add(eidx)
+            _prev, _cur = eidx, self._other(eidx, node)
+            for _ in range(100000):
+                if self.is_junction(_cur):
+                    break
+                _nxt = [i for i in self.adj[_cur]
+                        if i != _prev and self.edges[i][3] in ('seg', 'arc')]
+                if len(_nxt) != 1:
+                    break
+                seen.add(_nxt[0])
+                _prev, _cur = _nxt[0], self._other(_nxt[0], _cur)
             out.append({'len': ln, 'at': (node[0], node[1]), 'layer': node[2],
                         'kind': 'isolated' if kind == 'dangling' else 'stub'})
         return out
