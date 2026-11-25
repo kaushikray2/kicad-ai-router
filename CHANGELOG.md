@@ -8,441 +8,7 @@ in-house board" are to a 4-layer board developed alongside the router; its
 design files are not part of this repository. Corpus boards (PCBench,
 open-schematics) are named as published by their authors.
 
-# AI Router — KiCad plugin
-
-Routes a board from inside KiCad using the measured hybrid procedure:
-an LLM (any OpenAI-compatible endpoint) makes **strategy** decisions only,
-while deterministic tools do all geometry — TraceMaker for full-board
-passes, a scripted grid-A* finisher for stuck legs, a connectivity-probe
-stitcher for GND pour islands, and `kicad-cli` DRC as the only gate.
-
-This is the pipeline validated by hand on the in-house board (Rev K → K2 → K3
-→ in-place finish: 0 unconnected), packaged as a plugin. The LLM never
-emits coordinates or traces; every effective experiment showed that path
-is a dead end, and every fix moved the design back toward this split.
-
-## Install
-
-Copy the `ai_router/` folder into KiCad's scripting plugins directory:
-
-    ~/.local/share/kicad/10.0/scripting/plugins/ai_router/
-
-Restart KiCad (or refresh external plugins). The plugin appears as
-**AI Router (LLM orchestrator)** with a toolbar button.
-
-## Use
-
-1. Open the board in Pcbnew, save it, launch the plugin.
-2. Configure: endpoint, model, API key (if the endpoint needs one),
-   TraceMaker binary path, mode, max passes, banned layers.
-   Defaults point at the home large backend host llama.cpp server
-   (`http://backend host:8080/v1`, `qwen3-coder-30b`).
-3. Run. The plugin works on **copies** in an `ai-route-<timestamp>/`
-   folder next to your board — your open board is never modified.
-   A `ledger.json` in that folder records every step.
-4. When it finishes, "Open result board" loads `final.kicad_pcb`.
-
-## Modes
-
-- **llm** — the model drives the tool loop under a written playbook
-  (orient → route with protected first-nets → gate → promote casualties →
-  finish stuck legs in place → stitch pour islands → done). If the
-  endpoint errors, the run falls back to AUTO for the remainder.
-- **auto** — the same playbook as deterministic rules, no model needed.
-
-Endpoints without native tool calling are handled by a JSON-action
-fallback parser (the model answers with `{"tool": ..., "args": ...}`).
-
-## Tools the orchestrator can call
-
-| tool | what it does |
-|---|---|
-| `board_summary` | nets, pad counts, split nets via KiCad connectivity |
-| `scorecard` | worst decoupling caps by distance to nearest same-net pad |
-| `route` | one TraceMaker pass (layer law enforced by `--no-tracks-on`) |
-| `gate` | `kicad-cli pcb drc --refill-zones`; unconnected decomposed into pour vs signal |
-| `finish_leg` | grid-A* finisher for one net; single-net displacement + re-bridge when blocked; planner clearance = board rule + margin |
-| `stitch_gnd` | probes every GND pad's connectivity cluster; one stitch via per floating island, verified by re-probe |
-| `done` | end the run |
-
-## Rules baked in (measured, not guessed)
-
-- **Refill before every save.** Zone fills are stored polygons; any layout
-  change leaves them stale and the GUI shows pours flowing over new
-  traces. Strip, every route pass, and finalize all refill first.
-- **Layer law by construction:** In1.Cu (GND plane) is never routed;
-  In2.Cu (power plane) banned by default (configurable).
-- **First-net protection does not bind between first nets** — a protected
-  net can still be ripped by another protected net; that is what
-  `finish_leg` exists for.
-- **Pour items ≠ signal failures.** Judge a pass by split signal nets;
-  pour fragmentation is closed at the end by stitching.
-- The gate (KiCad DRC after refill) is the only verdict — never the
-  router's own counts.
-
-## Honest limits
-
-- TraceMaker is a heuristic search: identical inputs vary run to run
-  (measured 5–9 unconnected across equivalent passes). The triage loop +
-  finisher absorb that variance; a single pass guarantees nothing.
-- A 30B local model's judgment is the weak link. The deterministic tools
-  carry correctness; AUTO mode is the safety net and the baseline.
-- `finish_leg` handles one missing leg of one net per call and displaces
-  at most one net. Boards needing multi-net surgery still need a human.
-
-## Field test results (2026-11-21, in-house board, dev host + large backend host)
-
-- **AUTO mode, full run:** 4 passes with casualty promotion -- pass 4
-  routed every signal net; stitch closed 4 of 5 pour islands.
-  Final gate: **1 unconnected (one GND pour item at Q1.1), 61 violations**
-  (Rev H hand-finished: 0/58). Q1.1 is a 0.65 mm-pitch SOT-23-6 GND pad
-  in a moated sliver -- no legal 0.6/0.3 via exists inside its island at
-  either planning (0.23) or exact-rule (0.205) clearance. The plugin
-  reports the exact pad; a human drops that via in seconds. A
-  track-bridge fallback for such pads is future work.
-- **LLM mode (qwen3-coder-30b), full run:** tool-calling mechanics work
-  end to end. The model followed the playbook's opening, then improvised
-  (incremental passes, plane nets in first_nets -- both against advice,
-  though the run still converged to 2 unconnected). Its `finish_leg`
-  call on MCU_LORA_MISO was exactly right; the finisher's original
-  cost-only victim choice was not (it displaced V_BAT+ and broke it).
-  Fixes shipped the same night: victim scoring (signal nets first,
-  wide/power nets heavily penalised) and a **self-verification rollback**
-  -- after any displacement the finisher re-checks both nets'
-  connectivity and refuses to save a board that got worse, reporting
-  `rolled_back` instead. Verified on the same board: victim became a
-  signal net, the target connected, the bridge failed, and the tool
-  rolled back cleanly rather than saving damage.
-- **Trust the gate printout, not the model's prose.** In the LLM test
-  the model's `done` note claimed success while the gate showed
-  3 unconnected / 80 violations. The dialog always displays the real
-  final gate numbers; the model's note is commentary.
-- One refill-patch bug (a missing function definition) was caught by
-  the LLM test, not by AUTO: route now treats refill as best-effort
-  and continues with a warning if it ever fails again.
-
-## Corpus benchmark — PCBench / PCBWorld D3 boards (2026-11-21)
-
-Corpus: PCBench collection (github.com/PCBench/PCBench, 1,182 boards) run through
-LG PCBWorld's own prep chain (convert_v9 -> drc_fix_v9 -> guide -> sort) under
-KiCad 10: 1,169 converted, and a size-stratified 117-board subset put through the
-DRC filter yielded 59 boards (the full chain at LG's pass rate implies the same
-~679-board D3 set). Benchmark sample: 24 boards stratified by pin count
-(6..653 pins, 3..89 nets, 22x 2-layer + 2x 4-layer), AUTO mode, work in
-`bench/`, raw results in `bench-results.jsonl` (harness: `bench.py`, `bench_one.py`).
-
-Result: **23 of 24 boards fully routed** (0 unconnected, 0 split nets at the
-gate). Across those 23 boards the final DRC reports 1,328 violations of which
-exactly **one is a copper clearance violation** (kitspace_CH330) — everything
-else is silkscreen/text/footprint-library classes inherited from the source
-boards. Typical runtime 30-45 s per board.
-
-The one failure is the largest board by far: kitspace_tri_panel_4up_r0.1
-(653 pins, 89 nets, 157 components, 4-layer). Four passes improved steadily
-(102 -> 74 -> 70 -> 62 unconnected) but plateaued; finish_leg found no legal
-paths at that congestion. The fresh-pass playbook converges when the failing
-set is small; at this scale it needs iterated from_current routing or a
-stronger finisher. Final: 62 unconnected / 40 split nets, 18 min.
-
-Bugs the benchmark found and fixed (all were invisible on the in-house board):
-1. Worker results are now returned via a result file + `AIR_RESULT` sentinel —
-   SWIG leak warnings can flood/interleave stdout on some boards and corrupt
-   the old last-line JSON protocol.
-2. `cmd_strip` snapshots `GetTracks()` once and pops — re-querying after a
-   `Remove()` raises `TypeError: 'SwigPyObject' object is not iterable`
-   inside KiCad 10's pcbnew shim.
-3. `--no-tracks-on` is omitted when the ban list is empty and filtered to the
-   board's actual layers — TraceMaker rejects `""` and unknown layer names.
-4. Gate pour/signal classifier now handles quoted zone names.
-5. `cmd_stitch` generalises over every pour net (any net with zones) instead
-   of hard-coding `GND`, and is a no-op on zone-less boards. Verified
-   behaviour-identical on the in-house board test board.
-6. AUTO keeps the best pass by gate, not the last (passes can regress at
-   scale: 72 -> 137 observed), and finish/stitch/route failures degrade to a
-   final gate instead of killing the run.
-7. `first_nets` is capped at 64 — TraceMaker rejects longer advice lists,
-   which AUTO's failing-net promotion can exceed on many-net boards.
-
-## in-house board regression + pour-net fix (2026-11-21, later)
-
-Re-running AUTO on the in-house board unrouted base exposed two regressions vs the test1
-result (1 unconnected / 61), both root-caused and fixed the same day:
-
-1. **Strip refill fragmented the pours.** The refill-before-every-save patch had
-   also been applied to the strip step, so TraceMaker received a base whose
-   pours were fully refilled. A/B on identical advice: strip-refilled base ->
-   pass 1 gate 22 unconnected (21 pour, MCU_LORA_DIO1 split, finisher no_path);
-   raw base -> pass 1 gate 5 unconnected (5 pour, ZERO split nets). Fix:
-   cmd_strip no longer refills (internal intermediate; refill stays at the
-   gate via kicad-cli and at finalize for user-facing saves).
-2. **Gate could not tell pour nets from signal nets.** split_nets excluded only
-   a hard-coded 'GND', so a split 3V3 plane was treated as a failing signal
-   net: AUTO promoted it into first_nets and burned passes that could never
-   fix a pour island. Fix: worker summary now reports pour_nets from pcbnew
-   (verified ['3V3','GND'] on the in-house board); the gate carries them; AUTO promotes
-   and finish_legs only signal nets and sends pour-only splits straight to
-   stitch. (A first fix attempt via a board-file regex silently never matched
-   - caught by the gate reporting pour_nets [] - and was replaced by the
-   worker approach.)
-
-Full-run outcome with the pre-fix code (two independent runs - headless bench
-and the owner's own GUI run from KiCad - identical): passes plateau 22 ->
-finish_leg DIO1 no_path -> stitch 14 clusters (8 pads have no legal stitch
-via: U4.2, U2.4, Q1.1, C12.2, R18.2, C5.2, C11.2, U3.2) -> final 7 unconnected
-/ 65 violations. Also noted: stitch costs ~11 min CPU on this board (profile
-in v1.1); the benchmark harness probe had its own bug (layer names vs
-canonical names on renamed-layer boards) - fixed positionally.
-
-## Packaging build — PCM + Docker backend (2026-11-21)
-
-Implements PACKAGING-PLAN.md (cold-reviewed, filed in Paperless).
-
-- **Backend service** (`docker/server.py`, stdlib only): async job queue
-  (concurrency 1, subprocess per job), `GET /health` handshake (backend
-  version, kicad-cli version, TraceMaker versions, config schema),
-  `POST/GET /api/runs`, cancel, result download, submit dedupe,
-  retention pruning, interrupted-state recovery on restart.
-- **Security (v1, per the review)**: bearer token generated at first
-  start + Host-header allowlist. Verified live: no-auth -> 401,
-  spoofed Host -> 403, API key never returned by config reads.
-- **Config page** (`docker/config_page.html`, served by the backend):
-  LLM endpoint/model, write-only API key with an explicit clear control,
-  routing defaults, TraceMaker manager, self-test panel, job list.
-  One JSON config on the bind-mounted data dir; atomic writes;
-  `schema_version` with backup-on-migrate.
-- **TraceMaker on the volume**: versioned folders, bootstrap/update from
-  a configured URL (compose env `TRACEMAKER_URL`), smoke test
-  (`tracemaker version`), TOFU sha256 recorded per version and enforced,
-  per-run resolution to the versioned absolute path, recorded in the
-  job record. Verified host + container: identical sha256
-  `8e8efd53…` for the 0.12.1 test archive.
-- **Image** (`docker/Dockerfile`): Ubuntu 24.04, KiCad pinned
-  `10.0.8~ubuntu24.04.1` from the 10.0 PPA (footprints + symbols, no
-  3D/demos/docs), python3-numpy (worker.py needs it — first container
-  run caught its absence; host runs never noticed). Image size 1.98 GB.
-  Compose (`docker/docker-compose.yaml`): localhost bind, TZ, CPU cap,
-  `../data` bind mount.
-- **Self-test**: in-house board base + hbridge-driver + mapone corpus boards
-  baked into the image (`docker/selftest/`); baselines recorded to the
-  data volume; the config page shows PASS / DRIFT per board.
-- **Plugin**: backend attach mode added alongside local mode (checkbox,
-  URL, token; health readout; submit/poll/download; result saved as
-  `<board>-backend.kicad_pcb`; "Backend config page" button). Local
-  mode untouched — the keep/delete-fallback decision is still open.
-- **PCM**: `build_package.py` produces `pcm/ai-router-1.0.0.zip`
-  (metadata with no `download_*` keys, 134-char description) and
-  regenerates `pcm-repo/` (packages.json + repository.json + zip) on
-  every build. Simulated PCM install into the 3rdparty layout imports
-  and registers identically to the scripting install. PCM acceptance
-  of the plain-http LAN repo URL is still unverified against a real
-  PCM client.
-
-### Results + bug 8 (2026-11-21, later)
-
-- Native backend, in-house board job over HTTP: pass 1 gate 5/0, final **1
-  unconnected (pour) / 0 split / 62 violations**; the downloaded result
-  board re-gated independently with kicad-cli: identical numbers.
-- Container backend, in-house board job: passes 9 -> 5 -> 9 -> 9 (variant luck),
-  best-pass retention restored the 5, finish_leg MOSI rolled back by
-  its own verification; final **5 unconnected / 2 split**.
-- **Bug 8 — the layer ban broke every board without inner layers.**
-  The backend always passes the configured `--no-tracks-on
-  In1.Cu,In2.Cu`; TraceMaker rejects ban names that are not copper
-  layers of the board (`error: --no-tracks-on: "In1.Cu" is not a
-  copper layer of this board (F.Cu, B.Cu)`), so 2-layer boards failed
-  every route pass and AUTO finished from the stripped base (hbridge
-  57 unconnected, mapone 85). The pipeline's layer filter never
-  engaged: the worker summary returned no layer list at all (the host
-  bench never noticed — its harness computed the ban per board).
-  Fix: the worker summary now returns `copper_layers` (the canonical
-  stack from `GetCopperLayerCount()` — correct even when a board
-  renames its inner layers, e.g. the in-house board's GND/3V3), and
-  `tool_route` intersects the configured ban with it. Verified:
-  hbridge and mapone now route **0 / 0** in the container, matching
-  the host bench exactly; the in-house board keeps its full ban.
-- Container passes are slower than host passes (~15 min vs ~4-10 for
-  the in-house board under the 3-CPU cap, TraceMaker variant racing).
-- Self-test baselines recorded from the fixed stack (2026-11-21):
-  hbridge {0 unconnected, 0 split}, mapone {0, 0}, in-house board {5, 2}.
-  Verification re-run: both corpus boards reproduced 0/0 (PASS).
-  Verification re-run verdicts: hbridge PASS, mapone PASS, in-house board
-  DRIFT — re-run landed 6 unconnected / 2 split / 91 violations vs
-  the {5, 2} baseline on a byte-identical stack. That is the board's
-  known run-to-run variance (three identical-stack container runs
-  today: 5/65, 5/65, 6/91; casualty rotation in the SPI cluster),
-  not a regression: the detector flags movement, a human judges it.
-  A tolerance band for variance-prone baselines is a v1.1 candidate.
-
-### large backend host deployment (2026-11-21)
-
-The same image now also runs on the large backend host G9 (backend host):
-`~/workspace/ai-router/` (root compose file, data in-folder, LAN
-port 8731, `cpus: 64`), a config twin of the dev host instance
-(same token, same TraceMaker 0.12.1 TOFU record).
-
-- **Deployment gotcha:** the Host allowlist cannot see the host's
-  LAN IP from inside a container (it detects the bridge IP), so a
-  LAN client was rejected (403, surfacing as a broken pipe on large
-  uploads) until `backend host` was added to `allowed_hosts` in
-  the large backend host copy's config. Any future LAN deployment needs its
-  host IP (or name) in `allowed_hosts`.
-- in-house board AUTO job over the LAN: **5 unconnected / 2 split / 65** —
-  identical final to the dev host container run, in ~21 min total
-  (~5-7 min/pass) vs ~15 min/pass under the dev host's 3-CPU cap.
-  TraceMaker's portfolio is 8 threads regardless of the cap, so
-  extra cores buy an unthrottled variant race (~3x here), not
-  linear scaling; the remaining headroom would suit parallel jobs
-  (the queue is serial today).
-
-## v1.1 (2026-11-21) — In2 routing, finisher v2, fault-verified finishes
-
-Owner directive: let TraceMaker route on the 3V3 plane layer too
-("allow the usage of 3rd power layer"), and optimise the algorithm
-"to be able to cover the whole board". Validated change list (two
-proposals were rejected on evidence: iterated from-current routing
-— incremental passes box the router in, measured on K3/J+K — and
-stitch profiling with no measured hotspot).
-
-- **Layer law:** default ban is now In1.Cu only (was In1+In2). The
-  3V3 plane (In2.Cu) is routable; per-run override still available.
-- **finish_leg v2:** pad-cluster to pad-cluster re-bridging (up to
-  4 bridges per displaced victim; v1 bridged one stub pair), bridge
-  window ±6 → ±12 mm, multi-round re-planning (a net in 3+
-  fragments gets one leg per fragment pair), victim pairs, and a
-  per-attempt child process (repeated load/mutate cycles in one
-  process corrupt pcbnew state — measured). The v1-rollback leg
-  (MOSI displacing NSS) now routes.
-- **Finisher safety, three measured root causes fixed:** (1) the
-  grid was blind to rule areas — legs crossed the GNSS_RF_KEEPOUT
-  (26 items_not_allowed in one run); rule areas are now stamped as
-  hard obstacles with their DoNotAllow tracks/vias flags; (2)
-  free_disc cleared via_block at endpoint pads, letting leg vias
-  land inside clearance of foreign copper on every layer (one via
-  pierced an In2 track: a dead short) — via_block is never cleared
-  at pads now; (3) inner-layer tracks are stamped into via_block
-  so F/B vias cannot pierce them.
-- **Gate-verified finish (pipeline):** finish_leg self-verifies
-  connectivity only, so the pipeline now gates before/after every
-  finish and reverts any finish that increases the count of
-  shorting_items + clearance + items_not_allowed. A short is worse
-  than a split net; v1.1 finals never add copper faults.
-- **AUTO:** pour-net finish before stitch; stitch runs whenever
-  pour items exist (v1.0 required ALL split nets to be pour nets);
-  plateau early-break (identical unconnected + failing-signal set
-  twice → finishing); first_nets drops <2-pad pseudo-nets; prune
-  step (dead-island removal, self-verified) after stitch.
-- **Backend:** worker pool (config max_concurrent_jobs, large backend host=4);
-  self-test verdict uses a tolerance band (config
-  selftest_tolerance, default +2 unconnected / +0 split) — strict
-  equality was the wrong test for a nondeterministic router
-  (identical stack reproduced in-house board at 5/65, 5/65, 6/91).
-- **Deployment gotcha (fixed in config, kept here as a warning):**
-  the backend Host allowlist auto-detects only the container
-  bridge IP; LAN clients were 403'd (surfacing as broken pipes on
-  large uploads) until the host's LAN IP + hostname were added to
-  allowed_hosts.
-
-### Final A/B measurement (in-house board, AUTO, large backend host, independently re-gated)
-
-| run | law | unconnected | violations | copper+keepout faults |
-|---|---|---|---|---|
-| v1.0 (large backend host) | In2 banned | 5 | 65 | possible (unverified finishes) |
-| A2 | In2 allowed | 3 (all 3V3 plane fragments) | 63 | **0** |
-| B2 | In2 banned | 2 (MISO leg, MOSI stub) | 65 | **0** |
-
-With In2 allowed, pass 1 routes all 159 signal connections (92
-segments land on the 3V3 layer; B.Cu use collapses ~270 → ~67),
-but the plane itself fragments and its last fragment (the J1.1
-cluster) resists clean finishing. With In2 banned the plane stays
-intact and the residuals are the two hardest signal legs in the
-SPI cluster. Neither law reaches 0 unconnected on this board yet;
-what v1.1 guarantees is that the finishing machinery no longer
-trades connectivity for shorts — every finish is gate-verified.
-PCM 1.1.0 zip sha256 959e9fb87bd1cc5b…
-
-## v1.2 (2026-11-21) — corpus grid, chooser verdict, plane-fragment healer
-
-**Corpus grid (regression + strategy dataset in one run).** All 59
-PCBench corpus boards routed on the large backend host backend under the shipped
-layer law (variant A), plus the In2-banned law (variant B) on the
-four 4-layer boards: 63 jobs. Variant A fully routed **55 of 59**
-boards; excluding the tri_panel outlier (84 unconnected — a routing-
-capacity problem), the other 58 boards carry just 9 stranded
-connections (srambo 6, DSKY 2, CH330 1 — all signal nets; every pour
-net on the corpus closes). Dataset: `dataset-v1/dataset.jsonl`
-(board features × strategy → gate outcome), extracted from run data
-on disk. One incident on the way: the backend retention policy
-(keep 20 runs) silently deleted the first ~32 grid runs' data;
-keep_runs is now 500 on all live configs (code default 200) and the
-pruned jobs were resubmitted — never treat job submission as data
-persistence.
-
-**Strategy chooser: measured gap is zero; shelved pending a data
-decision.** Step zero of the research plan (seeded in the Papers KB:
-algorithm selection beats RL at this scale) is measuring the
-oracle-vs-best-fixed-strategy gap before training anything. On the
-layer-law axis the gap is **0** — variant A matches or beats B on
-every board where both ran, so a chooser would only learn the
-current default. The other axes (first_nets ordering, pass policy)
-have no dataset yet; generating one is a ~320-run expansion grid.
-That is an owner decision, not an engineering default.
-
-**Plane-fragment healer (`heal`).** New worker command + pipeline
-tool + AUTO step after stitch. It rejoins split pour-net fragments
-that the older tools structurally cannot see: stitch only heals
-floating clusters with no vias/TH pads, and finish_leg plans
-pad-to-pad with displacement — the in-house board's 3V3 fragments each carry
-vias and stub tracks. Method: bridges between the nearest copper
-points (pads, vias, track ends) of a minority component and the
-main component, planned on the finish grid; if the fragment's pads
-sit in a copper pocket on both outer layers, a **via hunt** samples
-legal via sites inside the fragment's plane-layer island (its own
-filled zone polygon on an inner layer) and plans from there. Every
-bridge is verified twice: connectivity must improve, and an
-exact-geometry check of just the new items against all foreign
-copper (0.20 mm rule, keepout discs, via-crowding) must pass — a
-bridge that would add a clearance fault is rejected in the worker,
-not merely gate-reverted afterwards. Measured on the preserved A2
-fixture (`dataset-v1/fixtures/in-house-a2-3v3-split.kicad_pcb`): of
-3V3's 3 minority fragments, 2 close cleanly (gate stays at the
-baseline 63 violations, zero new faults); the last fragment (J1.1)
-stays open — its only legal via sites sit
-inside the same B.Cu pocket and its keepout-adjacent site fails the
-disc test, so it needs displacement or a manual via. Both backends'
-self-tests PASS on 1.2.0, with the in-house board self-test at
-**1 unconnected / 1 split** on both (best yet). PCM 1.2.0 zip
-sha256 8f4eb55ac34c7eee…
-
-## v1.3.0 (2026-11-21)
-
-v3 phase (a) plus the correctness cluster (Y1-Y4) from the third
-implementation review. Phase (a): the finisher grid is N-layer --
-layer indices are stack positions from a new copper_stack() helper
-(KiCad numbers copper out of stack order: F=0, B=2, In1=4, In2=6),
-tracks on every copper layer are stamped, A* vias transition to any
-routable layer (In1.Cu stays banned by the standing layer law),
-victim deletion/re-bridging and the exact checker work per stack
-layer, and heal can launch from inner-layer track endpoints. Also:
-Grid keepouts now include FOOTPRINT-embedded rule areas (the J1
-keepout lives inside the J1 footprint; the planner, hunt and checker
-were all blind to it -- a hunt via landed 0.015 mm from its edge).
-Y1: hole-aware containment (SHAPE_POLY_SET.Contains) in
-_island_polys, _via_hunt (candidates + no-via areas) and
-_bridge_island goals. Y2: _via_hunt restores the shared blocked /
-via_block snapshots between candidates (free_disc mutation leaked
-across candidates). Y3: _bridge_island plans at the drawn width
-(the net's class width), exact-checks the bridge before committing,
-and uses the correct stack index for B.Cu pads (phase (a) had left
-it planning on In1.Cu's plane). Y4: real via radii in _finish_attempt
-rip-up tests and cmd_stitch (which now places the net's class via);
-_via_hunt clearance uses grid.clr_plan instead of a literal 0.23.
-Measured: DSKY 2, srambo_1 6, tri_panel 84 unconnected, copper
-identical to v1.2.5 on all four boards; the in-house board AUTO gate (1 /
-62 / copper 15: hole/edge/thermal classes present from the first
-TraceMaker pass) is unchanged -- an apparent in-house board copper
-regression during development was a phantom baseline (v1.2.5
-control run reproduced the identical 15). Fixtures: heal bridges
-2, finish /RAM_A14 rolled back, stitch clean no-op.
+Entries below are in a single descending order, newest first (the pre-version dated records from 2026-11-21 close the file).  The README-style sections that used to sit here (Install / Use / Modes / Honest limits) moved to the README appendix on 2026-11-25 (#149 D10).
 
 ## License change -- 2026-11-24
 
@@ -1075,6 +641,38 @@ path within the search cap. Fixtures: heal bridges 2 (unchanged),
 stitch clean no-op, finish /RAM_A14 rolls back cleanly with
 planning at 34 s (was ~47 s; P1 + scoping).
 
+## v1.3.0 (2026-11-21)
+
+v3 phase (a) plus the correctness cluster (Y1-Y4) from the third
+implementation review. Phase (a): the finisher grid is N-layer --
+layer indices are stack positions from a new copper_stack() helper
+(KiCad numbers copper out of stack order: F=0, B=2, In1=4, In2=6),
+tracks on every copper layer are stamped, A* vias transition to any
+routable layer (In1.Cu stays banned by the standing layer law),
+victim deletion/re-bridging and the exact checker work per stack
+layer, and heal can launch from inner-layer track endpoints. Also:
+Grid keepouts now include FOOTPRINT-embedded rule areas (the J1
+keepout lives inside the J1 footprint; the planner, hunt and checker
+were all blind to it -- a hunt via landed 0.015 mm from its edge).
+Y1: hole-aware containment (SHAPE_POLY_SET.Contains) in
+_island_polys, _via_hunt (candidates + no-via areas) and
+_bridge_island goals. Y2: _via_hunt restores the shared blocked /
+via_block snapshots between candidates (free_disc mutation leaked
+across candidates). Y3: _bridge_island plans at the drawn width
+(the net's class width), exact-checks the bridge before committing,
+and uses the correct stack index for B.Cu pads (phase (a) had left
+it planning on In1.Cu's plane). Y4: real via radii in _finish_attempt
+rip-up tests and cmd_stitch (which now places the net's class via);
+_via_hunt clearance uses grid.clr_plan instead of a literal 0.23.
+Measured: DSKY 2, srambo_1 6, tri_panel 84 unconnected, copper
+identical to v1.2.5 on all four boards; the in-house board AUTO gate (1 /
+62 / copper 15: hole/edge/thermal classes present from the first
+TraceMaker pass) is unchanged -- an apparent in-house board copper
+regression during development was a phantom baseline (v1.2.5
+control run reproduced the identical 15). Fixtures: heal bridges
+2, finish /RAM_A14 rolled back, stitch clean no-op.
+
+
 ## v1.2.5 (2026-11-21) -- the third review's four fixes
 
 A third external audit (of v1.2.3/v1.2.4) found the exact checkers had
@@ -1194,3 +792,328 @@ proposal: no LG fork — its transferable ideas land here instead.
 - Still open from the v1.2 list: displacement-assisted healing for
   pocket/sliver fragments (J1.1, Q1.1); iterated from-current
   routing for tri_panel-class boards.
+## v1.2 (2026-11-21) — corpus grid, chooser verdict, plane-fragment healer
+
+**Corpus grid (regression + strategy dataset in one run).** All 59
+PCBench corpus boards routed on the large backend host backend under the shipped
+layer law (variant A), plus the In2-banned law (variant B) on the
+four 4-layer boards: 63 jobs. Variant A fully routed **55 of 59**
+boards; excluding the tri_panel outlier (84 unconnected — a routing-
+capacity problem), the other 58 boards carry just 9 stranded
+connections (srambo 6, DSKY 2, CH330 1 — all signal nets; every pour
+net on the corpus closes). Dataset: `dataset-v1/dataset.jsonl`
+(board features × strategy → gate outcome), extracted from run data
+on disk. One incident on the way: the backend retention policy
+(keep 20 runs) silently deleted the first ~32 grid runs' data;
+keep_runs is now 500 on all live configs (code default 200) and the
+pruned jobs were resubmitted — never treat job submission as data
+persistence.
+
+**Strategy chooser: measured gap is zero; shelved pending a data
+decision.** Step zero of the research plan (seeded in the Papers KB:
+algorithm selection beats RL at this scale) is measuring the
+oracle-vs-best-fixed-strategy gap before training anything. On the
+layer-law axis the gap is **0** — variant A matches or beats B on
+every board where both ran, so a chooser would only learn the
+current default. The other axes (first_nets ordering, pass policy)
+have no dataset yet; generating one is a ~320-run expansion grid.
+That is an owner decision, not an engineering default.
+
+**Plane-fragment healer (`heal`).** New worker command + pipeline
+tool + AUTO step after stitch. It rejoins split pour-net fragments
+that the older tools structurally cannot see: stitch only heals
+floating clusters with no vias/TH pads, and finish_leg plans
+pad-to-pad with displacement — the in-house board's 3V3 fragments each carry
+vias and stub tracks. Method: bridges between the nearest copper
+points (pads, vias, track ends) of a minority component and the
+main component, planned on the finish grid; if the fragment's pads
+sit in a copper pocket on both outer layers, a **via hunt** samples
+legal via sites inside the fragment's plane-layer island (its own
+filled zone polygon on an inner layer) and plans from there. Every
+bridge is verified twice: connectivity must improve, and an
+exact-geometry check of just the new items against all foreign
+copper (0.20 mm rule, keepout discs, via-crowding) must pass — a
+bridge that would add a clearance fault is rejected in the worker,
+not merely gate-reverted afterwards. Measured on the preserved A2
+fixture (`dataset-v1/fixtures/in-house-a2-3v3-split.kicad_pcb`): of
+3V3's 3 minority fragments, 2 close cleanly (gate stays at the
+baseline 63 violations, zero new faults); the last fragment (J1.1)
+stays open — its only legal via sites sit
+inside the same B.Cu pocket and its keepout-adjacent site fails the
+disc test, so it needs displacement or a manual via. Both backends'
+self-tests PASS on 1.2.0, with the in-house board self-test at
+**1 unconnected / 1 split** on both (best yet). PCM 1.2.0 zip
+sha256 8f4eb55ac34c7eee…
+
+
+## v1.1 (2026-11-21) — In2 routing, finisher v2, fault-verified finishes
+
+Owner directive: let TraceMaker route on the 3V3 plane layer too
+("allow the usage of 3rd power layer"), and optimise the algorithm
+"to be able to cover the whole board". Validated change list (two
+proposals were rejected on evidence: iterated from-current routing
+— incremental passes box the router in, measured on K3/J+K — and
+stitch profiling with no measured hotspot).
+
+- **Layer law:** default ban is now In1.Cu only (was In1+In2). The
+  3V3 plane (In2.Cu) is routable; per-run override still available.
+- **finish_leg v2:** pad-cluster to pad-cluster re-bridging (up to
+  4 bridges per displaced victim; v1 bridged one stub pair), bridge
+  window ±6 → ±12 mm, multi-round re-planning (a net in 3+
+  fragments gets one leg per fragment pair), victim pairs, and a
+  per-attempt child process (repeated load/mutate cycles in one
+  process corrupt pcbnew state — measured). The v1-rollback leg
+  (MOSI displacing NSS) now routes.
+- **Finisher safety, three measured root causes fixed:** (1) the
+  grid was blind to rule areas — legs crossed the GNSS_RF_KEEPOUT
+  (26 items_not_allowed in one run); rule areas are now stamped as
+  hard obstacles with their DoNotAllow tracks/vias flags; (2)
+  free_disc cleared via_block at endpoint pads, letting leg vias
+  land inside clearance of foreign copper on every layer (one via
+  pierced an In2 track: a dead short) — via_block is never cleared
+  at pads now; (3) inner-layer tracks are stamped into via_block
+  so F/B vias cannot pierce them.
+- **Gate-verified finish (pipeline):** finish_leg self-verifies
+  connectivity only, so the pipeline now gates before/after every
+  finish and reverts any finish that increases the count of
+  shorting_items + clearance + items_not_allowed. A short is worse
+  than a split net; v1.1 finals never add copper faults.
+- **AUTO:** pour-net finish before stitch; stitch runs whenever
+  pour items exist (v1.0 required ALL split nets to be pour nets);
+  plateau early-break (identical unconnected + failing-signal set
+  twice → finishing); first_nets drops <2-pad pseudo-nets; prune
+  step (dead-island removal, self-verified) after stitch.
+- **Backend:** worker pool (config max_concurrent_jobs, large backend host=4);
+  self-test verdict uses a tolerance band (config
+  selftest_tolerance, default +2 unconnected / +0 split) — strict
+  equality was the wrong test for a nondeterministic router
+  (identical stack reproduced in-house board at 5/65, 5/65, 6/91).
+- **Deployment gotcha (fixed in config, kept here as a warning):**
+  the backend Host allowlist auto-detects only the container
+  bridge IP; LAN clients were 403'd (surfacing as broken pipes on
+  large uploads) until the host's LAN IP + hostname were added to
+  allowed_hosts.
+
+### Final A/B measurement (in-house board, AUTO, large backend host, independently re-gated)
+
+| run | law | unconnected | violations | copper+keepout faults |
+|---|---|---|---|---|
+| v1.0 (large backend host) | In2 banned | 5 | 65 | possible (unverified finishes) |
+| A2 | In2 allowed | 3 (all 3V3 plane fragments) | 63 | **0** |
+| B2 | In2 banned | 2 (MISO leg, MOSI stub) | 65 | **0** |
+
+With In2 allowed, pass 1 routes all 159 signal connections (92
+segments land on the 3V3 layer; B.Cu use collapses ~270 → ~67),
+but the plane itself fragments and its last fragment (the J1.1
+cluster) resists clean finishing. With In2 banned the plane stays
+intact and the residuals are the two hardest signal legs in the
+SPI cluster. Neither law reaches 0 unconnected on this board yet;
+what v1.1 guarantees is that the finishing machinery no longer
+trades connectivity for shorts — every finish is gate-verified.
+PCM 1.1.0 zip sha256 959e9fb87bd1cc5b…
+
+
+## Field test results (2026-11-21, in-house board, dev host + large backend host)
+
+- **AUTO mode, full run:** 4 passes with casualty promotion -- pass 4
+  routed every signal net; stitch closed 4 of 5 pour islands.
+  Final gate: **1 unconnected (one GND pour item at Q1.1), 61 violations**
+  (Rev H hand-finished: 0/58). Q1.1 is a 0.65 mm-pitch SOT-23-6 GND pad
+  in a moated sliver -- no legal 0.6/0.3 via exists inside its island at
+  either planning (0.23) or exact-rule (0.205) clearance. The plugin
+  reports the exact pad; a human drops that via in seconds. A
+  track-bridge fallback for such pads is future work.
+- **LLM mode (qwen3-coder-30b), full run:** tool-calling mechanics work
+  end to end. The model followed the playbook's opening, then improvised
+  (incremental passes, plane nets in first_nets -- both against advice,
+  though the run still converged to 2 unconnected). Its `finish_leg`
+  call on MCU_LORA_MISO was exactly right; the finisher's original
+  cost-only victim choice was not (it displaced V_BAT+ and broke it).
+  Fixes shipped the same night: victim scoring (signal nets first,
+  wide/power nets heavily penalised) and a **self-verification rollback**
+  -- after any displacement the finisher re-checks both nets'
+  connectivity and refuses to save a board that got worse, reporting
+  `rolled_back` instead. Verified on the same board: victim became a
+  signal net, the target connected, the bridge failed, and the tool
+  rolled back cleanly rather than saving damage.
+- **Trust the gate printout, not the model's prose.** In the LLM test
+  the model's `done` note claimed success while the gate showed
+  3 unconnected / 80 violations. The dialog always displays the real
+  final gate numbers; the model's note is commentary.
+- One refill-patch bug (a missing function definition) was caught by
+  the LLM test, not by AUTO: route now treats refill as best-effort
+  and continues with a warning if it ever fails again.
+
+## Corpus benchmark — PCBench / PCBWorld D3 boards (2026-11-21)
+
+Corpus: PCBench collection (github.com/PCBench/PCBench, 1,182 boards) run through
+LG PCBWorld's own prep chain (convert_v9 -> drc_fix_v9 -> guide -> sort) under
+KiCad 10: 1,169 converted, and a size-stratified 117-board subset put through the
+DRC filter yielded 59 boards (the full chain at LG's pass rate implies the same
+~679-board D3 set). Benchmark sample: 24 boards stratified by pin count
+(6..653 pins, 3..89 nets, 22x 2-layer + 2x 4-layer), AUTO mode, work in
+`bench/`, raw results in `bench-results.jsonl` (harness: `bench.py`, `bench_one.py`).
+
+Result: **23 of 24 boards fully routed** (0 unconnected, 0 split nets at the
+gate). Across those 23 boards the final DRC reports 1,328 violations of which
+exactly **one is a copper clearance violation** (kitspace_CH330) — everything
+else is silkscreen/text/footprint-library classes inherited from the source
+boards. Typical runtime 30-45 s per board.
+
+The one failure is the largest board by far: kitspace_tri_panel_4up_r0.1
+(653 pins, 89 nets, 157 components, 4-layer). Four passes improved steadily
+(102 -> 74 -> 70 -> 62 unconnected) but plateaued; finish_leg found no legal
+paths at that congestion. The fresh-pass playbook converges when the failing
+set is small; at this scale it needs iterated from_current routing or a
+stronger finisher. Final: 62 unconnected / 40 split nets, 18 min.
+
+Bugs the benchmark found and fixed (all were invisible on the in-house board):
+1. Worker results are now returned via a result file + `AIR_RESULT` sentinel —
+   SWIG leak warnings can flood/interleave stdout on some boards and corrupt
+   the old last-line JSON protocol.
+2. `cmd_strip` snapshots `GetTracks()` once and pops — re-querying after a
+   `Remove()` raises `TypeError: 'SwigPyObject' object is not iterable`
+   inside KiCad 10's pcbnew shim.
+3. `--no-tracks-on` is omitted when the ban list is empty and filtered to the
+   board's actual layers — TraceMaker rejects `""` and unknown layer names.
+4. Gate pour/signal classifier now handles quoted zone names.
+5. `cmd_stitch` generalises over every pour net (any net with zones) instead
+   of hard-coding `GND`, and is a no-op on zone-less boards. Verified
+   behaviour-identical on the in-house board test board.
+6. AUTO keeps the best pass by gate, not the last (passes can regress at
+   scale: 72 -> 137 observed), and finish/stitch/route failures degrade to a
+   final gate instead of killing the run.
+7. `first_nets` is capped at 64 — TraceMaker rejects longer advice lists,
+   which AUTO's failing-net promotion can exceed on many-net boards.
+
+## in-house board regression + pour-net fix (2026-11-21, later)
+
+Re-running AUTO on the in-house board unrouted base exposed two regressions vs the test1
+result (1 unconnected / 61), both root-caused and fixed the same day:
+
+1. **Strip refill fragmented the pours.** The refill-before-every-save patch had
+   also been applied to the strip step, so TraceMaker received a base whose
+   pours were fully refilled. A/B on identical advice: strip-refilled base ->
+   pass 1 gate 22 unconnected (21 pour, MCU_LORA_DIO1 split, finisher no_path);
+   raw base -> pass 1 gate 5 unconnected (5 pour, ZERO split nets). Fix:
+   cmd_strip no longer refills (internal intermediate; refill stays at the
+   gate via kicad-cli and at finalize for user-facing saves).
+2. **Gate could not tell pour nets from signal nets.** split_nets excluded only
+   a hard-coded 'GND', so a split 3V3 plane was treated as a failing signal
+   net: AUTO promoted it into first_nets and burned passes that could never
+   fix a pour island. Fix: worker summary now reports pour_nets from pcbnew
+   (verified ['3V3','GND'] on the in-house board); the gate carries them; AUTO promotes
+   and finish_legs only signal nets and sends pour-only splits straight to
+   stitch. (A first fix attempt via a board-file regex silently never matched
+   - caught by the gate reporting pour_nets [] - and was replaced by the
+   worker approach.)
+
+Full-run outcome with the pre-fix code (two independent runs - headless bench
+and the owner's own GUI run from KiCad - identical): passes plateau 22 ->
+finish_leg DIO1 no_path -> stitch 14 clusters (8 pads have no legal stitch
+via: U4.2, U2.4, Q1.1, C12.2, R18.2, C5.2, C11.2, U3.2) -> final 7 unconnected
+/ 65 violations. Also noted: stitch costs ~11 min CPU on this board (profile
+in v1.1); the benchmark harness probe had its own bug (layer names vs
+canonical names on renamed-layer boards) - fixed positionally.
+
+## Packaging build — PCM + Docker backend (2026-11-21)
+
+Implements PACKAGING-PLAN.md (cold-reviewed, filed in Paperless).
+
+- **Backend service** (`docker/server.py`, stdlib only): async job queue
+  (concurrency 1, subprocess per job), `GET /health` handshake (backend
+  version, kicad-cli version, TraceMaker versions, config schema),
+  `POST/GET /api/runs`, cancel, result download, submit dedupe,
+  retention pruning, interrupted-state recovery on restart.
+- **Security (v1, per the review)**: bearer token generated at first
+  start + Host-header allowlist. Verified live: no-auth -> 401,
+  spoofed Host -> 403, API key never returned by config reads.
+- **Config page** (`docker/config_page.html`, served by the backend):
+  LLM endpoint/model, write-only API key with an explicit clear control,
+  routing defaults, TraceMaker manager, self-test panel, job list.
+  One JSON config on the bind-mounted data dir; atomic writes;
+  `schema_version` with backup-on-migrate.
+- **TraceMaker on the volume**: versioned folders, bootstrap/update from
+  a configured URL (compose env `TRACEMAKER_URL`), smoke test
+  (`tracemaker version`), TOFU sha256 recorded per version and enforced,
+  per-run resolution to the versioned absolute path, recorded in the
+  job record. Verified host + container: identical sha256
+  `8e8efd53…` for the 0.12.1 test archive.
+- **Image** (`docker/Dockerfile`): Ubuntu 24.04, KiCad pinned
+  `10.0.8~ubuntu24.04.1` from the 10.0 PPA (footprints + symbols, no
+  3D/demos/docs), python3-numpy (worker.py needs it — first container
+  run caught its absence; host runs never noticed). Image size 1.98 GB.
+  Compose (`docker/docker-compose.yaml`): localhost bind, TZ, CPU cap,
+  `../data` bind mount.
+- **Self-test**: in-house board base + hbridge-driver + mapone corpus boards
+  baked into the image (`docker/selftest/`); baselines recorded to the
+  data volume; the config page shows PASS / DRIFT per board.
+- **Plugin**: backend attach mode added alongside local mode (checkbox,
+  URL, token; health readout; submit/poll/download; result saved as
+  `<board>-backend.kicad_pcb`; "Backend config page" button). Local
+  mode untouched — the keep/delete-fallback decision is still open.
+- **PCM**: `build_package.py` produces `pcm/ai-router-1.0.0.zip`
+  (metadata with no `download_*` keys, 134-char description) and
+  regenerates `pcm-repo/` (packages.json + repository.json + zip) on
+  every build. Simulated PCM install into the 3rdparty layout imports
+  and registers identically to the scripting install. PCM acceptance
+  of the plain-http LAN repo URL is still unverified against a real
+  PCM client.
+
+### Results + bug 8 (2026-11-21, later)
+
+- Native backend, in-house board job over HTTP: pass 1 gate 5/0, final **1
+  unconnected (pour) / 0 split / 62 violations**; the downloaded result
+  board re-gated independently with kicad-cli: identical numbers.
+- Container backend, in-house board job: passes 9 -> 5 -> 9 -> 9 (variant luck),
+  best-pass retention restored the 5, finish_leg MOSI rolled back by
+  its own verification; final **5 unconnected / 2 split**.
+- **Bug 8 — the layer ban broke every board without inner layers.**
+  The backend always passes the configured `--no-tracks-on
+  In1.Cu,In2.Cu`; TraceMaker rejects ban names that are not copper
+  layers of the board (`error: --no-tracks-on: "In1.Cu" is not a
+  copper layer of this board (F.Cu, B.Cu)`), so 2-layer boards failed
+  every route pass and AUTO finished from the stripped base (hbridge
+  57 unconnected, mapone 85). The pipeline's layer filter never
+  engaged: the worker summary returned no layer list at all (the host
+  bench never noticed — its harness computed the ban per board).
+  Fix: the worker summary now returns `copper_layers` (the canonical
+  stack from `GetCopperLayerCount()` — correct even when a board
+  renames its inner layers, e.g. the in-house board's GND/3V3), and
+  `tool_route` intersects the configured ban with it. Verified:
+  hbridge and mapone now route **0 / 0** in the container, matching
+  the host bench exactly; the in-house board keeps its full ban.
+- Container passes are slower than host passes (~15 min vs ~4-10 for
+  the in-house board under the 3-CPU cap, TraceMaker variant racing).
+- Self-test baselines recorded from the fixed stack (2026-11-21):
+  hbridge {0 unconnected, 0 split}, mapone {0, 0}, in-house board {5, 2}.
+  Verification re-run: both corpus boards reproduced 0/0 (PASS).
+  Verification re-run verdicts: hbridge PASS, mapone PASS, in-house board
+  DRIFT — re-run landed 6 unconnected / 2 split / 91 violations vs
+  the {5, 2} baseline on a byte-identical stack. That is the board's
+  known run-to-run variance (three identical-stack container runs
+  today: 5/65, 5/65, 6/91; casualty rotation in the SPI cluster),
+  not a regression: the detector flags movement, a human judges it.
+  A tolerance band for variance-prone baselines is a v1.1 candidate.
+
+### large backend host deployment (2026-11-21)
+
+The same image now also runs on the large backend host G9 (backend host):
+`~/workspace/ai-router/` (root compose file, data in-folder, LAN
+port 8731, `cpus: 64`), a config twin of the dev host instance
+(same token, same TraceMaker 0.12.1 TOFU record).
+
+- **Deployment gotcha:** the Host allowlist cannot see the host's
+  LAN IP from inside a container (it detects the bridge IP), so a
+  LAN client was rejected (403, surfacing as a broken pipe on large
+  uploads) until `backend host` was added to `allowed_hosts` in
+  the large backend host copy's config. Any future LAN deployment needs its
+  host IP (or name) in `allowed_hosts`.
+- in-house board AUTO job over the LAN: **5 unconnected / 2 split / 65** —
+  identical final to the dev host container run, in ~21 min total
+  (~5-7 min/pass) vs ~15 min/pass under the dev host's 3-CPU cap.
+  TraceMaker's portfolio is 8 threads regardless of the cap, so
+  extra cores buy an unthrottled variant race (~3x here), not
+  linear scaling; the remaining headroom would suit parallel jobs
+  (the queue is serial today).
+
