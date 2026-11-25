@@ -43,89 +43,54 @@ Only the gate's result matters.
 
 ## What it can do
 
-### Full-board routing
+### Multi-engine portfolio and full-board passes
 
-For complete routing passes the system uses
-[TraceMaker](https://github.com/DingoOz/TraceMaker) together with a set of routing policies.
+Full-board routing runs in `AUTO` mode (the default, measured path):
 
-Examples include:
+- **Engine portfolio (`engine_portfolio`):** Before standard passes, candidate routes from stripped base can run across TraceMaker variants (`tm_relax` enabled by default; `tm_global`, `tm_escape` opt-in) as well as bundled **Freerouting 2.5** and **KiCadRoutingTools (KRT)** in the Docker backend. Candidates are judged faults-first by the gate so high-violation routes never win on connectivity alone.
+- **Layer law and graded layer pricing (`no_tracks_on`, `layer_cost`, `layer_law_policy`):** Inner reference/power planes can be hard-banned (`no_tracks_on`), automatically escalated from plane-protected to open when signal nets stay split (`layer_law_policy=auto`), or priced per cell (`layer_cost`, e.g. `In1.Cu=10,In2.Cu=10`) so inner layers are used only when outer detours are worse.
+- **Iterative triage passes:** Up to `max_passes` TraceMaker passes promote failing signal nets (or priority pairs/corridors) and retain the best pass on connectivity, split count, DRC faults, and cost-weighted wirelength.
 
-- Custom net ordering
-- Layer restrictions
-- Protecting solid plane layers
-- Keeping pours on preferred layers
-- Different routing strategies depending on board topology
+### Post-pass routing repair
 
-### Routing repair
+When full-board passes leave split nets or isolated pour islands, deterministic repair stages run in sequence:
 
-No autorouter finishes everything.
+- **Local and board-scale finishing (`finish_leg`, `long_finish`, `ilp_repair`):** 3D grid A* finishing (respecting configured bans and layer costs), single- and cut-set victim displacement with re-bridging, and large-window hard-A* paths for distant fragments.
+- **Pour stitching and plane healing (`stitch`, `heal`, `prune`):** Via stitching and short track bridges for floating pour pads, additive bridges (with island via-hunting) for split power/ground planes, dead-copper pruning, and a post-prune pour pass.
+- **Windowed engine re-route (`reroute_window`, opt-in):** Locks copper outside a stuck connection's corridor (preserving user-locked tracks by UUID), lets TraceMaker `--reroute` rip and re-route the window, and accepts the trade under a configurable key (`connectivity` or `faults`).
 
-When routing passes leave behind disconnected nets or broken geometry, the repair pipeline takes over.
+Finisher, stitch, and heal additions are checked before commit against exact clearance, keepout, drill (`hole_clearance` / `hole_to_hole`), and `Edge.Cuts` geometry, and every pipeline step is gated by `kicad-cli` DRC plus the banned-layer track census (reverting steps that degrade the stage's acceptance key).
 
-Current repair tools include:
+### AUTO mode vs. LLM mode
 
-- Grid A* finishing
-- Multi-victim displacement
-- Re-bridging
-- Large-window fragment repair
-- Plane fragment healing
-- Pour stitching
+- **AUTO mode (default):** Deterministic strategy and repair sequence, no LLM required. All published benchmarks and backend self-tests run in `AUTO` mode.
+- **LLM mode (experimental):** Any OpenAI-compatible endpoint drives the `v1.8` tool loop (`route`, `gate`, `finish_leg`, `long_finish`, `ilp_repair`, `stitch_gnd`, `heal`, `prune`) without emitting geometry. Newer `v1.9+` stages (`portfolio`, `reroute_window`, `layer_law_policy`) run in `AUTO` mode only; on endpoint error, `LLM` mode falls back to `AUTO`.
 
-Every repair operation is verified independently. If a repair fixes one problem but creates another, it is rolled back automatically.
+### Automated tests and self-tests
 
-### Measurement and verification
-
-Every run produces metrics including:
-
-- Signal split nets
-- Pour split nets
-- Via count
-- Total wire length
-- Per-layer track census
-
-The layer census exists because DRC alone can miss certain situations, such as tracks crossing areas that should remain exclusive to power planes.
-
-### AI mode or non-AI mode
-
-The project can run in two ways:
-
-#### AUTO mode
-
-No LLM required.
-
-The built-in strategy engine chooses routing actions using deterministic logic.
-
-#### LLM mode
-
-Any OpenAI-compatible endpoint can be used.
-
-The model never generates geometry.
-
-It only decides which routing tools should be attempted and in what order.
+- Unit and pcbnew fixture tests in `tests/`, run in GitHub Actions CI inside the KiCad 10 backend image on every push (skipping `pcbnew`-dependent fixtures cleanly outside KiCad).
+- Built-in end-to-end backend self-tests (`docker/selftest/`, triggered via the web UI or `POST /api/selftest/run`).
 
 ---
 
 ## Results
 
-The numbers below come from real measured runs.
+All measurements below were run in deterministic `AUTO` mode (`strip_existing=true`) and verified with `kicad-cli` DRC plus the pipeline's connectivity and banned-layer census.
 
-### PCBench corpus
+### Early PCBench sample (`v1.6`–`v1.7`, pre-portfolio baseline)
 
-- 59-board corpus
-- On a 24-board sample, 23 boards finished fully routed
-- Only a single copper-clearance violation was observed across those 23 completed boards
+- 24-board development sample drawn from the 59-board PCBench corpus (`AUTO` mode, default `In1.Cu` ban): **23 of 24** boards routed to 0 unconnected items, with 1 router-added copper-clearance violation across the 23 completed boards.
 
-### dataset-v3
+### `dataset-v3` corpus (`v1.8`, layer-law ablation)
 
-- 139 difficult public boards
-- 432 measured backend runs
+- **139** public KiCad boards (`dataset-v3/` manifests and submission drivers committed in-repo; **432** backend runs across policy arms).
+- On completed boards: median wirelength **0.83×** the original human-routed board; via count typically **1.0×–1.1×**.
+- Key finding: net-ordering heuristics (`first_nets_policy`, `pass_advice`) had negligible effect, whereas layer-law selection (`layer_law_policy=auto`, Variant B-first with Variant A escalation on ≥4-layer pour boards) closed most of the 44-connection single-policy vs. oracle gap on the 54 multilayer boards.
 
-For boards that completed successfully:
+### Tiered benchmark & `P2.0` fault census (`v1.9.5`–`v1.9.6`)
 
-- Median wire length was **0.83×** the original human-routed design
-- Via count was typically **1.0× to 1.1×** the original design
-
-One of the more surprising findings was that net-ordering strategies had little measurable impact, while layer-law policies had a significant effect on final results.
+- Decomposing **60** production run ledgers at three gates (`base` → `routed` → `final`) showed **0 net router-added copper DRC violations** on completed bench boards — the raw copper violations (416 across 43 boards, led by `solder_mask_bridge` and `copper_edge_clearance`) were already present in the unrouted input placements.
+- Scored against each board's own stripped input (`CP_delta`: 0 unconnected, 0 splits, and no increase in DRC faults over base), completion stands at **1.00 (easy)**, **1.00 (medium)**, and **0.90 (hard)**. *(The standalone tier-sweep harness with hash-cached prepared inputs is tracked for commit under `#62`.)*
 
 ### Known limitation
 
