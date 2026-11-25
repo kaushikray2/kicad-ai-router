@@ -10,9 +10,9 @@ try:
 except ImportError:
     from llm_client import LLMClient, LLMError
 try:
-    from .pipeline import Pipeline, fault_count
+    from .pipeline import Pipeline, fault_count, parse_layer_cost
 except ImportError:
-    from pipeline import Pipeline, fault_count
+    from pipeline import Pipeline, fault_count, parse_layer_cost
 try:
     from config import DEFAULTS as _CFG_DEFAULTS
 except Exception:
@@ -172,6 +172,16 @@ def run_auto(cfg, pipe, log):
     # escalating on 21 of 54 boards. An explicit non-default law or
     # layer_law_policy='off' disables it.
     _law_raw = [x.strip() for x in str(cfg.get('no_tracks_on') or 'In1.Cu').split(',') if x.strip()]  # v1.9 (M4): set compare -- the old string equality misread 'In1.Cu ' / spacing variants as a non-default law and skipped the policy
+    # v1.11 (#73): an explicit layer_cost disables the policy, the
+    # same precedent as an explicit non-default no_tracks_on -- the
+    # user has priced the layers themselves, so the run must not
+    # silently re-ban one of them as a 'variant'. An invalid spec is
+    # treated as off by the pipeline, so it does not disable
+    # anything here either.
+    _cost_pairs, _cost_err = parse_layer_cost(cfg.get('layer_cost', ''))
+    if _cost_pairs:
+        log('Layer-law policy: explicit layer_cost (%s) -- auto escalation disabled' % cfg.get('layer_cost'))
+        return _run_auto_once(cfg, pipe, log)
     _law = set(_law_raw); _summ0 = None
     if cfg.get('layer_law_policy', 'auto') == 'auto':
         # v1.10.1 (#49): resolve the law against the board's own layer
