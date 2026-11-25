@@ -70,6 +70,16 @@ b2 = mk_board(with_track=True)
 items, mm, per = w.skeleton_intrusions(b2)
 check('crossing track intrudes', items >= 1 and mm > 0 and per.get('GND', 0) >= 1)
 
+# --- skeleton cache freshness (#161) ------------------------------------
+# Landed vias of a zone net are MST nodes, so a via added after the
+# first computation must produce a fresh skeleton containing it --
+# the old cache key (zones + footprints only) served the stale one.
+b3 = mk_board()
+sk1 = w.pour_skeletons(b3)
+w.add_via(b3, b3.GetNetsByName(), 'GND', 30, 25, 0.6, 0.3)
+sk2 = w.pour_skeletons(b3)
+check('skeleton cache: a landed via becomes a node (#161)', sk2 is not sk1 and any(abs(px - 30) < 0.01 and abs(py - 25) < 0.01 for s in sk2 for (px, py) in s['pads']))
+
 # --- Grid stamp -------------------------------------------------------
 w.SKELETON_ON = True
 g = w.Grid(mk_board(), (5, 55, 5, 45))
