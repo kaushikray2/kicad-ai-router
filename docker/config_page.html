@@ -34,6 +34,7 @@ code{background:#eef;padding:.1em .35em;border-radius:4px}
   <div><label>Max passes</label><input type="number" id="rt_passes" min="1" max="8"></div>
   <div><label>Work budget</label><input type="number" id="rt_work" step="1000000"></div></div>
   <label>Never route tracks on layers (comma list)</label><input type="text" id="rt_ban">
+  <label>Layer costs (LAYER=FACTOR, comma list, e.g. In1.Cu=10,In2.Cu=10; blank = off)</label><input type="text" id="rt_cost">
   <label style="display:inline"><input type="checkbox" id="rt_strip" style="width:auto"> Strip existing routing first</label><br>
   <button onclick="saveConfig()">Save settings</button><div class="msg" id="cfgmsg"></div>
   <h2>TraceMaker</h2>
@@ -73,6 +74,7 @@ async function loadAll(){
     document.getElementById('rt_passes').value=c.routing.max_passes||4;
     document.getElementById('rt_work').value=c.routing.work||20000000;
     document.getElementById('rt_ban').value=c.routing.no_tracks_on||'';
+    document.getElementById('rt_cost').value=c.routing.layer_cost||'';
     document.getElementById('rt_strip').checked=!!c.routing.strip_existing;
     tmLoad(); stLoad(); jobsLoad();
   }catch(e){}
@@ -82,6 +84,7 @@ async function saveConfig(){
     api_key:document.getElementById('llm_key').value, clear_api_key:document.getElementById('llm_clear').checked},
     routing:{mode:document.getElementById('rt_mode').value, max_passes:parseInt(document.getElementById('rt_passes').value),
     work:parseInt(document.getElementById('rt_work').value), no_tracks_on:document.getElementById('rt_ban').value,
+    layer_cost:document.getElementById('rt_cost').value,
     strip_existing:document.getElementById('rt_strip').checked}};
   const r = await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){ msg('cfgmsg','Saved.',true); document.getElementById('llm_key').value=''; document.getElementById('llm_clear').checked=false; loadAll(); }
