@@ -2,7 +2,7 @@
 
 Developed by [SiliconBrane Inc](https://www.siliconbrane.com).
 
-![version](https://img.shields.io/badge/version-v1.10.2-blue) ![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
+![version](https://img.shields.io/badge/version-v1.11.3-blue) ![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 
 A KiCad 10 plugin + routing backend that finishes PCB layouts with
 deterministic tools under an exact-geometry gate -- and, optionally, an LLM
