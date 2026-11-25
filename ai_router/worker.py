@@ -1470,6 +1470,18 @@ def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None):
             holes_all.append(_h)
             if net is not None and p.GetNetname() == net: continue
             holes.append(_h)
+    # #113 (residual of #107): existing VIA drills are drills too --
+    # the #75 checker counts them (adrills/fdrills scan GetTracks),
+    # but this stamp never saw them, so a via could be planned
+    # inside hole_to_hole of an existing via drill and the finished
+    # leg was vetoed.  Same split as pads: every via drill into
+    # holes_all, foreign ones into holes.
+    for t in b.GetTracks():
+        if t.Type() != pcbnew.PCB_VIA_T: continue
+        _h = (mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2)
+        holes_all.append(_h)
+        if net is not None and t.GetNetname() == net: continue
+        holes.append(_h)
     band_t = np.zeros((g.NY, g.NX), dtype=bool); band_v = np.zeros((g.NY, g.NX), dtype=bool)
     for (cx, cy, dr) in holes:
         stamp_disc(cx, cy, dr + hole_clr + tw / 2, band_t)
