@@ -194,6 +194,27 @@ repository (extra schema_version/url/kicad_version fields, no
 packages.update_time_utc); the generator and the served file
 are aligned (owner re-add confirmation outstanding).
 
+### Off-plan -- PCM discovery fix and repo tidy, v1.11.6 (2026-11-25)
+
+#156: the PCM zip nested the plugin at plugins/ai_router/ with
+no plugins/__init__.py, and KiCad's loader skips package
+directories without one ('Skip subdir') -- PCM installs were
+never discovered (owner hit this on Windows: package installed,
+no toolbar button after a full restart, manual import OK).
+build_package.py now writes a PCM entry point at
+plugins/__init__.py importing the bundled ai_router package;
+proven with KiCad's own pcbnew LoadPlugins on the extracted
+install layout (1.11.5 layout skipped, 1.11.6 registers),
+regression test tests/test_pcm_entrypoint.py. #157: the legacy
+pcm/ folder and superseded pcm-repo/ zips (1.7.0-1.11.5) are
+retired from the tree -- archived with a sha256 manifest
+first; build_package.py builds the canonical zip into
+pcm-repo/ (pcm/ remains, gitignored, as build output).
+README carries the verified Windows install notes (Documents
+3rdparty location, full-restart requirement, console
+diagnostic, config path, the 1.11.5 scripting/plugins
+workaround).
+
 ## In progress
 
 - **P2.1b** (below) is next up, with #63 as its first step. Phase 2E

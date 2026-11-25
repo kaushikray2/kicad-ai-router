@@ -2,7 +2,7 @@
 
 Developed by [SiliconBrane Inc](https://www.siliconbrane.com)
 
-![version](https://img.shields.io/badge/version-v1.11.5-blue)
+![version](https://img.shields.io/badge/version-v1.11.6-blue)
 ![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 
 KiCad AI Router is a routing and routing-repair system for KiCad 10.
@@ -164,7 +164,7 @@ or download the package zip from this repository and install it
 from the Plugin and Content Manager via "Install from File...":
 
 ```
-pcm-repo/ai-router-1.11.5.zip
+pcm-repo/ai-router-1.11.6.zip
 ```
 
 Configure the backend connection in:
@@ -172,6 +172,31 @@ Configure the backend connection in:
 ```
 ~/.config/ai_router/config.json
 ```
+
+#### Windows notes
+
+- The PCM installs the package under your **Documents** folder:
+  `Documents\KiCad\10.0\3rdparty\plugins\ca_siliconbrane_ai-router\`
+  (the package folder is the package identifier with dots replaced
+  by underscores).
+- After installing or updating, **fully restart KiCad** -- the
+  toolbar button and the Tools -> External Plugins entry appear
+  only once the PCB Editor has restarted and re-scanned its
+  plugins.
+- Button still missing? Open the Python Console
+  (Tools -> Scripting Console) in the PCB Editor and run
+  `import ai_router`. If registration failed, the console shows
+  `ai_router: plugin not registered (...)` -- the text in
+  brackets names the module that failed to load.
+- The configuration file on Windows is
+  `%USERPROFILE%\.config\ai_router\config.json`.
+- **v1.11.5 and earlier:** the PCM package was built without the
+  entry point KiCad's plugin loader looks for, so a PCM install
+  was never discovered (fixed in v1.11.6 -- update if you can).
+  If you are stuck on 1.11.5, copy the `ai_router` folder from
+  the installed package (path above) into
+  `Documents\KiCad\10.0\scripting\plugins\ai_router\` and
+  restart KiCad; remove that copy once you update past 1.11.5.
 
 ---
 
