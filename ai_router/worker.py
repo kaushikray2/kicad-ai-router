@@ -3185,7 +3185,16 @@ def cmd_rfgeom(board_path, spec):
                                  'ref_layer': ref_layer, 'h_mm': h}
                 # foreign tracks on the reference layer inside the band
                 for t in all_tracks:
-                    if t.GetNetname() == net or lid2canon.get(t.GetLayer()) != ref_layer:
+                    if t.GetNetname() == net:
+                        continue
+                    if t.Type() == pcbnew.PCB_VIA_T:
+                        # #91: GetLayer() reports a via's top layer
+                        # (F_Cu for a through via) -- test the layers
+                        # it actually spans, or GATE-11 never sees
+                        # vias on inner reference layers.
+                        if ref_layer not in [lid2canon.get(l) for l in t.GetLayerSet().CuStack()]:
+                            continue
+                    elif lid2canon.get(t.GetLayer()) != ref_layer:
                         continue
                     if t.Type() == pcbnew.PCB_VIA_T:
                         vx, vy = mm(t.GetPosition().x), mm(t.GetPosition().y)
