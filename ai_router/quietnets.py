@@ -28,6 +28,12 @@ PROFILES = {
 }
 _DEFAULT = {'isolation_mm': 1.0, 'land_keepout': False,
             'load_cap_return': False, 'allow_nets': []}
+# #147 (B22): ground is a SET of nets, not the literal 'GND' -- the
+# common names below, plus any net the board pours (zones), plus a
+# per-entry "ground_nets" list.  Boards naming ground AGND, VSS or
+# /GND previously had their own ground copper reported as an
+# intrusion and every ground-dependent check silently no-oped.
+DEFAULT_GROUND_NAMES = ('GND', 'AGND', 'DGND', 'VSS', '/GND')
 LAND_MARGIN_MM = 0.5      # stated: land-pattern keepout margin
 CAP_RETURN_VIA_MM = 2.0   # stated: cap ground via search radius
 
@@ -50,6 +56,7 @@ def resolve(entry):
         if n not in allow:
             allow.append(n)
     out['allow_nets'] = allow
+    out['ground_nets'] = list(entry.get('ground_nets') or [])
     out['guard_net'] = entry.get('guard_net')
     out['name'] = entry.get('name') or entry.get('net') or entry.get('ref')
     return out
@@ -92,20 +99,40 @@ def evaluate(entry, board):
     layers = board['layers']
     lidx = {l: i for i, l in enumerate(layers)}
     pads = board['pads']
+    pour_nets = {n for (n, _l) in board['zones']}
+    ground = (set(cfg['ground_nets']) | set(DEFAULT_GROUND_NAMES)
+              | pour_nets)
+    power_nets = set(board.get('power_nets') or [])
     if entry.get('ref'):
         own_pads = [p for p in pads if p['ref'] == entry['ref']]
-        own_nets = sorted({p['net'] for p in own_pads if p['net']})
+        # #147 (B22): only the component's SIGNAL nets are quiet.
+        # Ground, supply (power-section) and explicitly allowed nets
+        # are excluded -- previously EVERY net on the part was quiet,
+        # so the board's whole ground pour copper became a quiet
+        # zone and any foreign track near any of it was an intrusion.
+        own_nets = sorted({p['net'] for p in own_pads if p['net']}
+                          - ground - power_nets - set(cfg['allow_nets']))
     else:
         own_pads = [p for p in pads if p['net'] == entry.get('net')]
         own_nets = [entry['net']]
     own = set(own_nets)
-    allowed = own | set(cfg['allow_nets'])
+    allowed = own | set(cfg['allow_nets']) | ground
     if cfg['guard_net']:
         allowed.add(cfg['guard_net'])
     quiet_items = []   # (layer, item)
+    # #147 (B22): for a component entry the quiet zone is the part's
+    # neighbourhood -- copper of the signal nets within isolation +
+    # land margin of the part's pads -- not those nets board-wide.
+    region = None
+    if entry.get('ref') and own_pads:
+        region = [min(p['x'] for p in own_pads), min(p['y'] for p in own_pads),
+                  max(p['x'] for p in own_pads), max(p['y'] for p in own_pads)]
     for n in own_nets:
         for layer in layers:
             for it in board['items'].get((n, layer), []):
+                if region is not None and not _seg_hits_rect(
+                        it, region, iso + LAND_MARGIN_MM):
+                    continue
                 quiet_items.append((layer, it))
     intrusions = []
     seen = set()
@@ -148,12 +175,11 @@ def evaluate(entry, board):
                         add('land_pattern', net, layer, (cx, cy), 0.0)
     # load-cap ground return (crystal profile)
     caps = []
+    findings = []
     if cfg['load_cap_return'] and entry.get('ref'):
-        gnd = 'GND'
-        # load caps hang on the SIGNAL nets; the component's own
-        # ground pad makes GND an own net too, and ground-only
-        # parts (net-ties) must not be mistaken for caps
-        signal_own = own - {gnd}
+        # load caps hang on the SIGNAL nets (own is signal-only now);
+        # ground-only parts (net-ties) must not be mistaken for caps
+        signal_own = own
         by_ref = {}
         for p in pads:
             by_ref.setdefault(p['ref'], []).append(p)
@@ -161,26 +187,33 @@ def evaluate(entry, board):
             if ref == entry['ref']:
                 continue
             nets_here = {p['net'] for p in ps}
-            if not (nets_here & signal_own) or gnd not in nets_here:
+            gnds_here = nets_here & ground
+            if not (nets_here & signal_own) or not gnds_here:
                 continue
             ok = False
             for p in ps:
-                if p['net'] != gnd:
+                if p['net'] not in gnds_here:
                     continue
                 for v in board['vias']:
-                    if v['net'] == gnd and math.hypot(
+                    if v['net'] == p['net'] and math.hypot(
                             v['x'] - p['x'], v['y'] - p['y']) <= CAP_RETURN_VIA_MM:
                         ok = True
                 for layer in p.get('layers') or []:
-                    for poly in board['zones'].get((gnd, layer), []):
+                    for poly in board['zones'].get((p['net'], layer), []):
                         if _H._point_in_poly(p['x'], p['y'], poly):
                             ok = True
             caps.append({'ref': ref, 'ground_return': ok})
+        if not caps:
+            # #147 (B22): a crystal-profile entry whose load caps
+            # cannot be found has NOT been checked -- that is a
+            # finding, not a pass.
+            findings.append({'kind': 'no_load_caps_found',
+                             'entry': cfg['name']})
     # guard continuity: tied at >= 2 distinct locations (#67 rule)
     guard = None
     if cfg['guard_net']:
         g = cfg['guard_net']
-        anchor = 'GND'
+        anchor = ground
         # Ties are component-level: a footprint carrying both the
         # guard net and the anchor net (net-tie, 0-ohm, or the
         # guarded component's own ground pin).  A guard-net via
@@ -191,17 +224,17 @@ def evaluate(entry, board):
         for p in pads:
             by_ref.setdefault(p['ref'], set()).add(p['net'])
         for p in pads:
-            if p['net'] == g and anchor in by_ref.get(p['ref'], set()):
+            if p['net'] == g and (by_ref.get(p['ref'], set()) & anchor):
                 ties.append((p['x'], p['y']))
         distinct = []
         for t in ties:
             if all(math.hypot(t[0] - u[0], t[1] - u[1]) > 1.0
                    for u in distinct):
                 distinct.append(t)
-        guard = {'net': g, 'anchor': anchor, 'ties': len(distinct),
+        guard = {'net': g, 'anchor': sorted(anchor), 'ties': len(distinct),
                  'ok': len(distinct) >= 2,
                  'rule': 'a guard counts only if tied at both ends'}
-    ok = not intrusions
+    ok = not intrusions and not findings
     if guard is not None and not guard['ok']:
         ok = False
     if any(not c['ground_return'] for c in caps):
@@ -210,5 +243,7 @@ def evaluate(entry, board):
             'isolation_mm': iso,
             'isolation_source': cfg['isolation_source'],
             'allow_nets': cfg['allow_nets'], 'own_nets': own_nets,
+            'ground_nets': sorted(ground),
             'intrusions': intrusions, 'load_caps': caps,
+            'findings': findings,
             'guard': guard, 'pass': ok}

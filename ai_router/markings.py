@@ -294,6 +294,11 @@ def _check_quiet_entry(entry, idx):
                                          for n in e['allow_nets'])):
         raise MarkingsError('%s: "allow_nets" must be a list of net '
                             'names' % p)
+    if 'ground_nets' in e and (not isinstance(e['ground_nets'], list)
+                               or not all(isinstance(n, str) and n
+                                          for n in e['ground_nets'])):
+        raise MarkingsError('%s: "ground_nets" must be a list of net '
+                            'names' % p)
     if 'materialise' in e and not isinstance(e['materialise'], bool):
         raise MarkingsError('%s: "materialise" must be a boolean' % p)
     return dict(e)

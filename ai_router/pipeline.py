@@ -1404,6 +1404,9 @@ class Pipeline:
         if not facts:
             return {'error': 'hvgeom_failed'}
         ctx = self._quiet_ctx(facts)
+        # #147 (B22): supply nets from the power section, so a
+        # component entry's quiet set is its signal nets only.
+        ctx['power_nets'] = [e['net'] for e in mk.power if e.get('net')]
         results = [_quietnets.evaluate(e, ctx) for e in mk.quiet]
         rep = {'limitation': 'geometric isolation only -- no coupling '
                              'simulation, no dB claims',
