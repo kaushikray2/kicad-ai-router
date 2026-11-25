@@ -242,6 +242,38 @@ same-layer crossing ripped and re-closed exactly, connectivity
 preserved). Tests: tests/test_fix_violations.py (22 checks,
 fails on base); branch suite green (see the report).
 
+**Review-fix round** (2026-11-25, same branch; an external review
+of this lane's landing was verified claim-by-claim against the
+branch -- every proven defect fixed in its own chain, design-level
+items ticketed for the owner's ruling; the verdict table is on
+#155). Six fixes: #158 -- `fault_count` no longer counts
+`skeleton_intrusions` (the step-0 text above describes the
+original shape): the census is priced as its own term in the
+accept/final keys and in the reroute connectivity key, which also
+repairs the portfolio skip guard (it compared a winner's
+intrusions against the stripped base's structural zero), the
+tool's acceptance test (a fix removing a real fault while adding
+an intrusion was rejected; the unconnected term is None-is-worst
+now), and the reroute key (a real short could trade against
+intrusions). #159 -- the tool never rips user-locked copper, and
+rollback restores arcs as arcs (midpoint preserved) instead of
+straight chords. #160 -- the base diff matches faults greedily
+1-to-1 within 0.5 mm (the documented rule), replacing the grid
+snap that misattributed in both directions. #161 -- the skeleton
+cache validates on track/via counts and the board filename, so
+via edits no longer serve stale skeletons. #162 -- each fault in
+a `cmd_fix_violations` batch is judged against freshly refilled
+zone fill. #163 -- the two P2.1b test files follow the #122
+importorskip convention. Ticketed for ruling, not improvised:
+#164 (isolated plane vias counted as intrusions, and plane
+corridors stamping the global via block -- census semantics),
+#165 (per-fault gating instead of one 32-fault batch gate), #166
+(the yield fires only on total failure, so partial runs never
+retry skeleton-blocked faults unreserved). The merge checklist
+(conflicts in config/orchestrator/pipeline/worker against main
+v1.11.6, plus the parity list) is recorded on #155; the branch is
+still NOT merged.
+
 ### P2.7a — Performance quick wins (4–8 h)
 Remove verified double-gating (the base is gated twice per run; the
 final is gated by finalize and again by both callers; the portfolio
