@@ -1002,7 +1002,11 @@ class Pipeline:
         cu_total = 0.0
         for c in ((su or {}).get('copper') or []):
             t = c.get('thickness_mm') or 0.035
-            layers[c['name']] = {'type': 'copper', 'thickness_mm': t}
+            # #84: key by the BOARD's layer name -- cmd_powergeom
+            # facts (and _build_graph's pad attachment) use board
+            # names, so canonical keys (In1.Cu for a layer the board
+            # calls GND) silently detached every pad on that layer.
+            layers[c.get('board_name') or c['name']] = {'type': 'copper', 'thickness_mm': t}
             cu_total += t
         bt = (su or {}).get('board_thickness_mm') or 0.0
         if bt > cu_total:
