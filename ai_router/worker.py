@@ -2801,17 +2801,41 @@ def _freerouting_bin():
     return None
 
 
+def _kill_group(p):
+    # v1.11.5 (#125): the timeout kill, per platform. POSIX: SIGKILL
+    # the whole process group. Windows has no killpg/getpgid -- the
+    # old code's except-pass hid that and the following communicate()
+    # (no timeout) then blocked forever on the still-running child.
+    # start_new_session maps to CREATE_NEW_PROCESS_GROUP there, so
+    # taskkill /T takes the tree by PID; p.kill() is the last resort.
+    if os.name == 'nt':
+        import subprocess
+        try:
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], capture_output=True, timeout=30)
+            return
+        except Exception:
+            try: p.kill()
+            except Exception: pass
+        return
+    import signal as _signal
+    try: os.killpg(os.getpgid(p.pid), _signal.SIGKILL)
+    except Exception: pass
+
 def _run_group(cmd, timeout, cwd=None):
     # v1.10.1 (#55): engines run in their own process group so a
     # timeout kills the whole tree (the Freerouting JVM, KRT's native
     # children) instead of orphaning them in the container.
-    import signal as _signal
+    # v1.11.5 (#153): import subprocess HERE -- this function never
+    # had it in scope (the callers' function-local imports do not
+    # bind the module global), so every _run_group call raised
+    # NameError and the KRT/Freerouting legs silently returned
+    # run_failed since v1.10.1.
+    import subprocess
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd, start_new_session=True)
     try:
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        try: os.killpg(os.getpgid(p.pid), _signal.SIGKILL)
-        except Exception: pass
+        _kill_group(p)
         out, err = p.communicate()
         raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
     return subprocess.CompletedProcess(cmd, p.returncode, out, err)
