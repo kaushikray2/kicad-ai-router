@@ -663,6 +663,15 @@ located; a clean fixture passes; with materialisation on, the
 engines produce no copper inside the generated keepout and
 unmarked nets do not regress. Stated limitation: geometric
 isolation only — no coupling simulation, no dB claims.
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented.** markings quiet schema (net or component ref;
+  crystal/analog/reference profiles with stated tool-default
+  isolations, user-overridable); ai_router/quietnets.py gates
+  on hvgeom facts (corridor + adjacent-layer intrusions,
+  land-pattern keepout, load-cap ground return, guard ties at
+  component level); opt-in keepout materialisation.  This
+  completes the engineered-nets block (#67-#71 + #42) as first
+  drafts; the branch merges only after the final exam.
 
 ### P2.5 — Push-and-shove spike (15–20 h, hard stop, gated behind P2.3)
 Runs only if P2.3 leaves a shove-shaped residual class behind. Default
