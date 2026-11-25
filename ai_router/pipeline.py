@@ -1149,6 +1149,37 @@ class Pipeline:
                                'via_adds': len(plan['via_adds'])})
         return {'status': 'ok', 'applied': applied}
 
+    @staticmethod
+    def _pad_shape_items(p):
+        """hvdomains items for one pad's REAL shape (#146 (B21)).
+        Facts exported before the SDF fields existed fall back to
+        the old inscribed disc.  Rects become their four edges
+        (corner radius ignored -- the rect overstates the copper,
+        the safe direction for a minimum-gap check); ovals become
+        their capsule spine."""
+        import math
+        kind = p.get('skind')
+        if not kind:
+            return [('disc', p['x'], p['y'], max(p['w'], p['h']) / 2.0)]
+        x, y, sx, sy, rot = p['x'], p['y'], p['sx'], p['sy'], p.get('rot', 0.0)
+        if kind == 'disc':
+            return [('disc', x, y, sx)]
+        if kind == 'oval':
+            r = min(sx, sy)
+            d = abs(sx - sy)
+            if sx >= sy:
+                ux, uy = math.cos(rot), math.sin(rot)
+            else:
+                ux, uy = -math.sin(rot), math.cos(rot)
+            return [('seg', x - d * ux, y - d * uy,
+                     x + d * ux, y + d * uy, r)]
+        cs = []
+        for (lx, ly) in ((sx, sy), (sx, -sy), (-sx, -sy), (-sx, sy)):
+            cs.append((x + lx * math.cos(rot) - ly * math.sin(rot),
+                       y + lx * math.sin(rot) + ly * math.cos(rot)))
+        return [('seg', cs[i][0], cs[i][1], cs[(i + 1) % 4][0],
+                 cs[(i + 1) % 4][1], 0.0) for i in range(4)]
+
     def _hv_items(self, facts, net, layer):
         """Copper items of one net on one layer, hvdomains shapes."""
         items, filled = [], []
@@ -1161,8 +1192,7 @@ class Pipeline:
                               t['w'] / 2.0))
         for p in nf.get('pads', []):
             if layer in (p.get('layers') or []):
-                items.append(('disc', p['x'], p['y'],
-                              max(p['w'], p['h']) / 2.0))
+                items += self._pad_shape_items(p)
         for v in nf.get('vias', []):
             items.append(('disc', v['x'], v['y'], v['d'] / 2.0))
         for z in nf.get('zones', []):
@@ -1176,14 +1206,16 @@ class Pipeline:
         return items, filled
 
     def _hv_pad_items(self, facts, net, layer):
-        """Pad discs of one net on one layer (terminations,
-        for the #127 A6/A7 rule)."""
+        """Pad geometry of one net on one layer (terminations,
+        for the #127 A6/A7 rule; real shapes since #146)."""
         nf = facts.get('nets', {}).get(net)
         if not nf:
             return []
-        return [('disc', p['x'], p['y'], max(p['w'], p['h']) / 2.0)
-                for p in nf.get('pads', [])
-                if layer in (p.get('layers') or [])]
+        out = []
+        for p in nf.get('pads', []):
+            if layer in (p.get('layers') or []):
+                out += self._pad_shape_items(p)
+        return out
 
     def tool_hv_domains(self):
         """#70: per domain pair, required (IPC-2221B Table 6-1) vs
@@ -1209,6 +1241,24 @@ class Pipeline:
         cutouts = [[tuple(p) for p in c]
                    for c in (facts.get('cutouts') or [])]
         doms = mk.hv_domains
+        # #146 (B21): verify every declared net exists -- a
+        # mistyped name used to pass silently with zero pairs.
+        all_nets = set(facts.get('nets', {}))
+        missing_nets = [{'domain': d['name'], 'net': n}
+                        for d in doms for n in d['nets']
+                        if n not in all_nets]
+        # #146 (B21): copper outside every declared domain is a
+        # domain too -- the implicit rest-of-board at 0 V.  Without
+        # it, declaring just the HV net (the natural minimal
+        # marking) checked nothing at all.
+        declared = {n for d in doms for n in d['nets']}
+        rest_nets = sorted(all_nets - declared)
+        doms_ext = list(doms)
+        if rest_nets:
+            doms_ext.append({'name': '(rest of board)', 'nets': rest_nets,
+                             'voltage_v': 0.0, 'peak_v': 0.0,
+                             'coating': 'uncoated', 'altitude_m': 0,
+                             'implicit': True})
         items, filled, blockers = {}, {}, {}
         for layer in layers:
             all_items, all_filled = [], []
@@ -1220,9 +1270,9 @@ class Pipeline:
                 all_filled += fi
             blockers[layer] = (all_items, all_filled)
         pairs = []
-        for i in range(len(doms)):
-            for j in range(i + 1, len(doms)):
-                da, db = doms[i], doms[j]
+        for i in range(len(doms_ext)):
+            for j in range(i + 1, len(doms_ext)):
+                da, db = doms_ext[i], doms_ext[j]
                 dv = abs(da['voltage_v'] - db['voltage_v'])
                 pair = {'a': da['name'], 'b': db['name'],
                         'delta_v': dv, 'layers': [], 'violations': []}
@@ -1282,17 +1332,33 @@ class Pipeline:
                              'at': entry['clearance_at']})
                     if surf:
                         bl, bf = blockers[layer]
-                        cr = H.creepage_path(ia, ib, bl, outline, cutouts,
-                                             pitch=0.25, filled=bf)
-                        entry['creepage_mm'] = (None if cr is None
-                                                else round(cr, 2))
-                        if cr is not None and cr < req - 1e-9:
-                            pair['violations'].append(
-                                {'kind': 'creepage', 'layer': layer,
-                                 'required_mm': round(req, 3),
-                                 'actual_mm': round(cr, 2),
-                                 'at': entry['clearance_at']})
+                        cr, cpitch = H.creepage_path(
+                            ia, ib, bl, outline, cutouts,
+                            pitch=0.25, filled=bf)
+                        entry['creepage_pitch_mm'] = cpitch
+                        if cr is None:
+                            # #146 (B21): unmeasurable is NOT a
+                            # pass -- reported as not verified.
+                            entry['creepage_mm'] = None
+                            entry['creepage_status'] = 'not_verified'
+                        else:
+                            entry['creepage_mm'] = round(cr, 2)
+                            entry['creepage_status'] = 'ok'
+                            # one-pitch margin: the grid result
+                            # is only as fine as its pitch
+                            if cr < req + cpitch - 1e-9:
+                                entry['creepage_status'] = 'violation'
+                                pair['violations'].append(
+                                    {'kind': 'creepage', 'layer': layer,
+                                     'required_mm': round(req, 3),
+                                     'actual_mm': round(cr, 2),
+                                     'pitch_margin_mm': cpitch,
+                                     'at': entry['clearance_at']})
                     pair['layers'].append(entry)
+                if pair['delta_v'] > 0 and not pair['layers']:
+                    pair['note'] = ('no copper found for one or both '
+                                    'domains on any layer -- check '
+                                    'the net names')
                 pairs.append(pair)
         rep = {
             'standard': 'IPC-2221B Table 6-1 (single spacing table '
@@ -1304,9 +1370,17 @@ class Pipeline:
                  'altitude_m': d.get('altitude_m', 0),
                  'pollution_degree': d.get('pollution_degree'),
                  'pollution_degree_applied': False,
-                 'material_group': d.get('material_group')}
-                for d in doms],
-            'creepage_grid_pitch_mm': 0.25,
+                 'material_group': d.get('material_group'),
+                 'implicit': bool(d.get('implicit'))}
+                for d in doms_ext],
+            'missing_nets': missing_nets,
+            'creepage_grid_pitch_mm': max(
+                [e['creepage_pitch_mm'] for pr in pairs
+                 for e in pr['layers'] if 'creepage_pitch_mm' in e]
+                or [0.25]),
+            'not_verified': sum(
+                1 for pr in pairs for e in pr['layers']
+                if e.get('creepage_status') == 'not_verified'),
             'unmodelled': ['under-component creepage paths (no body data)',
                            'cross-layer creepage',
                            'clearance to enclosure/chassis',
@@ -1314,6 +1388,24 @@ class Pipeline:
                            'annex on issue #70)'],
             'pairs': pairs,
         }
+        # #146 (B21): an evaluation that checked nothing, or could
+        # not measure, is an error state -- never a silent pass.
+        evaluated = [pr for pr in pairs if pr['layers']]
+        if missing_nets:
+            rep['status'] = 'error'
+            rep['error'] = ('declared domain nets not found on the '
+                            'board: %s' % ', '.join(
+                                '%s:%s' % (m['domain'], m['net'])
+                                for m in missing_nets))
+        elif not evaluated and any(pr['delta_v'] > 0 for pr in pairs):
+            rep['status'] = 'error'
+            rep['error'] = 'no domain pair could be evaluated'
+        elif any(pr['violations'] for pr in pairs):
+            rep['status'] = 'violations'
+        elif rep['not_verified']:
+            rep['status'] = 'not_verified'
+        else:
+            rep['status'] = 'ok'
         self._eng_hv_report = rep
         self.log('HV domains: %d pair(s), %d violation(s)' % (
             len(pairs), sum(len(p['violations']) for p in pairs)))

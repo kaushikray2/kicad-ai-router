@@ -25,7 +25,7 @@ Measurement model (draft):
 This is a design aid, not a certification.
 """
 import heapq
-import math
+import math, time
 
 # (band top V, B1, B2, B3, B4, A5, A6, A7) -- IPC-2221B Table 6-1,
 # mm.  The A columns (assembly: A5 conformal-coated conductors,
@@ -196,9 +196,14 @@ def _near_item(x, y, item, extra=0.0):
 
 
 def creepage_path(items_a, items_b, blockers, outline, cutouts,
-                  pitch=0.25, filled=()):
+                  pitch=0.25, filled=(), budget_s=20.0):
     """Shortest surface path (mm) between two copper sets on one
-    layer, or None when no path exists in the modelled region.
+    layer, as (value_mm_or_None, pitch_used_mm) (#146 (B21): the
+    pitch actually used is reported -- above the cell cap it is
+    enlarged, and a result is only as fine as its pitch; the
+    search also honours a wall-clock budget and returns None
+    when it is exhausted, which callers must report as
+    'not verified', never as a pass).
     Grid Dijkstra: cells outside the board outline or inside a
     cutout are not surface.  Cells covered by FOREIGN copper
     (blockers / filled zones) are traversable at zero cost (#87):
@@ -208,6 +213,7 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
     overestimate the creepage (the unsafe direction for a
     minimum check).  Start/goal cells are free cells within one pitch
     of the respective domain's copper."""
+    t0 = time.monotonic()
     xs = [c for it in items_a + items_b
           for c in ((it[1], it[3]) if it[0] == 'seg' else (it[1],))]
     ys = [c for it in items_a + items_b
@@ -268,15 +274,21 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
                     if in_b[nj][ni]:
                         goals.add((i, j))
     if not starts or not goals:
-        return None
+        return None, pitch
     dist = {s: 0.0 for s in starts}
     pq = [(0.0, s) for s in starts]
     heapq.heapify(pq)
     diag = pitch * math.sqrt(2.0)
+    if time.monotonic() - t0 > budget_s:
+        return None, pitch  # setup alone exhausted the budget
+    pops = 0
     while pq:
         d, (i, j) = heapq.heappop(pq)
+        pops += 1
+        if pops % 1024 == 0 and time.monotonic() - t0 > budget_s:
+            return None, pitch  # budget exhausted: not verified
         if (i, j) in goals:
-            return d
+            return d, pitch
         if d > dist.get((i, j), 1e18):
             continue
         for di in (-1, 0, 1):
@@ -296,4 +308,4 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
                 if nd < dist.get((ni, nj), 1e18):
                     dist[(ni, nj)] = nd
                     heapq.heappush(pq, (nd, (ni, nj)))
-    return None
+    return None, pitch

@@ -2993,6 +2993,44 @@ def cmd_stackup(board_path, nets=None):
 
 
 
+def _arc_sample(t, sagitta_mm=0.02):
+    """Points along a PCB_ARC from start through mid to end,
+    sampled so the chord error stays under sagitta_mm.  Falls back
+    to the bare chord when the three points define no circle."""
+    p1 = (mm(t.GetStart().x), mm(t.GetStart().y))
+    p2 = (mm(t.GetEnd().x), mm(t.GetEnd().y))
+    try:
+        pm = (mm(t.GetMid().x), mm(t.GetMid().y))
+    except Exception:
+        return [p1, p2]
+    (ax, ay), (bx, by), (cx, cy) = p1, pm, p2
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-9:
+        return [p1, p2]
+    ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay)
+          + (cx * cx + cy * cy) * (ay - by)) / d
+    uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx)
+          + (cx * cx + cy * cy) * (bx - ax)) / d
+    r = math.hypot(ax - ux, ay - uy)
+    if r <= 0:
+        return [p1, p2]
+    a1 = math.atan2(ay - uy, ax - ux)
+    am = math.atan2(by - uy, bx - ux)
+    a2 = math.atan2(cy - uy, cx - ux)
+    two_pi = 2.0 * math.pi
+    sweep_ccw = (a2 - a1) % two_pi
+    mid_ccw = (am - a1) % two_pi
+    if mid_ccw <= sweep_ccw:
+        sweep, base = sweep_ccw, a1
+    else:
+        sweep, base = -((a1 - a2) % two_pi), a1
+    step = 2.0 * math.acos(max(-1.0, min(1.0, 1.0 - sagitta_mm / r)))
+    n = max(2, int(abs(sweep) / max(step, 1e-6)) + 1)
+    return [(ux + r * math.cos(base + sweep * k / n),
+             uy + r * math.sin(base + sweep * k / n))
+            for k in range(n + 1)]
+
+
 def cmd_hvgeom(board_path):
     """Copper facts for the HV-domain checks (#70): every net's
     tracks / pads (with size) / vias / filled zone polygons, the
@@ -3021,7 +3059,19 @@ def cmd_hvgeom(board_path):
             r['vias'].append({'x': mm(t.GetStart().x),
                               'y': mm(t.GetStart().y),
                               'd': mm(t.GetWidth())})
-        elif t.Type() in (pcbnew.PCB_TRACE_T, pcbnew.PCB_ARC_T):
+        elif t.Type() == pcbnew.PCB_ARC_T:
+            # #146 (B21): an arc exported as its chord understates
+            # the copper by the bulge (1.46 mm on a 90-degree R5
+            # arc) -- tessellate through the arc's mid point.
+            lay = b.GetLayerName(t.GetLayer())
+            w = mm(t.GetWidth())
+            pts = _arc_sample(t)
+            for k in range(len(pts) - 1):
+                r['tracks'].append({
+                    'layer': lay,
+                    'x1': pts[k][0], 'y1': pts[k][1],
+                    'x2': pts[k + 1][0], 'y2': pts[k + 1][1], 'w': w})
+        elif t.Type() == pcbnew.PCB_TRACE_T:
             r['tracks'].append({
                 'layer': b.GetLayerName(t.GetLayer()),
                 'x1': mm(t.GetStart().x), 'y1': mm(t.GetStart().y),
@@ -3034,10 +3084,15 @@ def cmd_hvgeom(board_path):
                 continue
             ls = p.GetLayerSet()
             pl = [nm_ for nm_ in layers if ls.Contains(lid_of[nm_])]
+            _cx, _cy, _kind, _sx, _sy, _rot, _cr = _pad_sdf_params(p)
             rec(n)['pads'].append({
                 'ref': fp.GetReference(), 'x': mm(p.GetPosition().x),
                 'y': mm(p.GetPosition().y), 'w': mm(p.GetSize().x),
-                'h': mm(p.GetSize().y), 'layers': pl})
+                'h': mm(p.GetSize().y), 'layers': pl,
+                # #146 (B21): real pad geometry for the HV checker
+                # (an inscribed disc overstates the gap between
+                # rectangular pads by up to ~0.8 mm)
+                'skind': _kind, 'sx': _sx, 'sy': _sy, 'rot': _rot})
     for z in b.Zones():
         n = z.GetNetname()
         if not n:
@@ -3051,6 +3106,32 @@ def cmd_hvgeom(board_path):
                        for pt in poly.Outline(oi).CPoints()]
                 if len(pts) >= 3:
                     rec(n)['zones'].append({'layer': lay, 'pts': pts})
+    # #146 (B21): prefer KiCad's own board polygon (handles
+    # rounded corners and arcs exactly); the drawings walk below
+    # remains as fallback.  Holes arrive as their own outlines and
+    # join the same area-sorted loop list (largest = outline).
+    loops = []
+    try:
+        ps = b.GetBoardPolygonOutlines()
+        for oi in range(ps.OutlineCount()):
+            pts = [(mm(pt.x), mm(pt.y)) for pt in ps.Outline(oi).CPoints()]
+            if len(pts) >= 3:
+                loops.append(pts)
+            for hi in range(ps.HoleCount(oi)):
+                hpts = [(mm(pt.x), mm(pt.y))
+                        for pt in ps.Hole(oi, hi).CPoints()]
+                if len(hpts) >= 3:
+                    loops.append(hpts)
+    except Exception:
+        loops = []
+    if loops:
+        def _area(lp):
+            return abs(sum(lp[i][0] * lp[(i + 1) % len(lp)][1]
+                           - lp[(i + 1) % len(lp)][0] * lp[i][1]
+                           for i in range(len(lp))) / 2.0)
+        loops.sort(key=_area, reverse=True)
+        return {'nets': nets, 'layers': layers,
+                'outline': loops[0], 'cutouts': loops[1:]}
     segs = []
     ec = lid_of.get('Edge.Cuts')
     pre_loops = []
