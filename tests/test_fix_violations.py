@@ -124,6 +124,49 @@ check('cmd: nothing fixed -> status none, no output file', r['status'] == 'none'
 r = w.cmd_fix_violations(p0, os.path.join(tmp, 'out.kicad_pcb'), [{'type': 'track_dangling', 'x': 40, 'y': 20, 'nets': ['A']}])
 check('cmd: rip of A main track re-closes (still fixed)', r['status'] in ('ok', 'none'))  # informational: geometry-dependent
 
+# --- locked copper + arcs (#159) ---------------------------------------
+def keepout_all(b):
+    ka = pcbnew.ZONE(b); ka.SetIsRuleArea(True); ka.SetDoNotAllowTracks(True); ka.SetDoNotAllowVias(True)
+    ka.SetDoNotAllowPads(False); ka.SetDoNotAllowFootprints(False)
+    ls = pcbnew.LSET(); ls.AddLayer(pcbnew.F_Cu); ls.AddLayer(pcbnew.B_Cu); ka.SetLayerSet(ls)
+    o = ka.Outline(); o.NewOutline(); ch = o.Outline(0)
+    for (x, y) in [(15, 5), (65, 5), (65, 35), (15, 35)]: ch.Append(pcbnew.VECTOR2I(NM(x), NM(y)))
+    ch.SetClosed(True); b.Add(ka)
+
+# a locked stub is the fault itself: the rip must refuse it outright
+b, ac, bc = base_board()
+stub = mk_track(b, ac, 60, 20, 75, 20); stub.SetLocked(True)
+stub_uuid = stub.m_Uuid.AsString()
+r = w._fix_one_violation(b, 'A', 75, 20)
+check('locked stub is not ripped (#159)', r is False and any(t.m_Uuid.AsString() == stub_uuid and t.IsLocked() for t in b.GetTracks()))
+
+# a locked link track behind a keepout: the fix rolls back, and the
+# rollback must never have touched the locked item at all
+b, ac, bc = base_board()
+mk_pad(b, bc, 40, 10); mk_pad(b, bc, 40, 30)
+lt = mk_track(b, bc, 40, 10, 40, 30); lt.SetLocked(True)
+uuid_before = lt.m_Uuid.AsString()
+keepout_all(b)
+r = w._fix_one_violation(b, 'B', 40, 20)
+b_items = tracks_of(b, 'B')
+check('locked track survives a rolled-back fix, lock + UUID intact (#159)',
+      r is False and len(b_items) == 1 and b_items[0].IsLocked() and b_items[0].m_Uuid.AsString() == uuid_before)
+
+# an arc paralleling a straight link, behind a keepout: rollback
+# must restore the ARC (midpoint included), not a straight chord
+b, ac, bc = base_board()
+mk_pad(b, bc, 40, 10); mk_pad(b, bc, 40, 30)
+mk_track(b, bc, 40, 10, 40, 30)
+arc = pcbnew.PCB_ARC(b)
+arc.SetStart(pcbnew.VECTOR2I(NM(40), NM(10))); arc.SetMid(pcbnew.VECTOR2I(NM(44), NM(20))); arc.SetEnd(pcbnew.VECTOR2I(NM(40), NM(30)))
+arc.SetWidth(NM(0.25)); arc.SetLayer(pcbnew.F_Cu); arc.SetNetCode(bc); b.Add(arc)
+keepout_all(b)
+r = w._fix_one_violation(b, 'B', 41, 20)
+b_items = tracks_of(b, 'B')
+arcs = [t for t in b_items if t.Type() == pcbnew.PCB_ARC_T]
+mid = (w.mm(arcs[0].GetMid().x), w.mm(arcs[0].GetMid().y)) if len(arcs) == 1 else None
+check('arc rolls back as an arc with its midpoint (#159)', r is False and len(b_items) == 2 and mid is not None and abs(mid[0] - 44) < 0.01 and abs(mid[1] - 20) < 0.01)
+
 # --- pipeline base diff (kicad-cli item-level) ------------------------
 b, ac, bc = base_board()
 mk_pad(b, bc, 40, 10); mk_pad(b, bc, 40, 30)
