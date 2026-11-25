@@ -114,6 +114,19 @@ def _accept_key(g):
     return (fault_count(g), 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
             len((g or {}).get('split_nets') or []))
 
+def _treatment_key(g):
+    # v1.11.5 (#133): engineered treatments (meanders, power
+    # widening, RF fences/vias, audit zones) are judged on the
+    # first three elements of the acceptance key -- faults,
+    # unconnected, splits -- NEVER on the tail. The tail (the
+    # layer-cost-weighted wirelength main's key carries after
+    # #115, behind the starved-thermal delta) measures routing
+    # cost: a length-adding treatment increases it BY DESIGN, so
+    # on the full key every meander would revert whenever a layer
+    # cost is set. Slicing [:3] makes the comparison hold for this
+    # branch's 3-element key and the merged key alike.
+    return _accept_key(g)[:3]
+
 def fault_count(g):
     c = (g or {}).get('classes') or {}
     # v1.3.2: tracks on a banned layer (the layer-law census) count
@@ -688,10 +701,11 @@ class Pipeline:
 
     def _eng_gate_try(self, cmd, args, label, extra_ok=None):
         """Run a worker command on a copy of the current board and adopt
-        the copy only if the acceptance key does not regress (and an
-        optional extra predicate on the after-gate holds)."""
+        the copy only if the TREATMENT key does not regress (and an
+        optional extra predicate on the after-gate holds). The
+        treatment key is _accept_key[:3] -- see _treatment_key (#133)."""
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
-        kb = _accept_key(before)
+        kb = _treatment_key(before)
         outp = self._out(label)
         shutil.copy(self.current, outp)
         r = self._worker(cmd, '--board', outp, *args)
@@ -700,7 +714,7 @@ class Pipeline:
             prev = self.current
             self.current = outp
             after = self.tool_gate()
-            bad = _accept_key(after) > kb or (extra_ok is not None and not extra_ok(before, after))
+            bad = _treatment_key(after) > kb or (extra_ok is not None and not extra_ok(before, after))
             if bad:
                 self.current = prev
                 self.last_gate = before
@@ -708,6 +722,14 @@ class Pipeline:
             else:
                 self.last_gate = after
                 adopted = True
+                if _accept_key(after) > _accept_key(before):
+                    # v1.11.5 (#133): adopted on the treatment key
+                    # although the FULL key regressed -- that
+                    # regression is the stripped cost tail alone,
+                    # recorded distinctly as 'reverted_cost' (what
+                    # the pre-fix full-key gate would have done),
+                    # never conflated with a fault rejection.
+                    r = dict(r); r['full_key_status'] = 'reverted_cost'
         r = dict(r); r['adopted'] = adopted
         return r
 
