@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: ai-router-backend:1.2.3
+    image: ai-router-backend:1.11.5
     container_name: ai-router-backend
     restart: unless-stopped
     ports:

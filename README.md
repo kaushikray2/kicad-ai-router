@@ -131,7 +131,7 @@ tracemaker/0.12.1/
 
 inside the backend data directory.
 
-The backend intentionally requires a locally supplied TraceMaker binary rather than downloading one automatically.
+The backend fetches TraceMaker from the configured URL (`TRACEMAKER_URL` or the `tracemaker.url` config) -- on first startup and via its update endpoint -- and installs it only after a sha256 check against the recorded hash for that version (first use of a new version is trust-on-first-use). A local file path or `file://` URL can be configured instead of a download.
 
 ### For AI mode
 
@@ -180,7 +180,7 @@ Configure the backend connection in:
 ```bash
 cd docker
 docker build -f Dockerfile -t ai-router-backend ..
-docker run -d -p 8731:8731 -v $PWD/data:/data ai-router-backend
+docker run -d -p 127.0.0.1:8731:8731 -v $PWD/data:/data ai-router-backend
 ```
 
 On first startup the backend creates:
@@ -261,6 +261,92 @@ The geometry is deterministic.
 Verification is mandatory.
 
 ---
+
+## Appendix: design notes from the development record
+
+*(Moved verbatim from CHANGELOG.md on 2026-11-25, #149 D10 -- the changelog keeps versions and dated records only.)*
+
+
+Routes a board from inside KiCad using the measured hybrid procedure:
+an LLM (any OpenAI-compatible endpoint) makes **strategy** decisions only,
+while deterministic tools do all geometry — TraceMaker for full-board
+passes, a scripted grid-A* finisher for stuck legs, a connectivity-probe
+stitcher for GND pour islands, and `kicad-cli` DRC as the only gate.
+
+This is the pipeline validated by hand on the in-house board (Rev K → K2 → K3
+→ in-place finish: 0 unconnected), packaged as a plugin. The LLM never
+emits coordinates or traces; every effective experiment showed that path
+is a dead end, and every fix moved the design back toward this split.
+
+## Install
+
+Copy the `ai_router/` folder into KiCad's scripting plugins directory:
+
+    ~/.local/share/kicad/10.0/scripting/plugins/ai_router/
+
+Restart KiCad (or refresh external plugins). The plugin appears as
+**AI Router (LLM orchestrator)** with a toolbar button.
+
+## Use
+
+1. Open the board in Pcbnew, save it, launch the plugin.
+2. Configure: endpoint, model, API key (if the endpoint needs one),
+   TraceMaker binary path, mode, max passes, banned layers.
+   Defaults point at the home large backend host llama.cpp server
+   (`http://backend host:8080/v1`, `qwen3-coder-30b`).
+3. Run. The plugin works on **copies** in an `ai-route-<timestamp>/`
+   folder next to your board — your open board is never modified.
+   A `ledger.json` in that folder records every step.
+4. When it finishes, "Open result board" loads `final.kicad_pcb`.
+
+## Modes
+
+- **llm** — the model drives the tool loop under a written playbook
+  (orient → route with protected first-nets → gate → promote casualties →
+  finish stuck legs in place → stitch pour islands → done). If the
+  endpoint errors, the run falls back to AUTO for the remainder.
+- **auto** — the same playbook as deterministic rules, no model needed.
+
+Endpoints without native tool calling are handled by a JSON-action
+fallback parser (the model answers with `{"tool": ..., "args": ...}`).
+
+## Tools the orchestrator can call
+
+| tool | what it does |
+|---|---|
+| `board_summary` | nets, pad counts, split nets via KiCad connectivity |
+| `scorecard` | worst decoupling caps by distance to nearest same-net pad |
+| `route` | one TraceMaker pass (layer law enforced by `--no-tracks-on`) |
+| `gate` | `kicad-cli pcb drc --refill-zones`; unconnected decomposed into pour vs signal |
+| `finish_leg` | grid-A* finisher for one net; single-net displacement + re-bridge when blocked; planner clearance = board rule + margin |
+| `stitch_gnd` | probes every GND pad's connectivity cluster; one stitch via per floating island, verified by re-probe |
+| `done` | end the run |
+
+## Rules baked in (measured, not guessed)
+
+- **Refill before every save.** Zone fills are stored polygons; any layout
+  change leaves them stale and the GUI shows pours flowing over new
+  traces. Strip, every route pass, and finalize all refill first.
+- **Layer law by construction:** In1.Cu (GND plane) is never routed;
+  In2.Cu (power plane) banned by default (configurable).
+- **First-net protection does not bind between first nets** — a protected
+  net can still be ripped by another protected net; that is what
+  `finish_leg` exists for.
+- **Pour items ≠ signal failures.** Judge a pass by split signal nets;
+  pour fragmentation is closed at the end by stitching.
+- The gate (KiCad DRC after refill) is the only verdict — never the
+  router's own counts.
+
+## Honest limits
+
+- TraceMaker is a heuristic search: identical inputs vary run to run
+  (measured 5–9 unconnected across equivalent passes). The triage loop +
+  finisher absorb that variance; a single pass guarantees nothing.
+- A 30B local model's judgment is the weak link. The deterministic tools
+  carry correctness; AUTO mode is the safety net and the baseline.
+- `finish_leg` handles one missing leg of one net per call and displaces
+  at most one net. Boards needing multi-net surgery still need a human.
+
 
 ## License
 
