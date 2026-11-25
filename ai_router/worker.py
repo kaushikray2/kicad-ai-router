@@ -3755,6 +3755,11 @@ def cmd_meander(board_path, net, add_mm):
               if t.GetNetname() == net and t.Type() == pcbnew.PCB_TRACE_T]
     if not tracks:
         return {'added_mm': 0.0, 'why': 'no straight tracks'}
+    # #100: locked copper is never modified -- a locked candidate
+    # is excluded, however long it is.
+    tracks = [t for t in tracks if not t.IsLocked()]
+    if not tracks:
+        return {'added_mm': 0.0, 'why': 'all straight tracks are locked'}
     def seg_len(t):
         return math.hypot(mm(t.GetEnd().x) - mm(t.GetStart().x),
                           mm(t.GetEnd().y) - mm(t.GetStart().y))
