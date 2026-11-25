@@ -763,7 +763,7 @@ class Pipeline:
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
         outp = self._out('stitched')
-        r = self._worker('stitch', '--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')))
+        r = self._worker('stitch', '--board', self.current, '--out', outp, '--no-tracks-on', str(self.cfg.get('no_tracks_on', 'In1.Cu')), *self._leg_layer_args())  # v1.11.2 (#102): stitch DOES route -- _bridge_island draws track bridges (<=8 mm, <=2 vias) on the Grid; the v1.11.0 'vias only' exclusion rationale was wrong
         if os.path.exists(outp):
             prev = self.current
             self.current = outp
