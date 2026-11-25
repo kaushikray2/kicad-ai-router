@@ -202,6 +202,19 @@ class Pipeline:
             _mk = _markings.load_markings(self.board_path)
             if _mk is not None and (_mk.hv_domains or _mk.quiet):
                 self._domain_setup(_mk)
+            if _mk is not None and _mk.hv_domains:
+                # #148 (B24): HV spacing must bind the ENGINE, not
+                # only the finisher grid and a post-route report.
+                try:
+                    self._eng_hv_classes = self._eng_patch_pro_hv(_mk)
+                    if self._eng_hv_classes:
+                        self.log('HV netclasses enforced: %s'
+                                 % ', '.join('%s=%.3f mm' % (
+                                     v['class'], v['clearance_mm'])
+                                     for v in self._eng_hv_classes.values()))
+                except Exception as e:
+                    self.log('HV netclass setup failed (%s) -- '
+                             'continuing report-only' % e)
         except Exception as e:
             self.log('Domain setup failed (%s) -- continuing' % e)
 
@@ -532,6 +545,90 @@ class Pipeline:
             json.dump(data, fh, indent=1)
         return applied
 
+
+    def _eng_patch_pro_hv(self, mk):
+        # #148 (B24): one AI-HV-* netclass per HV domain in the
+        # WORKDIR project copy, clearance = the domain's required
+        # spacing against its worst neighbour (every other declared
+        # domain, plus the implicit rest-of-board at 0 V), taking
+        # the larger of the conductor/termination requirements.
+        # Netclasses are net-selective (the property rule areas
+        # lacked, #80), the engine reads them (the same channel
+        # the impedance classes use), and the kicad-cli gate scores
+        # netclass clearance violations as faults -- so the spacing
+        # is enforced during routing, not just reported after it.
+        if _hvdomains is None:
+            return {}
+        doms = list(mk.hv_domains or [])
+        if not doms:
+            return {}
+        volts = [d.get('peak_v', d.get('voltage_v')) or 0.0 for d in doms]
+        reqs = []
+        for i, d in enumerate(doms):
+            req = 0.0
+            for j, e in enumerate(doms):
+                if i == j:
+                    continue
+                req = max(req, _hvdomains.pair_required_mm(
+                    abs(volts[i] - volts[j]), True,
+                    d.get('coating', 'uncoated'), d.get('altitude_m', 0),
+                    True)[0])
+            # the rest of the board sits at 0 V
+            req = max(req, _hvdomains.pair_required_mm(
+                abs(volts[i]), True, d.get('coating', 'uncoated'),
+                d.get('altitude_m', 0), True)[0])
+            reqs.append(req)
+        pro_path = os.path.join(self.workdir, 'input.kicad_pro')
+        data = None
+        if os.path.exists(pro_path):
+            try:
+                with open(pro_path) as fh:
+                    data = json.load(fh)
+            except Exception:
+                data = None
+        if not isinstance(data, dict):
+            data = {}
+        nset = data.setdefault('net_settings', {})
+        classes = nset.setdefault('classes', [])
+        patterns = nset.setdefault('netclass_patterns', [])
+        if not any(isinstance(c, dict) and c.get('name') == 'Default'
+                   for c in classes):
+            classes.insert(0, dict(_ENG_DEFAULT_CLASS))
+        by_name = {c.get('name'): c for c in classes if isinstance(c, dict)}
+        applied = {}
+        used = set()
+        for d, req in zip(doms, reqs):
+            if req <= 0:
+                continue
+            base_name = 'AI-HV-' + (re.sub(r'[^A-Za-z0-9]+', '_',
+                                           d['name']).strip('_') or 'DOMAIN')
+            name, k = base_name, 2
+            while name in used:
+                name = '%s_%d' % (base_name, k)
+                k += 1
+            used.add(name)
+            clone = dict(by_name.get('Default') or _ENG_DEFAULT_CLASS)
+            clone['name'] = name
+            clone['clearance'] = round(req, 4)
+            clone['priority'] = 1000
+            if name in by_name:
+                classes[classes.index(by_name[name])] = clone
+            else:
+                classes.append(clone)
+            by_name[name] = clone
+            nets = list(d['nets'])
+            patterns[:] = [pp for pp in patterns
+                           if not (isinstance(pp, dict)
+                                   and pp.get('pattern') in nets)]
+            for net in nets:
+                patterns.append({'netclass': name, 'pattern': net})
+            applied[d['name']] = {'class': name,
+                                  'clearance_mm': round(req, 4),
+                                  'nets': nets}
+        if applied:
+            with open(pro_path, 'w') as fh:
+                json.dump(data, fh, indent=1)
+        return applied
 
     def _eng_diff_layer(self, pair, cu, ncu):
         # #67 Step 3: edge-coupled pair geometry for one layer.  Surface
@@ -1399,6 +1496,7 @@ class Pipeline:
                            'IEC 62368-1 creepage tables (see the research '
                            'annex on issue #70)'],
             'pairs': pairs,
+            'enforced_netclasses': getattr(self, '_eng_hv_classes', None),
         }
         # #146 (B21): an evaluation that checked nothing, or could
         # not measure, is an error state -- never a silent pass.
