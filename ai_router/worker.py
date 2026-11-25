@@ -3558,9 +3558,19 @@ def cmd_auditgeom(board_path):
         if d.GetLayer() != pcbnew.Edge_Cuts:
             continue
         try:
-            out['outline_segments'].append(
-                [mm(d.GetStart().x), mm(d.GetStart().y),
-                 mm(d.GetEnd().x), mm(d.GetEnd().y)])
+            if d.Type() == pcbnew.PCB_SHAPE_T and d.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+                out['outline_segments'].append(
+                    [mm(d.GetStart().x), mm(d.GetStart().y),
+                     mm(d.GetEnd().x), mm(d.GetEnd().y)])
+            else:
+                # #79: GetStart/GetEnd on a RECT are its opposite
+                # corners -- the old code recorded the DIAGONAL as an
+                # outline segment.  Non-segment shapes contribute
+                # their bounding-box edges (as _new_items_clean does).
+                bb = d.GetBoundingBox()
+                el, et, er, eb = mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom())
+                out['outline_segments'] += [[el, et, er, et], [er, et, er, eb],
+                                            [er, eb, el, eb], [el, eb, el, et]]
         except Exception:
             continue
     for fp in b.GetFootprints():
@@ -3568,6 +3578,7 @@ def cmd_auditgeom(board_path):
                 'value': fp.GetValue(),
                 'x': mm(fp.GetPosition().x), 'y': mm(fp.GetPosition().y),
                 'rot': fp.GetOrientationDegrees(),
+                'flipped': bool(fp.IsFlipped()),
                 'pads': [], 'zones': [], 'properties': {}, 'courtyard': None}
         for name in ('AIRuleDecapMm', 'AIRuleEdgeClearanceMm', 'AIRuleClass'):
             try:
@@ -3628,8 +3639,18 @@ def cmd_audit_zones(board_path, spec):
         z = pcbnew.ZONE(b)
         ls = pcbnew.LSET()
         for ln in item.get('layers') or []:
-            if ln in name2lid:
-                ls.AddLayer(name2lid[ln])
+            # #79: KiCad library files write layer wildcards; the old
+            # exact-match test silently produced zones with an EMPTY
+            # layer set for "*.Cu" / "F&B.Cu" specs.
+            if ln == '*.Cu':
+                names = [n for n in name2lid if n.endswith('.Cu')]
+            elif ln == 'F&B.Cu':
+                names = ['F.Cu', 'B.Cu']
+            else:
+                names = [ln]
+            for n in names:
+                if n in name2lid:
+                    ls.AddLayer(name2lid[n])
         z.SetLayerSet(ls)
         z.SetIsRuleArea(True)
         ko = item.get('keepout') or {}

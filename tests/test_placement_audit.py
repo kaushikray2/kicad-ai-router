@@ -86,3 +86,20 @@ def test_pour_nets_never_join_first_nets():
                                 value='LoRa module')]}
     rep = placement_audit.audit(facts, {})
     assert rep['first_nets_extra'] == ['TX', 'RX'], rep['first_nets_extra']
+
+
+def test_transform_matches_kicad_sense():
+    # #79a/b: KiCad maps local (x,y) at orientation th to
+    # (x*c + y*s, -x*s + y*c); flipped parts negate local y first.
+    # Ground truth probed on KiCad 10 (pad at local (5,5), fp (100,100)).
+    t = placement_audit._transform
+    fp = {'x': 100.0, 'y': 100.0, 'rot': 90.0}
+    assert t(fp, [(5.0, 5.0)]) == [[105.0, 95.0]], t(fp, [(5.0, 5.0)])
+    fp = {'x': 100.0, 'y': 100.0, 'rot': 270.0}
+    assert t(fp, [(5.0, 5.0)]) == [[95.0, 105.0]], t(fp, [(5.0, 5.0)])
+    fp = {'x': 100.0, 'y': 100.0, 'rot': 180.0, 'flipped': True}
+    assert t(fp, [(5.0, 5.0)]) == [[95.0, 105.0]], t(fp, [(5.0, 5.0)])
+    fp = {'x': 100.0, 'y': 100.0, 'rot': 90.0, 'flipped': True}
+    assert t(fp, [(5.0, 5.0)]) == [[95.0, 95.0]], t(fp, [(5.0, 5.0)])
+    fp = {'x': 100.0, 'y': 100.0, 'rot': 0.0}
+    assert t(fp, [(5.0, 5.0)]) == [[105.0, 105.0]]

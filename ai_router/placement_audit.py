@@ -50,9 +50,18 @@ def _seg_dist(px, py, ax, ay, bx, by):
 
 
 def _transform(fp, outline):
+    # KiCad's footprint transform (Y-down frame): local (x, y) maps to
+    # (x*c + y*s, -x*s + y*c); a flipped (bottom-side) part negates
+    # local y first.  The previous form rotated the other way, so a
+    # 90/270-degree part's keepout landed on the wrong side (#79).
     th = math.radians(fp.get('rot') or 0.0)
     c, s = math.cos(th), math.sin(th)
-    return [[fp['x'] + x * c - y * s, fp['y'] + x * s + y * c] for (x, y) in outline]
+    flip = bool(fp.get('flipped'))
+    out = []
+    for (x, y) in outline:
+        if flip: y = -y
+        out.append([fp['x'] + x * c + y * s, fp['y'] - x * s + y * c])
+    return out
 
 
 def _zone_sig(z):
