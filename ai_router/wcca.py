@@ -80,7 +80,7 @@ def thermal_width_mm(current_a, dt_budget_c, thick_mm, internal,
     if current_a <= 0:
         return 0.0
     t_min = thick_mm * (1.0 - foil_tol_frac)
-    lo, hi = 0.01, 100.0
+    lo, hi = etch_tol_mm + 1e-6, 100.0   # #86: bracket must start above the etch tolerance -- at lo < etch_tol, mid - etch_tol goes <= 0, temp_rise_c returns 0 and the bracket collapses to a width whose manufactured minimum is negative
     if temp_rise_c(hi - etch_tol_mm, t_min, current_a, internal) > dt_budget_c:
         return None  # unreachable in any sane width: caller reports, never invents
     for _ in range(80):
