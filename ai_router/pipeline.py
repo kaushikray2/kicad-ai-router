@@ -34,6 +34,7 @@ except Exception:
 # calculator.  Defensive import in the config pattern -- a run without
 # markings must behave byte-identically to before, so any failure here
 # simply disables the feature.
+_ENG_IMPORT_ERROR = None
 try:
     from ai_router import markings as _markings
     from ai_router import tlcalc as _tlcalc
@@ -47,33 +48,27 @@ try:
     from ai_router import lengthmatch as _lengthmatch
     from ai_router import hvdomains as _hvdomains
     from ai_router import quietnets as _quietnets
-except Exception:
-    try:
-        import markings as _markings
-        import tlcalc as _tlcalc
-        import rfcheck as _rfcheck
-        import powertree as _powertree
-        import powerplan as _powerplan
-        import wcca as _wcca
-        import kbclient as _kbclient
-        import library_rules as _library_rules
-        import placement_audit as _placement_audit
-        import lengthmatch as _lengthmatch
-        import hvdomains as _hvdomains
-        import quietnets as _quietnets
-    except Exception:
-        _markings = None
-        _tlcalc = None
-        _rfcheck = None
-        _powertree = None
-        _powerplan = None
-        _wcca = None
-        _kbclient = None
-        _library_rules = None
-        _placement_audit = None
-        _lengthmatch = None
-        _hvdomains = None
-        _quietnets = None
+except Exception as _e:
+    # #140 (B14): the old flat-import fallback could never
+    # succeed -- five of these modules use relative imports, so
+    # the fallback always collapsed to all-None after partially
+    # binding names, indistinguishable from a real failure.  It
+    # is gone: package import or nothing, the exception is kept
+    # for the loud failure in setup() (#150), and every handle is
+    # defined either way.
+    _ENG_IMPORT_ERROR = repr(_e)
+    _markings = None
+    _tlcalc = None
+    _rfcheck = None
+    _powertree = None
+    _powerplan = None
+    _wcca = None
+    _kbclient = None
+    _library_rules = None
+    _placement_audit = None
+    _lengthmatch = None
+    _hvdomains = None
+    _quietnets = None
 
 # KiCad's built-in Default netclass values (what LoadBoard synthesises
 # when a board has no .kicad_pro); used as the clone source for an
@@ -177,7 +172,8 @@ class Pipeline:
             _sc = os.path.splitext(self.board_path)[0] + '.ai-router-markings.json'
             if os.path.exists(_sc):
                 raise RuntimeError('markings sidecar present (%s) but the engineered-nets '
-                                   'modules failed to import -- refusing to run unmarked' % _sc)
+                                   'modules failed to import (%s) -- refusing to run unmarked'
+                                   % (_sc, _ENG_IMPORT_ERROR))
         self._domains_path = None  # #80: set by _domain_setup when materialise markings exist
         try:
             self._engineered_setup()
