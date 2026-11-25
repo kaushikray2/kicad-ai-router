@@ -523,13 +523,19 @@ def pour_skeletons(b):
     # to this pour. Width per the ticket: zone min-thickness +
     # slack; the reserved corridor adds the board clearance on top
     # (foreign copper must clear the skeleton track, not touch it).
-    # Pads and zones never mutate inside a worker process (legs add
-    # tracks/vias only), so the result is cached per board object
-    # with a shape check on hit.
-    key = id(b)
+    # The result is cached per board object with a shape check on
+    # hit. #161: the shape must cover everything the computation
+    # consumes -- landed vias of the zone nets are MST nodes below,
+    # so a via edit (stitch, fix_violations) changes the skeleton
+    # even though zones and footprints never move; and a bare
+    # id(b) can be recycled by a later board in the same process,
+    # so the board's filename rides the key.
+    key = (id(b), b.GetFileName())
+    n_tracks = len(list(b.GetTracks()))
+    n_vias = sum(1 for t in b.GetTracks() if t.Type() == pcbnew.PCB_VIA_T)
     hit = _SKEL_CACHE.get(key)
-    if hit is not None and hit[0] == len(list(b.Zones())) and hit[1] == len(list(b.GetFootprints())):
-        return hit[2]
+    if hit is not None and hit[0] == len(list(b.Zones())) and hit[1] == len(list(b.GetFootprints())) and hit[2] == n_tracks and hit[3] == n_vias:
+        return hit[4]
     stack = copper_stack(b); lidx = {lay: k for k, lay in enumerate(stack)}
     clr = board_clearance(b)
     zone_nets = set()
@@ -591,7 +597,7 @@ def pour_skeletons(b):
             out.append({'net': net, 'layer': lay, 'layer_idx': lidx[lay],
                         'width': round(width, 3), 'corridor': round(width / 2 + clr, 3),
                         'pads': pts, 'edges': _mst_edges(pts)})
-    _SKEL_CACHE[key] = (len(list(b.Zones())), len(list(b.GetFootprints())), out)
+    _SKEL_CACHE[key] = (len(list(b.Zones())), len(list(b.GetFootprints())), n_tracks, n_vias, out)
     return out
 
 def _seg_in_band(x1, y1, x2, y2, sx1, sy1, sx2, sy2, band):
