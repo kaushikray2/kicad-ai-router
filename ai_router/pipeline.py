@@ -134,16 +134,17 @@ def _accept_key(g):
     # because no decision site consulted the price (NAS layer-cost
     # run: engine passes placed In1.Cu segments, the delivered board
     # had none).
-    # v1.12 (#63): skeleton intrusions are counted in fault_count
-    # (the gate record, the ledger, finalize's delta) but price
-    # AFTER connectivity and after non-intrusion faults here: the
-    # reservation 'yields first under congestion, so it never costs
-    # a connection' -- a leg that closes a split by crossing a
-    # corridor is kept and the intrusion recorded; a leg that only
-    # adds intrusions still loses on this term. With the feature
-    # off the term is 0 and the key is the old key plus a constant.
+    # v1.12 (#63): skeleton intrusions price AFTER connectivity and
+    # after real faults here, as their own term: the reservation
+    # yields first under congestion, so it never costs a connection
+    # -- a leg that closes a split by crossing a corridor is kept
+    # and the intrusion recorded; a leg that only adds intrusions
+    # still loses on this term. With the feature off the term is 0
+    # and the key is the old key plus a constant.
+    # #158: intrusions are NOT part of fault_count (see its
+    # comment) -- this term is where they are priced in this key.
     _intr = int((g or {}).get('skeleton_intrusions') or 0)
-    return (fault_count(g) - _intr, 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
+    return (fault_count(g), 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
             len((g or {}).get('split_nets') or []), _intr, cost_tail(g))
 
 def fault_count(g):
@@ -151,10 +152,27 @@ def fault_count(g):
     # v1.3.2: tracks on a banned layer (the layer-law census) count
     # as faults -- DRC cannot see them (the pour refills around a
     # track drawn on its own plane), so the census is the only guard.
-    # v1.12 (#63): foreign copper inside a reserved pour-skeleton
-    # corridor is a router-added fault, on the same footing as a
-    # track on a banned layer (a policy count the DRC cannot see).
-    return sum(c.get(k, 0) for k in FAULT_CLASSES) + int((g or {}).get('banned_layer_tracks') or 0) + int((g or {}).get('skeleton_intrusions') or 0)
+    # #158: skeleton_intrusions is deliberately NOT in this count.
+    # It is a secondary census, priced as its own term in
+    # _accept_key / _final_key / _conn_key the way main prices
+    # starved_thermal_delta -- never folded into the fault total.
+    # Folding it in broke every caller that compares fault_count
+    # against a board that structurally has no intrusions (the
+    # portfolio skip guard vs the stripped base) or prices it with
+    # no intrusion slot of its own (the fix_violations acceptance
+    # test, the reroute connectivity key). The census still rides
+    # every gate record, so intrusion movement stays visible in
+    # the ledger and in finalize's records.
+    return sum(c.get(k, 0) for k in FAULT_CLASSES) + int((g or {}).get('banned_layer_tracks') or 0)
+
+def _conn_key(g):
+    # tool_reroute_window's 'connectivity' acceptance key:
+    # unconnected (None-is-worst, #59), splits, real faults, then
+    # skeleton intrusions as their own term (#158) -- a reroute can
+    # never trade a real fault for fewer corridor crossings.
+    return (10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
+            len((g or {}).get('split_nets') or []), fault_count(g),
+            int((g or {}).get('skeleton_intrusions') or 0))
 
 
 class Pipeline:
@@ -736,8 +754,11 @@ class Pipeline:
         if r.get('fixed') and os.path.exists(outp):
             prev = self.current; self.current = outp
             after = self.tool_gate()
+            # #158: fault_count is real faults only, and the
+            # unconnected comparison is None-is-worst (#59) -- an
+            # unknown count must never read as 0 (fully connected).
             ok = (fault_count(after) < fault_count(before)
-                  and (after.get('unconnected_total') or 0) <= (before.get('unconnected_total') or 0)
+                  and (10 ** 9 if after.get('unconnected_total') is None else int(after['unconnected_total'])) <= (10 ** 9 if before.get('unconnected_total') is None else int(before['unconnected_total']))
                   and len(after.get('split_nets') or []) <= len(before.get('split_nets') or [])
                   and _accept_key(after) <= _accept_key(before))
             if not ok:
@@ -809,7 +830,7 @@ class Pipeline:
         self._sidecars(outp)
         after = self.tool_gate(outp)
         if str(self.cfg.get('reroute_accept', _CFG_DEFAULTS.get('reroute_accept', 'faults'))) == 'connectivity':
-            ck = lambda g: (10**9 if g.get('unconnected_total') is None else int(g['unconnected_total']), len(g.get('split_nets') or []), fault_count(g))
+            ck = _conn_key
             kb, ka = ck(before), ck(after)
         else:
             ka = _accept_key(after)
