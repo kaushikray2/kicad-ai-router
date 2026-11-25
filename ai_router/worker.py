@@ -4103,7 +4103,10 @@ def cmd_smooth(board_path, net):
         bl = math.hypot(bx, by)
         if bl < 1e-9:
             continue
-        d = R / math.sin(phi / 2)
+        d = R / math.cos(phi / 2)  # #142 (B16): the fillet centre lies
+        # R/cos(phi/2) from the vertex along the bisector (phi = turn
+        # angle); sin agreed only at 90 deg and built 301-deg loops
+        # at 45 deg.
         cx, cy = vxm + bx / bl * d, vym + by / bl * d
         mx, my = (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2
         ml = math.hypot(mx - cx, my - cy)
