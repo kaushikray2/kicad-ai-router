@@ -1419,9 +1419,15 @@ def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
             t = np.clip(((xs - x0) * vx + (ys - y0) * vy) / L2, 0.0, 1.0)
             d = np.hypot(xs - (x0 + t * vx), ys - (y0 + t * vy))
         mask2d[j0:j1 + 1, i0:i1 + 1] |= (d < rad)
+    # v1.11.2 (#107): footprint-embedded Edge.Cuts (slots, cutouts)
+    # is board outline too -- #75 taught the exact checker to see
+    # it; this stamp kept looking only at board drawings, so legs
+    # were planned into the graze band the checker then vetoed.
+    _drawings = list(b.GetDrawings())
+    for _fp in b.GetFootprints(): _drawings.extend(list(_fp.GraphicalItems()))
     for rad, is_via in ((edge_clr + tw / 2, False), (edge_clr + vr, True)):
         band = np.zeros((g.NY, g.NX), dtype=bool)
-        for dr in b.GetDrawings():
+        for dr in _drawings:
             if dr.GetLayer() != pcbnew.Edge_Cuts: continue
             if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
                 stamp_band(mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y), rad, band)
@@ -1455,17 +1461,33 @@ def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None):
         if i1 < i0 or j1 < j0: return
         xs = gx[i0:i1 + 1][None, :]; ys = gy[j0:j1 + 1][:, None]
         mask2d[j0:j1 + 1, i0:i1 + 1] |= (np.hypot(xs - cx, ys - cy) < rad)
-    holes = []
+    holes = []; holes_all = []
     for fp in b.GetFootprints():
         for p in fp.Pads():
-            if net is not None and p.GetNetname() == net: continue
             ds = p.GetDrillSize()
             if ds.x <= 0: continue
-            holes.append((mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2))
+            _h = (mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2)
+            holes_all.append(_h)
+            if net is not None and p.GetNetname() == net: continue
+            holes.append(_h)
     band_t = np.zeros((g.NY, g.NX), dtype=bool); band_v = np.zeros((g.NY, g.NX), dtype=bool)
     for (cx, cy, dr) in holes:
         stamp_disc(cx, cy, dr + hole_clr + tw / 2, band_t)
         stamp_disc(cx, cy, dr + hole_clr + vr_drill, band_v)
+    # v1.11.2 (#107): hole_to_hole is a physical drill-separation
+    # rule and binds SAME-net drills too -- #75 taught the checker
+    # (adrills), but this stamp skipped the planned net's own pads
+    # entirely, so a via could be planned inside h2h of a same-net
+    # TH pad and the finished leg was vetoed. Via centres now stand
+    # off every drill by h2h as well (the checker's own fallback
+    # when the design setting is unreadable). Track bands stay
+    # foreign-only: hole_clearance is a copper rule and same-net
+    # copper is exempt from it.
+    try: h2h = mm(b.GetDesignSettings().m_HoleToHoleMin)
+    except Exception: h2h = hole_clr
+    if h2h > 0:
+        for (cx, cy, dr) in holes_all:
+            stamp_disc(cx, cy, dr + h2h + vr_drill, band_v)
     for li in range(g.nl): blocked[li] |= band_t
     via_block |= band_v
 
