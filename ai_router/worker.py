@@ -109,6 +109,52 @@ def refill(b):
     f.Fill(b.Zones())
 
 # ---------------------------------------------------------------- summary
+def _via_on_pad_census(b, tracks):
+    """#72 item 1: via-on-pad census -- a REPORTED gate metric
+    only (never in the accept key).  The owner's framing
+    (2026-11-24): via-on-pad is a performance trade-off to
+    measure, not a blanket ban; the bounded policy (finisher
+    cleanup + engine placement policy) is programme work that
+    needs this census first.  Counts: vias whose centre lies
+    inside a pad's bounding box on a layer both span, split by
+    same-net vs foreign-net, plus vias whose barrel overlaps a
+    pad's box without the centre landing inside it."""
+    pads = []
+    for fp in b.GetFootprints():
+        for p in fp.Pads():
+            bb = p.GetBoundingBox()
+            pads.append({'net': p.GetNetname(),
+                         'x0': mm(bb.GetLeft()), 'y0': mm(bb.GetTop()),
+                         'x1': mm(bb.GetRight()), 'y1': mm(bb.GetBottom()),
+                         'layers': set(p.GetLayerSet().CuStack())})
+    stack = copper_stack(b)
+    out = {'centre_same_net': 0, 'centre_foreign_net': 0,
+           'annulus_overlap': 0}
+    for t in tracks:
+        if t.Type() != pcbnew.PCB_VIA_T:
+            continue
+        vx, vy = mm(t.GetPosition().x), mm(t.GetPosition().y)
+        vr = mm(t.GetWidth()) / 2.0
+        try:
+            lo = stack.index(t.TopLayer()); hi = stack.index(t.BottomLayer())
+        except ValueError:
+            continue
+        vlay = set(stack[min(lo, hi):max(lo, hi) + 1])
+        for pd in pads:
+            if not (vlay & pd['layers']):
+                continue
+            if pd['x0'] <= vx <= pd['x1'] and pd['y0'] <= vy <= pd['y1']:
+                key = ('centre_same_net' if pd['net'] == t.GetNetname()
+                       else 'centre_foreign_net')
+                out[key] += 1
+                continue
+            dx = max(pd['x0'] - vx, 0.0, vx - pd['x1'])
+            dy = max(pd['y0'] - vy, 0.0, vy - pd['y1'])
+            if (dx * dx + dy * dy) ** 0.5 < vr:
+                out['annulus_overlap'] += 1
+    return out
+
+
 def cmd_summary(board_path, fast=False):
     b = pcbnew.LoadBoard(board_path)
     refill(b)
@@ -187,6 +233,7 @@ def cmd_summary(board_path, fast=False):
             if _zl in _lidx:
                 pour_layers.setdefault(_zn, set()).add(copper_layers[_lidx[_zl]])
     pour_layers = {k: sorted(v) for k, v in pour_layers.items()}
+    via_on_pad = _via_on_pad_census(b, tracks)
     if fast:
         # v1.9.6 (#40): gate calls discard the congestion features --
         # skip the O(N^2) MST crossings + RUDY computation entirely.
@@ -196,7 +243,7 @@ def cmd_summary(board_path, fast=False):
                 'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
                 'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
                 'tracks_by_layer': tracks_by_layer, 'track_length_by_layer': {k: round(v, 1) for k, v in track_length_by_layer.items()}, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
-                'footprints': len(list(b.GetFootprints())), 'locked_items': locked_items, 'free_vias': free_vias}
+                'footprints': len(list(b.GetFootprints())), 'locked_items': locked_items, 'free_vias': free_vias, 'via_on_pad': via_on_pad}
     # v1.2.2 congestion features (for the strategy dataset): ratsnest
     # MST crossings between different nets + RUDY peak/p95 of net
     # bounding boxes on a 32x32 grid.
@@ -247,7 +294,7 @@ def cmd_summary(board_path, fast=False):
             'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
             'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
             'tracks_by_layer': tracks_by_layer, 'track_length_by_layer': {k: round(v, 1) for k, v in track_length_by_layer.items()}, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
-            'footprints': len(list(b.GetFootprints())), 'locked_items': locked_items, 'free_vias': free_vias}
+            'footprints': len(list(b.GetFootprints())), 'locked_items': locked_items, 'free_vias': free_vias, 'via_on_pad': via_on_pad}
 
 # ---------------------------------------------------------------- scorecard
 def cmd_scorecard(board_path):

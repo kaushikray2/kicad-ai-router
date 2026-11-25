@@ -703,7 +703,7 @@ class Pipeline:
                           'vias': summ.get('vias'), 'wirelength_mm': summ.get('wirelength_mm'),
                           'classes': classes, 'starved_thermal': _st, 'starved_thermal_delta': _st_delta, 'isolated_copper': int(classes.get('isolated_copper') or 0), 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
                           'signal_items': signal, 'split_nets': split_nets,
-                          'pour_nets': pour_nets, 'invariance': _inv, 'tracks_by_layer': _tbl, 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
+                          'pour_nets': pour_nets, 'invariance': _inv, 'tracks_by_layer': _tbl, 'via_on_pad': summ.get('via_on_pad'), 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
         self._record('gate', self.last_gate)
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
         return self.last_gate
