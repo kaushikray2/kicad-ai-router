@@ -142,6 +142,7 @@ def cmd_summary(board_path, fast=False):
         layer_aliases[b.GetLayerName(_lid).strip().lower()] = copper_layers[_k]
         layer_aliases[copper_layers[_k].lower()] = copper_layers[_k]
     tracks_by_layer = {}
+    track_length_by_layer = {}  # v1.11.4 (#115): per-layer track LENGTH beside the counts -- the gate prices a layer from length; counts cannot
     tracks_by_layer_net = {}
     for t in tracks:
         if t.Type() == pcbnew.PCB_VIA_T: continue
@@ -149,6 +150,7 @@ def cmd_summary(board_path, fast=False):
         if _li is None: continue  # v1.9.6 (#40): off-stack layer (external-router boards) -- skip, do not KeyError
         _cn = copper_layers[_li]
         tracks_by_layer[_cn] = tracks_by_layer.get(_cn, 0) + 1
+        track_length_by_layer[_cn] = track_length_by_layer.get(_cn, 0.0) + mm(t.GetLength())
         _d = tracks_by_layer_net.setdefault(_cn, {})
         _nn = t.GetNetname()
         _d[_nn] = _d.get(_nn, 0) + 1
@@ -176,7 +178,7 @@ def cmd_summary(board_path, fast=False):
                 'tracks': len([t for t in tracks if t.Type() != pcbnew.PCB_VIA_T]),
                 'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
                 'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
-                'tracks_by_layer': tracks_by_layer, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
+                'tracks_by_layer': tracks_by_layer, 'track_length_by_layer': {k: round(v, 1) for k, v in track_length_by_layer.items()}, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
                 'footprints': len(list(b.GetFootprints()))}
     # v1.2.2 congestion features (for the strategy dataset): ratsnest
     # MST crossings between different nets + RUDY peak/p95 of net
@@ -227,7 +229,7 @@ def cmd_summary(board_path, fast=False):
             'tracks': len([t for t in tracks if t.Type() != pcbnew.PCB_VIA_T]),
             'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
             'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
-            'tracks_by_layer': tracks_by_layer, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
+            'tracks_by_layer': tracks_by_layer, 'track_length_by_layer': {k: round(v, 1) for k, v in track_length_by_layer.items()}, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
             'footprints': len(list(b.GetFootprints()))}
 
 # ---------------------------------------------------------------- scorecard

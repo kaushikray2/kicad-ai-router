@@ -99,6 +99,16 @@ def format_layer_cost(pairs):
     # Canonical spec string for --layer-cost / the ledger.
     return ','.join('%s=%d' % (n, f) for n, f in pairs or [])
 
+def cost_tail(g):
+    # v1.11.4 (#114): the layer-cost tail shared by every keep/discard
+    # key in the stack (_accept_key here, the orchestrator's
+    # _final_key). The gate dict carries cost_weighted_wirelength_mm
+    # only when a layer_cost spec resolved onto the board; without
+    # one the tail is a constant 0.0, so uncosted runs compare
+    # exactly as they did before the term existed.
+    w = (g or {}).get('cost_weighted_wirelength_mm')
+    return 0.0 if w is None else float(w)
+
 def _accept_key(g):
     # v1.8.2 (#16): step acceptance is lexicographic -- a step is kept
     # only if it is no worse in (copper faults, unconnected items,
@@ -109,8 +119,15 @@ def _accept_key(g):
     # v1.10.1 (#59): None-is-worst, matching _unc_key -- the old
     # 'or 0' mapped a MISSING unconnected_total to 0, the best value
     # (the mirror image of C1).
+    # v1.11.4 (#114): layer-cost-weighted wirelength as the LAST term
+    # -- tie-break only; it can never trade a connection or a fault
+    # for cost. Before, a finisher leg could displace priced-layer
+    # copper and be kept whenever the three gate numbers tied,
+    # because no decision site consulted the price (NAS layer-cost
+    # run: engine passes placed In1.Cu segments, the delivered board
+    # had none).
     return (fault_count(g), 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
-            len((g or {}).get('split_nets') or []))
+            len((g or {}).get('split_nets') or []), cost_tail(g))
 
 def fault_count(g):
     c = (g or {}).get('classes') or {}
@@ -594,6 +611,17 @@ class Pipeline:
         # consumers keyed off split_nets (which hard-excludes 'GND')
         # silently never healed a via-carrying GND fragment.
         split_pour_nets = [n['net'] for n in summ['nets'] if n['components'] > 1 and n['net'] in pour_nets]
+        # v1.11.4 (#115): per-layer track length from the summary census
+        # and, when a layer_cost spec resolved onto this board, the
+        # cost-weighted wirelength (segment length x layer factor,
+        # unpriced layers at 1). Recorded on every gate record, so a
+        # layer-cost run is measurable from its ledger alone; the
+        # weighted figure stays None when no spec is in force.
+        _tll = summ.get('track_length_by_layer') or {}
+        _cost_weighted = None
+        if _cost_pairs and summ.get('track_length_by_layer') is not None:
+            _fac = dict(_cost_pairs)
+            _cost_weighted = round(sum(l * _fac.get(nm, 1) for nm, l in _tll.items()), 1)
         self.last_gate = {'violations_total': total, 'unconnected_total': unc,
                           'violations_excl_unconnected': total,  # v1.8.2 (#18): the KiCad header total ALREADY excludes unconnected items (proven on a live report); subtracting them again undercounted
                           'board_sha256': hashlib.sha256(open(board, 'rb').read()).hexdigest(),
@@ -601,7 +629,7 @@ class Pipeline:
                           'vias': summ.get('vias'), 'wirelength_mm': summ.get('wirelength_mm'),
                           'classes': classes, 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
                           'signal_items': signal, 'split_nets': split_nets,
-                          'pour_nets': pour_nets, 'tracks_by_layer': _tbl, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
+                          'pour_nets': pour_nets, 'tracks_by_layer': _tbl, 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
         self._record('gate', self.last_gate)
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
         return self.last_gate
