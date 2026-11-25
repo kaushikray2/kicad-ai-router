@@ -14,9 +14,12 @@ try:
 except ImportError:
     from pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta
 try:
-    from config import DEFAULTS as _CFG_DEFAULTS
+    from .config import DEFAULTS as _CFG_DEFAULTS
 except Exception:
-    _CFG_DEFAULTS = {}
+    try:
+        from config import DEFAULTS as _CFG_DEFAULTS
+    except Exception:
+        _CFG_DEFAULTS = {}
 
 PLAYBOOK = """You are the strategy layer of a PCB routing pipeline. Read the
 board's actual stackup from board_summary (copper_layers, pour_nets): on the
@@ -246,7 +249,8 @@ def _run_auto_once(cfg, pipe, log):
     best = None
     prev_sig = None
     base_gate = pipe.tool_gate(pipe.base)  # v1.9.6 (#37): the portfolio skip guard needs the base fault count
-    engines = [e.strip() for e in str(cfg.get('engine_portfolio', _CFG_DEFAULTS.get('engine_portfolio', ''))).split(',') if e.strip()]
+    # v1.11.5 (#123): the literal fallback matches config.py ('tm_relax', was '')
+    engines = [e.strip() for e in str(cfg.get('engine_portfolio', _CFG_DEFAULTS.get('engine_portfolio', 'tm_relax'))).split(',') if e.strip()]
     if engines:
         try:
             pg = pipe.tool_portfolio(engines)

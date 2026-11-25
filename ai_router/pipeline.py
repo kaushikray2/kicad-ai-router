@@ -25,10 +25,20 @@ FAULT_CLASSES = ('shorting_items', 'clearance', 'items_not_allowed',
 # noise and unconnected_items, which is tracked separately).
 COPPER_CLASSES = FAULT_CLASSES  # v1.9.6 (#39): identical since sliver joined FAULT_CLASSES (kept as a name for reporting call sites)
 
+# v1.11.5 (#123): relative import FIRST (dialog.py's pattern) -- in
+# KiCad's package context a top-level 'config' module is not
+# importable, and the old absolute-only import silently fell back
+# to {} there, leaving hard-coded literals to disagree with
+# config.py for any caller passing a partial config. The literals
+# at the use sites are reconciled with config.py: reroute_accept
+# 'connectivity' (was 'faults' in tool_reroute_window).
 try:
-    from config import DEFAULTS as _CFG_DEFAULTS
+    from .config import DEFAULTS as _CFG_DEFAULTS
 except Exception:
-    _CFG_DEFAULTS = {}
+    try:
+        from config import DEFAULTS as _CFG_DEFAULTS
+    except Exception:
+        _CFG_DEFAULTS = {}
 
 def resolve_ban_names(raw, aliases):
     # v1.10.1 (#49): the ONE layer-law resolution point. raw config
@@ -754,7 +764,7 @@ class Pipeline:
             except Exception as e: self.log('WARNING: lock restore failed (%s)' % e)
         self._sidecars(outp)
         after = self.tool_gate(outp)
-        if str(self.cfg.get('reroute_accept', _CFG_DEFAULTS.get('reroute_accept', 'faults'))) == 'connectivity':
+        if str(self.cfg.get('reroute_accept', _CFG_DEFAULTS.get('reroute_accept', 'connectivity'))) == 'connectivity':
             ck = lambda g: (10**9 if g.get('unconnected_total') is None else int(g['unconnected_total']), len(g.get('split_nets') or []), fault_count(g))
             kb, ka = ck(before), ck(after)
         else:
@@ -765,7 +775,7 @@ class Pipeline:
         else:
             self.last_gate = before
             st = 'reverted'
-        self._record('reroute_window', {'net': net, 'status': st, 'key_before': kb, 'key_after': ka, 'window': res.get('window'), 'accept': str(self.cfg.get('reroute_accept', _CFG_DEFAULTS.get('reroute_accept', 'faults')))})
+        self._record('reroute_window', {'net': net, 'status': st, 'key_before': kb, 'key_after': ka, 'window': res.get('window'), 'accept': str(self.cfg.get('reroute_accept', _CFG_DEFAULTS.get('reroute_accept', 'connectivity')))})
         self.log('reroute_window %s: %s (key %s -> %s)' % (net, st, kb, ka))
         return {'status': st, 'net': net, 'gate': after}
 

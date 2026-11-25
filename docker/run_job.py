@@ -45,8 +45,12 @@ def build_cfg(rt, llm, tm_exe):
             if _p not in sys.path: sys.path.insert(0, _p)
         import config as _cm
         cfg.update(_cm.DEFAULTS)
-    except Exception:
-        pass
+    except Exception as e:
+        # v1.11.5 (#123): never silent -- a failed config import was
+        # the N1 failure mode (jobs running on hard-coded fallbacks
+        # with no trace). The job continues on the server-owned keys
+        # below, but the failure is on the record.
+        print('build_cfg: plugin config import failed (%r); continuing without DEFAULTS' % (e,), file=sys.stderr, flush=True)
     cfg.update({'endpoint': llm.get('endpoint', ''), 'model': llm.get('model', ''),
                 'api_key': llm.get('api_key', ''), 'tracemaker_path': tm_exe, 'kicad_cli': 'kicad-cli'})
     cfg['mode'] = rt.get('mode', cfg.get('mode', 'auto'))
@@ -76,8 +80,8 @@ def build_cfg(rt, llm, tm_exe):
     try:
         for _k in _cm.DEFAULTS:
             if _k not in _handled and _k in rt: cfg[_k] = rt[_k]
-    except Exception:
-        pass
+    except Exception as e:
+        print('build_cfg: DEFAULTS forwarding failed (%r)' % (e,), file=sys.stderr, flush=True)  # v1.11.5 (#123)
     return cfg
 
 def main():
