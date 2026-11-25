@@ -149,9 +149,12 @@ research report candidates 1-2 (2026-11-25).
 
 ## In progress
 
-- **P2.1b** (below) is in progress on branch `p21b-fix-violations`:
-  step 0 (#63) has landed there (see the P2.1b section); the
-  tool_fix_violations stage follows it. Phase 2E
+- **P2.1b** (below): both stages have landed on branch
+  `p21b-fix-violations` (see the P2.1b section) — step 0 (#63,
+  closed) and tool_fix_violations (#155, open for the owner's
+  review). What remains is measurement, not code: the dataset-v3
+  bench rerun for step 0's improvement half and a re-route-trade
+  sample for the tool, both needing backend bench time. Phase 2E
   (below) follows P2.7a; the fair engine A/B sits inside it, per the
   owner's sequencing.
 
@@ -210,6 +213,34 @@ bought −4 unconnected) and dense-board engine output. Also runs after
 can be cleaned locally. Exit: copper strictly down, unconnected
 unchanged, on the sample. Kill: rip-and-reclose re-opens more than it
 cleans.
+
+**Tool stage landed** (2026-11-25, branch `p21b-fix-violations`,
+commits 4475c73 + 806cb25 + this entry; #155 stays open for the
+owner's review). Pipeline `tool_fix_violations` diffs item-level
+DRC faults (JSON report) against the base board's — a fault is
+router-added when no base fault of the same type sits within
+0.5 mm — and works them in class order (shorts, crossings,
+clearance, hole rules, then the rest; cap 32). The worker rips
+only the offending net's copper within ±3 mm (plus vias the rip
+strands) and re-closes with the exact-checked bridge planner;
+per-fault rollback restores the ripped geometry when a re-close
+cannot hold the net's component count. Gate-verified: the output
+stands only if `fault_count` strictly drops, unconnected and
+splits do not grow, and the faults-first accept key does not
+regress — a fix that trades faults is reverted. Runs in AUTO
+after `reroute_window`; config `fix_violations` (default on).
+Local exit measurement (the step-0 A/B finals, tool driven on the
+delivered boards against their own stripped bases): Nomad — the
+one router-added fault (a dangling GND stub) fixed, copper
+14 → 13, unconnected 1 → 1, splits unchanged; esp32_S2 —
+`no_router_faults` (all 20 copper items pre-exist on its base;
+board untouched). Kill criterion not triggered. The re-route-
+trade sample (bitaxe-class) was not reproduced locally — no
+local run produced an accepted trade to clean; the planted
+fixtures cover the trade's mechanics (clearance graze and
+same-layer crossing ripped and re-closed exactly, connectivity
+preserved). Tests: tests/test_fix_violations.py (22 checks,
+fails on base); branch suite green (see the report).
 
 ### P2.7a — Performance quick wins (4–8 h)
 Remove verified double-gating (the base is gated twice per run; the
