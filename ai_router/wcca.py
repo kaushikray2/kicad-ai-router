@@ -101,7 +101,7 @@ def ipc2221_current_a(area_mil2, dt_c, internal):
 def ipc2221_width_mm(current_a, dt_c, thick_mm, internal):
     k = 0.024 if internal else 0.048
     area = (current_a / (k * dt_c ** 0.44)) ** (1.0 / 0.725)  # mil^2
-    return area / (thick_mm / MIL)
+    return area / (thick_mm / MIL) * MIL   # #85: area/thickness is in mils; convert to mm
 
 
 def drop_width_mm(current_peak_a, length_mm, thick_mm, drop_budget_v,

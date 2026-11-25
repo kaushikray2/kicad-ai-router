@@ -61,3 +61,22 @@ def test_size_segment_governing_and_rounding():
     s2 = wcca.size_segment(2.0, 2.0, 5.0, 0.035, False, CORNERS)
     assert s2['governing'] == 'thermal'
     assert s2['width_mm'] >= s2['thermal_width_mm']
+
+
+def test_ipc2221_width_is_millimetres():
+    # #85: the closed form works in mils internally; the _mm
+    # function must convert on return (was 39.37x too large).
+    w = wcca.ipc2221_width_mm(1.0, 10.0, 0.035, False)
+    assert abs(w - 0.3004) < 0.005, w
+    # round-trip: the current that width carries at the same rise
+    area_mil2 = (w / wcca.MIL) * (0.035 / wcca.MIL)
+    assert abs(wcca.ipc2221_current_a(area_mil2, 10.0, False) - 1.0) < 0.02
+
+def test_thermal_width_never_below_etch_floor():
+    # #86: for small currents the bisection bracket (lo 0.01) sat
+    # below the 0.02 etch tolerance and collapsed to 0.01 mm -- a
+    # width whose manufactured minimum is <= 0.
+    w = wcca.thermal_width_mm(0.005, 10.0, 0.035, False)
+    assert w > 0.02, w
+    w2 = wcca.thermal_width_mm(2.0, 10.0, 0.035, False)
+    assert w2 > 0.3, w2   # a real current still sizes for real
