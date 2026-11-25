@@ -61,6 +61,23 @@ def build_cfg(rt, llm, tm_exe):
     cfg['layer_cost'] = rt.get('layer_cost', cfg.get('layer_cost', ''))  # v1.11 (#73): explicit map, like layer_law_policy; the generic forwarding loop below would also carry it from DEFAULTS
     cfg['first_nets_policy'] = rt.get('first_nets_policy', cfg.get('first_nets_policy', 'auto'))
     cfg['engine_portfolio'] = _engines_or(rt, cfg.get('engine_portfolio', ''))
+    # v1.11.1 (#74): forward every remaining DEFAULTS key the job set.
+    # The explicit mappings above are the parsed few; main()'s generic
+    # forwarding loop can never fire because cfg already holds every
+    # DEFAULTS key (its 'not in cfg' test is always False), so before
+    # this, overrides for reroute_window_cap / reroute_accept /
+    # reroute_margin / pass_advice / advice_regions / max_tool_calls
+    # were silently dropped and the job ran with the shipped defaults.
+    _handled = {'endpoint', 'model', 'api_key', 'tracemaker_path', 'kicad_cli',
+                'mode', 'max_passes', 'work', 'no_tracks_on', 'strip_existing',
+                'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap',
+                'ilp_repair_cap', 'attempt_select', 'layer_law_policy',
+                'layer_cost', 'first_nets_policy', 'engine_portfolio'}
+    try:
+        for _k in _cm.DEFAULTS:
+            if _k not in _handled and _k in rt: cfg[_k] = rt[_k]
+    except Exception:
+        pass
     return cfg
 
 def main():

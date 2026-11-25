@@ -22,3 +22,23 @@ def test_engine_whitelist_dedupe_cap():
 def test_non_numeric_does_not_crash():
     cfg = run_job.build_cfg({'max_passes': 'lots', 'work': 'plenty'}, {}, '/tm')
     assert cfg['max_passes'] == 4 and cfg['work'] == 20000000
+
+def test_unlisted_defaults_keys_forward():
+    # #74: keys with no explicit mapping in build_cfg were silently
+    # dropped (cfg already held every DEFAULTS key, so main()'s
+    # 'not in cfg' forwarding loop could never fire).
+    rt = {'reroute_window_cap': 4, 'reroute_accept': 'faults',
+          'reroute_margin': 9.0, 'pass_advice': 'priority',
+          'advice_regions': True, 'max_tool_calls': 99}
+    cfg = run_job.build_cfg(rt, {}, '/tm')
+    assert cfg['reroute_window_cap'] == 4, cfg['reroute_window_cap']
+    assert cfg['reroute_accept'] == 'faults', cfg['reroute_accept']
+    assert cfg['reroute_margin'] == 9.0, cfg['reroute_margin']
+    assert cfg['pass_advice'] == 'priority', cfg['pass_advice']
+    assert cfg['advice_regions'] is True, cfg['advice_regions']
+    assert cfg['max_tool_calls'] == 99, cfg['max_tool_calls']
+
+def test_server_owned_keys_not_overridable():
+    cfg = run_job.build_cfg({'endpoint': 'http://evil', 'api_key': 'x'},
+                            {'endpoint': 'http://llm', 'api_key': 'k'}, '/tm')
+    assert cfg['endpoint'] == 'http://llm' and cfg['api_key'] == 'k'
