@@ -65,3 +65,12 @@ def test_markings_hv_schema():
         _mk.validate({'hv_domains': [{'name': 'X', 'nets': ['A'],
                                       'voltage_v': 10,
                                       'coating': 'mask'}]})
+
+
+def test_seg_seg_crossing_witness_is_intersection():
+    # #89: crossing segments must report the intersection point,
+    # not the segments' start points.
+    d, pa, pb = H._seg_seg((0.0, 0.0, 10.0, 0.0), (5.0, -5.0, 5.0, 5.0))
+    assert d == 0.0
+    assert abs(pa[0] - 5.0) < 1e-9 and abs(pa[1]) < 1e-9, pa
+    assert abs(pb[0] - 5.0) < 1e-9 and abs(pb[1]) < 1e-9, pb

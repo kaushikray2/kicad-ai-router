@@ -96,7 +96,11 @@ def _seg_seg(a, b):
     d4 = orient(ax1, ay1, ax2, ay2, bx2, by2)
     if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)) \
             and d1 != 0 and d2 != 0 and d3 != 0 and d4 != 0:
-        return 0.0, (ax1, ay1), (bx1, by1)
+        # #89: report the actual intersection, not the start points
+        t = ((bx1 - ax1) * (by2 - by1) - (by1 - ay1) * (bx2 - bx1)) / float(
+            (ax2 - ax1) * (by2 - by1) - (ay2 - ay1) * (bx2 - bx1))
+        ix, iy = ax1 + t * (ax2 - ax1), ay1 + t * (ay2 - ay1)
+        return 0.0, (ix, iy), (ix, iy)
     best = None
     for (px, py, seg, on_a) in ((ax1, ay1, b, True), (ax2, ay2, b, True),
                                 (bx1, by1, a, False), (bx2, by2, a, False)):
