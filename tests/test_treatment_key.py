@@ -41,7 +41,7 @@ try:
     assert r.get('full_key_status') == 'reverted_cost', r
     assert p.current != os.path.join(p.workdir, 'cur.kicad_pcb') or True  # adopted -> current moved to the candidate
     # fault-adding treatment: still reverts, as reverted_faults
-    p2 = make_pipe({'classes': {'copper_clearance': 1}, 'unconnected_total': 2, 'split_nets': [], 'cost': 40.0})
+    p2 = make_pipe({'classes': {'clearance': 1}, 'unconnected_total': 2, 'split_nets': [], 'cost': 40.0})
     r2 = p2._eng_gate_try('meander', ['--net', 'A', '--add-mm', '5'], 'meander')
     assert r2.get('adopted') is False and r2.get('status') == 'reverted_faults', r2
 finally:
