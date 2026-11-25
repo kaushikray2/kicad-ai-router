@@ -59,6 +59,10 @@ def test_confirmed_applies_with_citation(tmp_path):
 def test_cache_key_includes_revision(tmp_path):
     cache = kbclient.KbCache(str(tmp_path / 'kb.json'))
     cache.store_estimates([_est('peak', 1.8, confirmed=True, rev='B')])
+    # #137 (B12): the server-minted confirmed=True above is NOT
+    # honoured -- confirmation is a local record only.
+    assert cache.confirmed('IC-EXAMPLE', 'B', 'peak') is None
+    assert cache.confirm('IC-EXAMPLE', 'B', 'peak') is True
     assert cache.confirmed('IC-EXAMPLE', 'B', 'peak') is not None
     assert cache.confirmed('IC-EXAMPLE', 'C', 'peak') is None  # rev C != rev B
     entries, res = kbclient.resolve_loads(_entries(), cache, None)
