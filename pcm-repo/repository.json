@@ -1,6 +1,5 @@
 {
   "$schema": "https://go.kicad.org/pcm/schemas/v2",
-  "schema_version": 2,
   "name": "SiliconBrane AI Router (LAN)",
   "maintainer": {
     "name": "SiliconBrane Inc",
@@ -8,11 +7,10 @@
       "email": "ray@siliconbrane.com"
     }
   },
-  "url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo",
-  "kicad_version": "10.0",
   "packages": {
     "url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/packages.json",
     "sha256": "17ce135d27cd983fb2b39ca7a2522355ae2dfee8fa524f0c09187b2ae1293be1",
-    "update_timestamp": 1795625628
+    "update_timestamp": 1795625628,
+    "update_time_utc": "2026-11-25 16:53:48"
   }
 }

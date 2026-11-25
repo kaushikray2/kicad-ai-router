@@ -3,7 +3,7 @@
 Zip metadata.json carries NO download_* keys (PCM rule); those live only in
 pcm-repo/packages.json, regenerated on every build - forgetting that step is
 the silent 'updates never appear' failure, so it happens here, always."""
-import hashlib, json, os, zipfile
+import datetime, hashlib, json, os, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VERSION = '1.11.5'
@@ -70,19 +70,26 @@ def main():
     with open(os.path.join(repo_dir, 'packages.json'), 'w') as f: json.dump(packages, f, indent=2)
     import shutil, time
     shutil.copy(zip_path, os.path.join(repo_dir, zip_name))
-    # v1.11.5 (#120): PCM v2 requires schema_version and a packages
-    # RESOURCE (url + sha256 of packages.json + update_timestamp).
-    # Without them KiCad cannot follow the repository to its package
-    # index at all -- the update channel was silently broken.
+    # v1.11.5 (#120): PCM v2 requires a packages RESOURCE (url +
+    # sha256 of packages.json + update_timestamp).  Without it
+    # KiCad cannot follow the repository to its package index at
+    # all -- the update channel was silently broken.
+    # #154: the field SHAPE must match the official KiCad
+    # repository.json -- KiCad's valijson loader rejects ours
+    # ('does not look like a valid KiCad package repository')
+    # even though it validates against the JSON schemas.  No
+    # schema_version / url / kicad_version top-level fields, and
+    # the packages object carries update_time_utc alongside
+    # update_timestamp.
     packages_blob = open(os.path.join(repo_dir, 'packages.json'), 'rb').read()
+    ts = int(time.time())
     repository = {'$schema': 'https://go.kicad.org/pcm/schemas/v2',
-                  'schema_version': 2,
                   'name': 'SiliconBrane AI Router (LAN)',
                   'maintainer': {'name': 'SiliconBrane Inc', 'contact': {'email': 'ray@siliconbrane.com'}},
-                  'url': REPO_BASE_URL, 'kicad_version': '10.0',
                   'packages': {'url': REPO_BASE_URL + '/packages.json',
                                'sha256': hashlib.sha256(packages_blob).hexdigest(),
-                               'update_timestamp': int(time.time())}}
+                               'update_timestamp': ts,
+                               'update_time_utc': datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}}
     with open(os.path.join(repo_dir, 'repository.json'), 'w') as f: json.dump(repository, f, indent=2)
     print('zip: %s (%d bytes, sha256 %s)' % (zip_path, len(blob), sha[:16]))
     print('repo index regenerated: pcm-repo/{packages.json, repository.json, %s}' % zip_name)
