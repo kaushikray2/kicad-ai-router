@@ -796,7 +796,19 @@ def board_clearance(b):
     try:
         ns = b.GetDesignSettings().m_NetSettings
         for n in names:
-            try: best = max(best, mm(ns.GetEffectiveNetClass(n).GetClearance()))
+            try:
+                nc = ns.GetEffectiveNetClass(n)
+                if (nc.GetName() or '').startswith('AI-HV-'):
+                    # #148 follow-up: AI-HV classes carry DOMAIN
+                    # pair spacing for the engine + the gate's DRC
+                    # scoring; the finisher enforces that spacing
+                    # via the domain rect stamps.  Planning every
+                    # leg at the board-wide max (now the HV value)
+                    # seals corridors the domain rules leave open
+                    # (test_domain_enforce's LV leg stopped routing
+                    # the day the classes landed).
+                    continue
+                best = max(best, mm(nc.GetClearance()))
             except Exception: pass
     except Exception:
         pass
