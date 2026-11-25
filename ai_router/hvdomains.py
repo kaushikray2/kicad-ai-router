@@ -27,20 +27,27 @@ This is a design aid, not a certification.
 import heapq
 import math
 
-# (band top V, B1, B2, B3, B4) -- IPC-2221B Table 6-1, mm
+# (band top V, B1, B2, B3, B4, A5, A6, A7) -- IPC-2221B Table 6-1,
+# mm.  The A columns (assembly: A5 conformal-coated conductors,
+# A6 uncoated leads/terminations, A7 conformal-coated
+# leads/terminations) were added for #127 (B1): three independent
+# reproductions of the table (Sierra Circuits, Altair PollEx docs,
+# protoflow) agree cell-for-cell on all seven columns, and the
+# ANSI IPC-2221B preview names columns A5-A7 in sec. 6.3.5-6.3.7.
 _BANDS = [
-    (15,  0.05, 0.10, 0.10, 0.05),
-    (30,  0.05, 0.10, 0.10, 0.05),
-    (50,  0.10, 0.60, 0.60, 0.13),
-    (100, 0.10, 0.60, 1.50, 0.13),
-    (150, 0.20, 0.60, 3.20, 0.40),
-    (170, 0.20, 1.25, 3.20, 0.40),
-    (250, 0.20, 1.25, 6.40, 0.40),
-    (300, 0.20, 1.25, 12.5, 0.40),
-    (500, 0.25, 2.50, 12.5, 0.80),
+    (15,  0.05, 0.10, 0.10, 0.05, 0.13, 0.13, 0.13),
+    (30,  0.05, 0.10, 0.10, 0.05, 0.13, 0.25, 0.13),
+    (50,  0.10, 0.60, 0.60, 0.13, 0.13, 0.40, 0.13),
+    (100, 0.10, 0.60, 1.50, 0.13, 0.13, 0.50, 0.13),
+    (150, 0.20, 0.60, 3.20, 0.40, 0.40, 0.80, 0.40),
+    (170, 0.20, 1.25, 3.20, 0.40, 0.40, 0.80, 0.40),
+    (250, 0.20, 1.25, 6.40, 0.40, 0.40, 0.80, 0.40),
+    (300, 0.20, 1.25, 12.5, 0.40, 0.40, 0.80, 0.80),
+    (500, 0.25, 2.50, 12.5, 0.80, 0.80, 1.50, 0.80),
 ]
-_RATES = {'B1': 0.0025, 'B2': 0.005, 'B3': 0.025, 'B4': 0.00305}
-_COLIDX = {'B1': 1, 'B2': 2, 'B3': 3, 'B4': 4}
+_RATES = {'B1': 0.0025, 'B2': 0.005, 'B3': 0.025, 'B4': 0.00305,
+          'A5': 0.00305, 'A6': 0.00305, 'A7': 0.00305}
+_COLIDX = {'B1': 1, 'B2': 2, 'B3': 3, 'B4': 4, 'A5': 5, 'A6': 6, 'A7': 7}
 
 
 def required_spacing_mm(delta_v, column):
@@ -59,16 +66,44 @@ def required_spacing_mm(delta_v, column):
 
 
 def column_for(surface, coating='uncoated', altitude_m=0):
-    """Table column for a layer: internal -> B1; external with a
-    declared permanent polymer coating -> B4; external uncoated
-    above 3050 m -> B3; else B2."""
+    """Table column for a layer's CONDUCTORS: internal -> B1;
+    external with a declared permanent polymer coating -> B4;
+    external with conformal coating over the assembly -> A5;
+    external uncoated above 3050 m -> B3; else B2."""
     if not surface:
         return 'B1'
     if coating == 'polymer':
         return 'B4'
+    if coating == 'conformal':
+        return 'A5'
     if altitude_m and altitude_m > 3050:
         return 'B3'
     return 'B2'
+
+
+def termination_column(coating='uncoated'):
+    """Table column for a component lead / termination (a pad):
+    A7 under conformal coating, else A6.  Pads are openings in
+    solder mask, so a polymer-coated board's pads are NOT B4."""
+    return 'A7' if coating == 'conformal' else 'A6'
+
+
+def pair_required_mm(delta_v, surface, coating='uncoated',
+                     altitude_m=0, termination=False):
+    """(required_mm, effective_column, conductor_column) for one
+    domain on one layer of a pair.  #127 (B1): when the pair's
+    closest approach involves a termination on a surface layer,
+    the termination column applies as well and the requirement is
+    the larger of the conductor and termination values."""
+    col = column_for(surface, coating, altitude_m)
+    req = required_spacing_mm(delta_v, col)
+    eff = col
+    if termination and surface:
+        tcol = termination_column(coating)
+        treq = required_spacing_mm(delta_v, tcol)
+        if treq > req:
+            req, eff = treq, tcol
+    return req, eff, col
 
 
 # ------------------------------------------------------------ geometry

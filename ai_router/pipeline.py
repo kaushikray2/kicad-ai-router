@@ -1153,6 +1153,16 @@ class Pipeline:
                     items.append(('seg', x1, y1, x2, y2, 0.0))
         return items, filled
 
+    def _hv_pad_items(self, facts, net, layer):
+        """Pad discs of one net on one layer (terminations,
+        for the #127 A6/A7 rule)."""
+        nf = facts.get('nets', {}).get(net)
+        if not nf:
+            return []
+        return [('disc', p['x'], p['y'], max(p['w'], p['h']) / 2.0)
+                for p in nf.get('pads', [])
+                if layer in (p.get('layers') or [])]
+
     def tool_hv_domains(self):
         """#70: per domain pair, required (IPC-2221B Table 6-1) vs
         measured clearance and surface creepage, with the limiting
@@ -1201,22 +1211,44 @@ class Pipeline:
                     continue
                 for layer in layers:
                     surf = layer in surface
-                    col = max(
-                        (H.column_for(surf, da.get('coating', 'uncoated'),
-                                      da.get('altitude_m', 0)),
-                         H.column_for(surf, db.get('coating', 'uncoated'),
-                                      db.get('altitude_m', 0))),
-                        key=lambda c: H.required_spacing_mm(dv, c))
-                    req = H.required_spacing_mm(dv, col)
                     ia = [it for n in da['nets']
                           for it in items.get((n, layer), [])]
                     ib = [it for n in db['nets']
                           for it in items.get((n, layer), [])]
                     if not ia or not ib:
                         continue
-                    entry = {'layer': layer, 'column': col,
-                             'required_mm': round(req, 3)}
                     gap, pa, pb = H.min_clearance(ia, ib)
+                    # #127 (B1): does a termination (pad) achieve
+                    # the closest approach?  Then the A6/A7
+                    # termination column applies alongside the
+                    # conductor column (pads are openings in
+                    # solder mask -- never B4).
+                    term = False
+                    if surf:
+                        pads_a = [it for n in da['nets'] for it in
+                                  self._hv_pad_items(facts, n, layer)]
+                        pads_b = [it for n in db['nets'] for it in
+                                  self._hv_pad_items(facts, n, layer)]
+                        cand = []
+                        if pads_a:
+                            cand.append(H.min_clearance(pads_a, ib)[0])
+                        if pads_b:
+                            cand.append(H.min_clearance(ia, pads_b)[0])
+                        term = bool(cand) and abs(min(cand) - gap) < 1e-9
+                    req_a, col_a, cond_a = H.pair_required_mm(
+                        dv, surf, da.get('coating', 'uncoated'),
+                        da.get('altitude_m', 0), term)
+                    req_b, col_b, cond_b = H.pair_required_mm(
+                        dv, surf, db.get('coating', 'uncoated'),
+                        db.get('altitude_m', 0), term)
+                    if req_a >= req_b:
+                        req, col, cond_col = req_a, col_a, cond_a
+                    else:
+                        req, col, cond_col = req_b, col_b, cond_b
+                    entry = {'layer': layer, 'column': col,
+                             'conductor_column': cond_col,
+                             'termination': term,
+                             'required_mm': round(req, 3)}
                     entry['clearance_mm'] = round(gap, 3)
                     entry['clearance_at'] = [round(pa[0], 2),
                                              round(pa[1], 2)]

@@ -320,8 +320,8 @@ def _check_hv_domain(entry, idx):
     if not _num(e.get('voltage_v')) or e['voltage_v'] < 0:
         raise MarkingsError('%s: "voltage_v" (peak working voltage '
                             'vs the 0 V reference) is required, >= 0' % p)
-    if e.get('coating', 'uncoated') not in ('uncoated', 'polymer'):
-        raise MarkingsError('%s: "coating" must be uncoated|polymer '
+    if e.get('coating', 'uncoated') not in ('uncoated', 'polymer', 'conformal'):
+        raise MarkingsError('%s: "coating" must be uncoated|polymer|conformal '
                             '(solder mask alone is not a coating)' % p)
     if 'altitude_m' in e and (not _num(e['altitude_m'])
                               or e['altitude_m'] < 0):
