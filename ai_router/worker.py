@@ -3216,6 +3216,8 @@ def cmd_rfgeom(board_path, spec):
             h = (refs.get(layer_c) or [{}])[0].get('h_mm') or 1.0
             reach = 3.0 * h + 1.0
             own = [(prm[0], prm[1]) for (n, _r, _num, _p, prm) in all_pads if n == zn]
+            own_vias = [(mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetWidth()))
+                        for t in all_tracks if t.GetNetname() == zn and t.Type() == pcbnew.PCB_VIA_T]
             for ps in pss:
                 for oi in range(ps.OutlineCount()):
                     o = ps.Outline(oi)
@@ -3225,9 +3227,16 @@ def cmd_rfgeom(board_path, spec):
                     cx = sum(p[0] for p in pts) / len(pts); cy = sum(p[1] for p in pts) / len(pts)
                     centre = pcbnew.VECTOR2I(nm(cx), nm(cy))
                     has_pad = any(ps.Contains(pcbnew.VECTOR2I(nm(px), nm(py)), oi) for (px, py) in own)
+                    # #94: a same-net via inside the fill stitches it
+                    # to the net's copper -- not a floating island.
+                    # (Probe the annulus, not just the drill centre.)
+                    has_via = any(ps.Contains(pcbnew.VECTOR2I(nm(vx + ox), nm(vy + oy)), oi)
+                                  for (vx, vy, vw) in own_vias
+                                  for (ox, oy) in ((0.0, 0.0), (0.375 * vw, 0.0), (-0.375 * vw, 0.0),
+                                                   (0.0, 0.375 * vw), (0.0, -0.375 * vw)))
                     near = any(seg_pt(cx, cy, s['x1'], s['y1'], s['x2'], s['y2']) < reach
                                for s in segs if s['layer'] == layer_c)
-                    if near and not has_pad:
+                    if near and not has_pad and not has_via:
                         islands.append({'net': zn, 'layer': layer_c,
                                         'x': round(cx, 2), 'y': round(cy, 2)})
         # --- antenna keep-out intrusion (GATE-2): rule areas of the

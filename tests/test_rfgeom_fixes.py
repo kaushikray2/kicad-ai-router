@@ -120,3 +120,19 @@ def test_gate2_keepout_crossing_track():
         f = _facts(path)
     assert any(e['net'] == 'CLK' and e['kind'] == 'track' for e in f['keepout_intrusions']), f['keepout_intrusions']  # #93
 
+def test_gate6_via_stitched_pour_not_island():
+    if not _pcbnew_available(): print('skip'); return
+    def build(with_via):
+        bd = _B(); p = bd.p
+        bd.seg('RF', p.F_Cu, 5, 30, 50, 30)
+        bd.zone('AUX', p.F_Cu, 20, 25, 30, 29)
+        bd.zone('AUX', p.B_Cu, 20, 25, 30, 29)
+        if with_via:
+            bd.via('AUX', 25, 27)
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 't.kicad_pcb'); bd.save(path)
+            return _facts(path, h=1.0)
+    f_via = build(True); f_no = build(False)
+    assert any(i['net'] == 'AUX' for i in f_no['floating_islands']), f_no['floating_islands']   # control
+    assert not any(i['net'] == 'AUX' for i in f_via['floating_islands']), f_via['floating_islands']  # #94
+
