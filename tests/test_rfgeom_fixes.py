@@ -136,3 +136,20 @@ def test_gate6_via_stitched_pour_not_island():
     assert any(i['net'] == 'AUX' for i in f_no['floating_islands']), f_no['floating_islands']   # control
     assert not any(i['net'] == 'AUX' for i in f_via['floating_islands']), f_via['floating_islands']  # #94
 
+def test_arc_feed_corridor_checked():
+    if not _pcbnew_available(): print('skip'); return
+    bd = _B(); p = bd.p
+    bd.zone('GND', p.In1_Cu, 2, 2, 18, 38)
+    bd.zone('GND', p.In1_Cu, 22, 2, 58, 38)      # 4 mm reference gap under the arc apex
+    bd.smd_fp('U1', [('1', 'RF', 10, 20)])
+    bd.smd_fp('J1', [('1', 'RF', 30, 20)])
+    a = p.PCB_ARC(bd.b)
+    a.SetStart(bd.V(10, 20)); a.SetMid(bd.V(20, 26)); a.SetEnd(bd.V(30, 20))
+    a.SetWidth(_nm(0.35)); a.SetLayer(p.F_Cu)
+    a.SetNetCode(bd.nets['RF'].GetNetCode()); bd.b.Add(a)
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, 't.kicad_pcb'); bd.save(path)
+        f = _facts(path)
+    cor = f['corridor'].get('F.Cu')
+    assert cor is not None, f['corridor']        # #92: arc-only layer was skipped
+    assert cor['centre_gaps'], cor               # the gap under the apex is reported

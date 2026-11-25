@@ -3044,6 +3044,33 @@ def _split_segments(segs, pts):
     return out
 
 
+def _arc_chord_segs(t, layer_c):
+    """Tessellate a PCB_ARC into straight chord segment dicts (#92:
+    the corridor checks walk segments -- arcs must participate or a
+    curved feed's corridor is never checked)."""
+    w = mm(t.GetWidth())
+    sx, sy = mm(t.GetStart().x), mm(t.GetStart().y)
+    ex, ey = mm(t.GetEnd().x), mm(t.GetEnd().y)
+    cx, cy = mm(t.GetCenter().x), mm(t.GetCenter().y)
+    r = mm(t.GetRadius())
+    if r <= 0:
+        return [{'layer': layer_c, 'x1': sx, 'y1': sy, 'x2': ex, 'y2': ey,
+                 'w': w, 'len': math.hypot(ex - sx, ey - sy)}]
+    mx, my = mm(t.GetMid().x), mm(t.GetMid().y)
+    a0 = math.atan2(sy - cy, sx - cx)
+    d1 = (math.atan2(my - cy, mx - cx) - a0) % (2 * math.pi)
+    d2 = (math.atan2(ey - cy, ex - cx) - a0) % (2 * math.pi)
+    sweep = d2 if d1 <= d2 else d2 - 2 * math.pi
+    n = max(2, int(abs(sweep) * r / 0.25) + 1)
+    pts = [(cx + r * math.cos(a0 + sweep * k / n),
+            cy + r * math.sin(a0 + sweep * k / n)) for k in range(n + 1)]
+    return [{'layer': layer_c, 'x1': pts[k][0], 'y1': pts[k][1],
+             'x2': pts[k + 1][0], 'y2': pts[k + 1][1], 'w': w,
+             'len': math.hypot(pts[k + 1][0] - pts[k][0],
+                               pts[k + 1][1] - pts[k][1])}
+            for k in range(n)]
+
+
 def cmd_rfgeom(board_path, spec):
     b = pcbnew.LoadBoard(board_path)
     refill(b)
@@ -3070,6 +3097,11 @@ def cmd_rfgeom(board_path, spec):
         for p in fp.Pads():
             all_pads.append((p.GetNetname(), fp.GetReference(), p.GetNumber(), p, _pad_sdf_params(p)))
     all_tracks = list(b.GetTracks())
+    arc_chords = []   # (netname, chord seg) for every arc track (#92)
+    for _t in all_tracks:
+        if _t.Type() == pcbnew.PCB_ARC_T:
+            for _cs in _arc_chord_segs(_t, lid2canon.get(_t.GetLayer())):
+                arc_chords.append((_t.GetNetname(), _cs))
 
     def covered(x, y, layer_c, net):
         pt = pcbnew.VECTOR2I(nm(x), nm(y))
@@ -3087,6 +3119,10 @@ def cmd_rfgeom(board_path, spec):
                 if seg_pt(x, y, mm(t.GetStart().x), mm(t.GetStart().y),
                           mm(t.GetEnd().x), mm(t.GetEnd().y)) <= mm(t.GetWidth()) / 2:
                     return True
+        for (n2, cs) in arc_chords:
+            if n2 == net and cs['layer'] == layer_c and \
+                    seg_pt(x, y, cs['x1'], cs['y1'], cs['x2'], cs['y2']) <= cs['w'] / 2:
+                return True
         return False
 
     out = {}
@@ -3094,6 +3130,7 @@ def cmd_rfgeom(board_path, spec):
         gnd = ns.get('gnd_net') or 'GND'
         refs = ns.get('refs') or {}
         segs, arcs, vias, pads = [], [], [], []
+        chords = [cs for (n2, cs) in arc_chords if n2 == net]
         for t in all_tracks:
             if t.GetNetname() != net:
                 continue
@@ -3140,7 +3177,8 @@ def cmd_rfgeom(board_path, spec):
         corridor, foreign = {}, []
         own_vias = [(v['x'], v['y']) for v in vias]
         for layer, rlist in refs.items():
-            layer_segs = [s for s in segs if s['layer'] == layer]
+            layer_segs = [s for s in segs if s['layer'] == layer] + \
+                         [s for s in chords if s['layer'] == layer]
             if not layer_segs:
                 continue
             for rent in rlist:
@@ -3235,7 +3273,7 @@ def cmd_rfgeom(board_path, spec):
                                   for (ox, oy) in ((0.0, 0.0), (0.375 * vw, 0.0), (-0.375 * vw, 0.0),
                                                    (0.0, 0.375 * vw), (0.0, -0.375 * vw)))
                     near = any(seg_pt(cx, cy, s['x1'], s['y1'], s['x2'], s['y2']) < reach
-                               for s in segs if s['layer'] == layer_c)
+                               for s in segs + chords if s['layer'] == layer_c)
                     if near and not has_pad and not has_via:
                         islands.append({'net': zn, 'layer': layer_c,
                                         'x': round(cx, 2), 'y': round(cy, 2)})
