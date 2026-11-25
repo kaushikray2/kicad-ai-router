@@ -87,7 +87,7 @@ def test_hv_pair_passes_with_slot_detour(tmp_path):
     # creepage detours around the slot: longer than the air path
     assert fc['creepage_mm'] > fc['clearance_mm'] + 2.0
     assert pair['violations'] == []
-    assert rep['assumptions'][0]['voltage_v'] == 400
+    assert rep['assumptions'][0]['peak_v'] == 400   # #129: labelled peak
 
 
 def test_hv_planted_violation_caught_and_located(tmp_path):
