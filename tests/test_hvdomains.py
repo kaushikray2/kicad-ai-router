@@ -74,3 +74,13 @@ def test_seg_seg_crossing_witness_is_intersection():
     assert d == 0.0
     assert abs(pa[0] - 5.0) < 1e-9 and abs(pa[1]) < 1e-9, pa
     assert abs(pb[0] - 5.0) < 1e-9 and abs(pb[1]) < 1e-9, pb
+
+
+def test_creepage_bridges_foreign_copper():
+    # #87: an intervening conductor BRIDGES the surface: creepage
+    # is gap(A,M) + gap(M,B) = 3 + 3 = 6, not a detour around M.
+    a = [('disc', 0.0, 0.0, 1.0)]
+    b = [('disc', 12.0, 0.0, 1.0)]
+    m = [('disc', 6.0, 0.0, 2.0)]
+    cr = H.creepage_path(a, b, m, [], [], pitch=0.25)
+    assert cr is not None and 4.5 < cr < 7.5, cr

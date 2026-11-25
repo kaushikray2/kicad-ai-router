@@ -164,9 +164,14 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
                   pitch=0.25, filled=()):
     """Shortest surface path (mm) between two copper sets on one
     layer, or None when no path exists in the modelled region.
-    Grid Dijkstra: cells covered by any copper (blockers),
-    outside the board outline, or inside a cutout are not
-    surface.  Start/goal cells are free cells within one pitch
+    Grid Dijkstra: cells outside the board outline or inside a
+    cutout are not surface.  Cells covered by FOREIGN copper
+    (blockers / filled zones) are traversable at zero cost (#87):
+    an intervening conductor bridges the surface, so creepage is
+    the sum of the insulating gaps on either side of it --
+    treating it as a wall would count its full perimeter and
+    overestimate the creepage (the unsafe direction for a
+    minimum check).  Start/goal cells are free cells within one pitch
     of the respective domain's copper."""
     xs = [c for it in items_a + items_b
           for c in ((it[1], it[3]) if it[0] == 'seg' else (it[1],))]
@@ -192,6 +197,7 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
         return (x0 + i * pitch, y0 + j * pitch)
 
     blocked = [[False] * nx for _ in range(ny)]
+    metal = [[False] * nx for _ in range(ny)]
     in_a = [[False] * nx for _ in range(ny)]
     in_b = [[False] * nx for _ in range(ny)]
     for j in range(ny):
@@ -208,10 +214,10 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
                 blocked[j][i] = True
                 continue
             if any(_point_in_poly(cx, cy, f) for f in filled):
-                blocked[j][i] = True
+                metal[j][i] = True
                 continue
             if any(_near_item(cx, cy, it) for it in blockers):
-                blocked[j][i] = True
+                metal[j][i] = True
     # start/goal: free cells 4-adjacent to the domain's own copper,
     # so the path measures edge-to-edge within ~one pitch
     starts, goals = [], set()
@@ -246,7 +252,8 @@ def creepage_path(items_a, items_b, blockers, outline, cutouts,
                 if not (0 <= ni < nx and 0 <= nj < ny) \
                         or blocked[nj][ni]:
                     continue
-                nd = d + (diag if di and dj else pitch)
+                nd = d + (0.0 if metal[nj][ni]
+                          else (diag if di and dj else pitch))
                 if nd < dist.get((ni, nj), 1e18):
                     dist[(ni, nj)] = nd
                     heapq.heappush(pq, (nd, (ni, nj)))
