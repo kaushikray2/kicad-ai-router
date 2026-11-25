@@ -217,13 +217,29 @@ workaround).
 
 ## In progress
 
-- **P2.1b** (below) is next up, with #63 as its first step. Phase 2E
-  (below) follows P2.7a; the fair engine A/B sits inside it, per the
-  owner's sequencing.
+- **P2.1b** is implemented on branch `p21b-fix-violations` and
+  awaits the owner's review (status in its section below); the R4
+  layer-cost sweep (#121) is running on the scratch backend.
+  Phase 2E (below) follows P2.7a; the fair engine A/B sits inside
+  it, per the owner's sequencing.
 
 ## Remaining (in sequence)
 
 ### P2.1b — tool_fix_violations (12–20 h)
+
+**Status (2026-11-25): implemented on branch
+`p21b-fix-violations` (tip 49ccc5c), NOT merged.** Step 0 (#63)
+is closed; the tool (#155) is implemented and left open for the
+owner's review. An external review of the branch was verified
+claim by claim the same day: H1/H2/H3, M5, M6a and a
+test-collection guard were proven real and fixed on the branch
+as #158-#163 (closed, fail-before/pass-after); M4/M6b/M6c are
+ticketed as design decisions #164/#165/#166, awaiting the
+owner's ruling. What remains is measurement, not code: the
+dataset-v3 bench rerun (step 0's improvement half) and a live
+re-route-trade sample, both on the Phase 2E harness (#62) once
+it exists. The merge awaits the owner's review.
+
 **Step 0 — #63, pour skeleton reservation pre-check.** Compute each pour's pad spanning tree (width =
 zone min-thickness + slack + clearance deltas, confined to the pour
 region) before routing/repair and reserve it: severing the skeleton is
