@@ -448,6 +448,23 @@ control run reproduced the identical 15). Fixtures: heal bridges
 
 The project is relicensed from MIT to **GPL-3.0-or-later** (SPDX: GPL-3.0-or-later), matching KiCad's own licensing. The change applies from this commit forward; releases through v1.10.2 were distributed under MIT, and copies already out there keep those terms. Sample boards in `docker/selftest/` remain under their original licenses.
 
+## v1.11.1 -- 2026-11-24
+
+Fixes from the 2026-11-24 external audit, each verified against the
+current tip before filing (probes / fail-before regression tests):
+
+- #74: backend jobs silently dropped overrides for DEFAULTS keys not
+  hardcoded in run_job.build_cfg (reroute_window_cap, reroute_accept,
+  reroute_margin, pass_advice, advice_regions, max_tool_calls ran
+  with shipped defaults). build_cfg now forwards the remaining keys;
+  server-owned keys stay unoverridable.
+- #75: _new_items_clean never tested same-net hole_to_hole pairs and
+  ignored Edge.Cuts drawn inside footprints, so heal/finish items
+  passed the checker and faulted at the DRC gate. Both collected now.
+- #76: ai_router/__init__.py imported the KiCad plugin
+  unconditionally, making every pure-Python module unimportable
+  outside KiCad's Python. Import/registration is ImportError-guarded.
+
 ## v1.11.0 -- 2026-11-24
 
 Layer-cost plumbing (issue #73): layers can now be PRICED
