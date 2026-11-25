@@ -761,7 +761,17 @@ class Pipeline:
         except Exception: pass
         if res.get('locks_file'):  # v1.10.1 (#50): restore the original lock flags before this board can be delivered
             try: self._worker('restore_locks', '--board', outp, '--out', outp, '--locks', res['locks_file'])
-            except Exception as e: self.log('WARNING: lock restore failed (%s)' % e)
+            except Exception as e:
+                # v1.11.5 (#124): a failed restore is a FAILED
+                # ATTEMPT, not a warning. The old code carried on to
+                # gate/accept, so a board whose user locks were never
+                # restored could be delivered -- its items silently
+                # unprotected against later strip/prune (#119).
+                # Discard the re-route; the pre-reroute board stays
+                # current.
+                self.log('lock restore FAILED (%s); re-route discarded' % e)
+                self._record('reroute_window', {'net': net, 'status': 'lock_restore_failed', 'detail': str(e)[:200]})
+                return {'status': 'lock_restore_failed', 'net': net}
         self._sidecars(outp)
         after = self.tool_gate(outp)
         if str(self.cfg.get('reroute_accept', _CFG_DEFAULTS.get('reroute_accept', 'connectivity'))) == 'connectivity':
