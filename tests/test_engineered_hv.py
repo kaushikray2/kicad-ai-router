@@ -108,7 +108,10 @@ def test_hv_planted_violation_caught_and_located(tmp_path):
 
 
 
-def test_hv_materialise_creates_keepouts(tmp_path):
+def test_hv_materialise_enforces_via_domains_not_zones(tmp_path):
+    # #80: materialise no longer writes rule areas -- they were not
+    # net-selective and sealed the marked nets' own pads.  The same
+    # geometry goes to domains.json for the finisher/repair Grids.
     global _MAT
     _MAT = True
     try:
@@ -119,7 +122,21 @@ def test_hv_materialise_creates_keepouts(tmp_path):
                         board, lambda m: None)
     finally:
         _MAT = False
-    entries = [e for e in pipe.ledger if e.get('tool') == 'hv_materialise']
-    assert entries and entries[0]['zones'] >= 1, pipe.ledger
+    assert not [e for e in pipe.ledger if e.get('tool') == 'hv_materialise']
+    entries = [e for e in pipe.ledger if e.get('tool') == 'domain_enforce']
+    assert entries and entries[0]['entries'] == 1, pipe.ledger
     b = pcbnew.LoadBoard(pipe.current)
-    assert [z for z in b.Zones() if z.GetIsRuleArea()]
+    assert not [z for z in b.Zones() if z.GetIsRuleArea()]
+    spec = json.load(open(os.path.join(pipe.workdir, 'domains.json')))
+    hv = [e for e in spec if e['kind'] == 'hv'][0]
+    assert hv['nets'] == ['HV1', 'HV2']
+    # pad (15,20) is 2x2 mm, required spacing 2.5 -> half-size 3.5
+    ok = False
+    for r in hv['rects']:
+        cx = (r['rect'][0] + r['rect'][2]) / 2
+        cy = (r['rect'][1] + r['rect'][3]) / 2
+        half = (r['rect'][2] - r['rect'][0]) / 2
+        if abs(cx - 15) < 0.01 and abs(cy - 20) < 0.01:
+            assert abs(half - 3.5) < 0.01, r
+            ok = True
+    assert ok, hv['rects']

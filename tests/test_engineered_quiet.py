@@ -1,7 +1,7 @@
 """#71 integration: crystal quiet gates on a real board through
 hvgeom facts -- clean passes, a planted track + a via inside
-the land pattern are caught and located, and opt-in keepout
-materialisation lands zones on the working copy."""
+the land pattern are caught and located, and opt-in
+materialisation produces a domain spec (#80: no zones)."""
 import json, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pcbnew
@@ -144,12 +144,20 @@ def test_quiet_planted_intrusions_caught(tmp_path):
     assert abs(v['at'][1] - 20.8) < 0.6
 
 
-def test_quiet_materialise_creates_keepouts(tmp_path):
+def test_quiet_materialise_enforces_via_domains_not_zones(tmp_path):
+    # #80: no rule areas (they sealed the quiet nets' own pads too);
+    # the isolation geometry goes to domains.json, exempting exactly
+    # the nets the checker allows (own + allow_nets + guard).
     board = str(tmp_path / 'q.kicad_pcb')
     _build(board, materialise=True)
     pipe = _pipe(board)
-    entries = [e for e in pipe.ledger if e.get('tool') == 'quiet_materialise']
-    assert entries and entries[0]['zones'] >= 1, pipe.ledger
+    assert not [e for e in pipe.ledger
+                if e.get('tool') == 'quiet_materialise']
+    entries = [e for e in pipe.ledger if e.get('tool') == 'domain_enforce']
+    assert entries and entries[0]['entries'] == 1, pipe.ledger
     b = pcbnew.LoadBoard(pipe.current)
-    ras = [z for z in b.Zones() if z.GetIsRuleArea()]
-    assert ras, 'no rule-area keepouts on the working board'
+    assert not [z for z in b.Zones() if z.GetIsRuleArea()]
+    spec = json.load(open(os.path.join(pipe.workdir, 'domains.json')))
+    q = [e for e in spec if e['kind'] == 'quiet'][0]
+    assert set(q['nets']) == {'XTAL1', 'XTAL2', 'GND', 'GUARD'}
+    assert q['rects'] and all(len(r['layers']) == 4 for r in q['rects'])
