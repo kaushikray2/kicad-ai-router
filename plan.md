@@ -149,7 +149,9 @@ research report candidates 1-2 (2026-11-25).
 
 ## In progress
 
-- **P2.1b** (below) is next up, with #63 as its first step. Phase 2E
+- **P2.1b** (below) is in progress on branch `p21b-fix-violations`:
+  step 0 (#63) has landed there (see the P2.1b section); the
+  tool_fix_violations stage follows it. Phase 2E
   (below) follows P2.7a; the fair engine A/B sits inside it, per the
   owner's sequencing.
 
@@ -166,6 +168,36 @@ cure for what still gets through. The same skeleton defines, for the
 diff below, which pour faults count as router-added. Exit for step 0:
 split-only failures drop measurably on the bench, no completion or
 copper regression.
+
+**Step 0 landed** (2026-11-25, branch `p21b-fix-violations`, commits
+c627667..b9abb40 + this entry; NOT merged — owner reviews the lane's
+landings first). Ruled shape (owner, 2026-11-25: "ok lets implement
+63 then first"): grid-stamped reservation — each pour's pad spanning
+tree (pads confined to the zone outline; inner layers take every pad
+of the net as a via connection point; landed vias join as nodes;
+width = zone min-thickness + 0.1 mm slack; corridor = width/2 +
+clearance) is stamped last into the finisher grids as a hard
+foreign-net keepout; engine passes stay unconstrained and the gate is
+the catch: the summary carries an intrusion census (foreign copper
+inside a reserved corridor) that `fault_count` counts as router-added
+faults. The reservation yields first, per the ticket: a finisher
+command that fails outright with it on re-runs once without it
+(`skeleton_yield` recorded), and the accept/final keys price
+intrusions after connectivity and real faults — the first cut shipped
+without the yield and regressed esp32_S2 2 → 5 unconnected on
+identical engine lineage (finish/heal `no_path`); with the yield the
+board is at exact baseline parity. Local A/B exit measurement
+(pristine 4cc04bb vs branch, identical runner/config, 3 self-tests +
+3 pour-bearing train boards): no completion or copper regression on
+any board — hbridge/mapone/imu identical, STM32-RF parity (+1.5%
+wire), Nomad parity ({1, GND, 14}; +0.7% wire), esp32_S2 parity. The
+exit's improvement half (split-only failures dropping on the
+population) is NOT demonstrated locally — the local sample holds two
+split-failure boards and both tie; it needs the dataset-v3 bench
+rerun (backend time), which is the remaining step-0 measurement.
+Config `pour_skeleton` (default on; off = pre-feature command lines).
+Tests: tests/test_pour_skeleton.py (29 checks, fails on base);
+branch suite 19/19 standalone + 40/40 pytest.
 
 Repair copper faults on already-connected nets: diff the board's DRC
 violations against the base board's; for each router-added fault, rip
