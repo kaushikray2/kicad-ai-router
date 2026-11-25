@@ -58,6 +58,7 @@ def build_cfg(rt, llm, tm_exe):
         cfg[_k] = _int_or(rt, _k, cfg.get(_k, _d))
     cfg['attempt_select'] = bool(rt.get('attempt_select', cfg.get('attempt_select', False)))
     cfg['layer_law_policy'] = rt.get('layer_law_policy', cfg.get('layer_law_policy', 'auto'))
+    cfg['layer_cost'] = rt.get('layer_cost', cfg.get('layer_cost', ''))  # v1.11 (#73): explicit map, like layer_law_policy; the generic forwarding loop below would also carry it from DEFAULTS
     cfg['first_nets_policy'] = rt.get('first_nets_policy', cfg.get('first_nets_policy', 'auto'))
     cfg['engine_portfolio'] = _engines_or(rt, cfg.get('engine_portfolio', ''))
     return cfg

@@ -46,6 +46,8 @@ class RouterDialog(wx.Dialog):
         add('Max route passes', self.passes_ctrl)
         self.layers_ctrl = wx.TextCtrl(panel, value=self.cfg.get('no_tracks_on', 'In1.Cu'))  # v1.9.6 (#40)
         add('No tracks on layers', self.layers_ctrl)
+        self.cost_ctrl = wx.TextCtrl(panel, value=self.cfg.get('layer_cost', ''))  # v1.11 (#73)
+        add('Layer costs (e.g. In1.Cu=10,In2.Cu=10)', self.cost_ctrl)
         self.strip_ctrl = wx.CheckBox(panel, label='Strip existing routing into the working copy first')
         self.strip_ctrl.SetValue(bool(self.cfg.get('strip_existing', True)))
         add('', self.strip_ctrl)
@@ -101,6 +103,7 @@ class RouterDialog(wx.Dialog):
         self.cfg['mode'] = self.mode_ctrl.GetStringSelection()
         self.cfg['max_passes'] = self.passes_ctrl.GetValue()
         self.cfg['no_tracks_on'] = self.layers_ctrl.GetValue().strip()
+        self.cfg['layer_cost'] = self.cost_ctrl.GetValue().strip()  # v1.11 (#73)
         self.cfg['strip_existing'] = self.strip_ctrl.GetValue()
         self.cfg['use_backend'] = self.backend_ctrl.GetValue()
         self.cfg['backend_url'] = self.backend_url_ctrl.GetValue().strip()
@@ -162,7 +165,8 @@ class RouterDialog(wx.Dialog):
             h.get('backend_version'), h.get('kicad_cli'), h.get('tracemaker_selected') or 'none',
             ', '.join(h.get('tracemaker_versions') or [])))
         overrides = {'mode': cfg['mode'], 'max_passes': cfg['max_passes'],
-                     'no_tracks_on': cfg['no_tracks_on'], 'strip_existing': cfg['strip_existing']}
+                     'no_tracks_on': cfg['no_tracks_on'], 'layer_cost': cfg.get('layer_cost', ''),
+                     'strip_existing': cfg['strip_existing']}  # v1.11 (#73): layer_cost rides along
         jid = backend_client.submit(url, tok, board, overrides)
         self.log('Submitted job %s - routing runs on the backend; this window just watches.' % jid)
         last_status, last_tail = '', ''
