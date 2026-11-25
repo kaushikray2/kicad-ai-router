@@ -636,6 +636,13 @@ examples within rounding; on a fixture with a slot and known
 spacings, measured creepage/clearance match hand computation
 and a planted violation is caught and located. Stated
 limitation: a design aid, not a certification.
+  **Status (engineered-nets branch, 2026-11-24): first draft
+  implemented.** IPC-2221B Table 6-1 as code (research annex on
+  #70; IEC 62368-1 creepage tables recorded as a gap, not
+  reconstructed); hvgeom facts; per-pair clearance (exact
+  geometry) + surface creepage (grid path around slots/cutouts)
+  vs the table value with violations located; opt-in pad
+  keepout materialisation via the #42 zone layer.
 
 ### P2.12 — Quiet nets (issue #71)
 The GATE-family extension of the engineered-nets block — no new
