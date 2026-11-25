@@ -83,7 +83,12 @@ def test_adjacent_layer_crossing():
     b['items'][('DIG', 'F.Cu')] = [('seg', 5.0, 35.0, 55.0, 35.0, 0.15)]
     rep = Q.evaluate(ENTRY, b)
     # In2.Cu is two layers from F.Cu in a 4-layer stack: NOT adjacent
-    assert rep['intrusions'] == []
+    # (no corridor/adjacent_layer findings).  The land-pattern
+    # keepout DOES apply on every layer, and since #96 the crossing
+    # is actually seen: this segment runs straight over the crystal.
+    assert not any(i['kind'] in ('corridor', 'adjacent_layer')
+                   for i in rep['intrusions']), rep['intrusions']
+    assert any(i['kind'] == 'land_pattern' for i in rep['intrusions'])
     b['items'][('DIG', 'In1.Cu')] = [('seg', 5.0, 20.8, 55.0, 20.8, 0.15)]
     rep = Q.evaluate(ENTRY, b)
     assert any(i['kind'] == 'adjacent_layer' for i in rep['intrusions'])
