@@ -533,6 +533,14 @@ def diff_stripline(w, s, b, t, er):
                         reference='Cohn 1955 coupled stripline (zero thickness)',
                         in_range=in_range, flags=flags,
                         zodd=zo, zeven=ze, zdiff=2.0 * zo)
+    # #144 (B18, proven part): Cohn's thick-strip corrections are
+    # stated for w/(b-t) >= 0.35; below that the result was
+    # returned with in_range True and no sign anything was wrong.
+    # The offset-strip model rewrite is a separate design stage
+    # (see the issue) -- this is the honesty flag only.
+    if b - t <= 0.0 or w / (b - t) < 0.35:
+        in_range = False
+        flags.append('cohn_validity_w_over_b_minus_t_below_0.35')
     z0s0 = _cohn_z0_symmetric(w, b, 0.0, er)
     ze0, zo0 = _cohn_modes_thin(w, s, b, er)
     r = _cohn_fringe_ratio(t / b)
