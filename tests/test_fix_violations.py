@@ -179,11 +179,21 @@ class _Stub: pass
 s = _Stub(); s.workdir = tmp; s.cfg = {}; s._gseq = 0
 cur = pipeline.Pipeline._drc_fault_items(s, pc)
 bas = pipeline.Pipeline._drc_fault_items(s, pb)
-def _key(f): return (f['type'], round(f['x'] * 2) / 2, round(f['y'] * 2) / 2)
-added = [f for f in cur if _key(f) not in {_key(g) for g in bas}]
+added = pipeline._router_added(cur, bas)
 check('diff: planted crossing is router-added', any(f['type'] in ('tracks_crossing', 'shorting_items') for f in added))
 check('diff: offender candidates carry both nets', any(set(f['nets']) == {'A', 'B'} for f in added))
 check('diff: base alone has no such fault', not any(f['type'] in ('tracks_crossing', 'shorting_items') for f in bas))
+# --- attribution matcher (#160) ----------------------------------------
+F = lambda t, x, y: {'type': t, 'x': x, 'y': y, 'nets': []}
+check('matcher: 0.02 mm jitter across a bucket boundary is the same fault (#160)',
+      pipeline._router_added([F('clearance', 10.26, 20.0)], [F('clearance', 10.24, 20.0)]) == [])
+check('matcher: 0.68 mm diagonal in one cell is a new fault (#160)',
+      len(pipeline._router_added([F('clearance', 10.24, 20.24)], [F('clearance', 9.76, 19.76)])) == 1)
+check('matcher: one base fault masks at most one current fault (#160)',
+      len(pipeline._router_added([F('clearance', 10.1, 20.0), F('clearance', 10.2, 20.0)], [F('clearance', 10.0, 20.0)])) == 1)
+check('matcher: types never cross-match (#160)',
+      len(pipeline._router_added([F('track_dangling', 10.1, 20.0)], [F('clearance', 10.0, 20.0)])) == 1)
+
 
 
 # --- pipeline acceptance gate (#158) -----------------------------------
