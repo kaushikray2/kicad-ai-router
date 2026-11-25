@@ -3252,10 +3252,25 @@ def cmd_rfgeom(board_path, spec):
                         if _inside(vx, vy):
                             intrusions.append({'net': t.GetNetname(), 'kind': 'via', 'x': round(vx, 2), 'y': round(vy, 2), 'footprint': fp.GetReference()})
                     else:
-                        for (qx, qy) in [(mm(t.GetStart().x), mm(t.GetStart().y)), (mm(t.GetEnd().x), mm(t.GetEnd().y))]:
-                            if _inside(qx, qy):
-                                intrusions.append({'net': t.GetNetname(), 'kind': 'track', 'x': round(qx, 2), 'y': round(qy, 2), 'footprint': fp.GetReference()})
-                                break
+                        q1 = (mm(t.GetStart().x), mm(t.GetStart().y))
+                        q2 = (mm(t.GetEnd().x), mm(t.GetEnd().y))
+                        hit = _inside(*q1) or _inside(*q2)
+                        if not hit:
+                            # #93: endpoints outside does not mean the
+                            # track misses the keep-out -- test the
+                            # segment against every outline edge.
+                            for oi in range(ps.OutlineCount()):
+                                o = ps.Outline(oi)
+                                pts = [(mm(o.CPoint(k).x), mm(o.CPoint(k).y)) for k in range(o.PointCount())]
+                                for k in range(len(pts)):
+                                    e1, e2 = pts[k], pts[(k + 1) % len(pts)]
+                                    if seg_seg_dist((q1[0], q1[1], q2[0], q2[1]), (e1[0], e1[1], e2[0], e2[1])) <= 0.0:
+                                        hit = True
+                                        break
+                                if hit:
+                                    break
+                        if hit:
+                            intrusions.append({'net': t.GetNetname(), 'kind': 'track', 'x': round(q1[0], 2), 'y': round(q1[1], 2), 'footprint': fp.GetReference()})
                 for (n, ref, num, p, _prm) in all_pads:
                     if n == net or ref == fp.GetReference():
                         continue

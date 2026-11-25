@@ -103,3 +103,20 @@ def test_gate11_foreign_via_on_reference_layer():
     assert ('CLK', 'track') in kinds, kinds      # control: seen both ways
     assert ('CLK', 'via') in kinds, kinds        # #91
 
+def test_gate2_keepout_crossing_track():
+    if not _pcbnew_available(): print('skip'); return
+    bd = _B(); p = bd.p
+    fp = bd.smd_fp('U1', [('1', 'RF', 10, 20)])
+    z = p.ZONE(fp); z.SetIsRuleArea(True)
+    ls = p.LSET(); ls.AddLayer(p.F_Cu); z.SetLayerSet(ls)
+    out = z.Outline(); out.NewOutline(); ch = out.Outline(0)
+    for (x, y) in [(18, 16), (26, 16), (26, 24), (18, 24)]:
+        ch.Append(_nm(x), _nm(y))
+    fp.Add(z)
+    bd.seg('RF', p.F_Cu, 10, 20, 12, 20)
+    bd.seg('CLK', p.F_Cu, 14, 20, 30, 20)        # crosses the keep-out, endpoints outside
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, 't.kicad_pcb'); bd.save(path)
+        f = _facts(path)
+    assert any(e['net'] == 'CLK' and e['kind'] == 'track' for e in f['keepout_intrusions']), f['keepout_intrusions']  # #93
+
