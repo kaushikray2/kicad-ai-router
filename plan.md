@@ -169,6 +169,26 @@ engineered-nets branch, the three merge blockers are fixed:
 the NAS layer-cost factor sweep (1.25/1.5/2/3) once a backend
 is free; #138's merge-time remainder.
 
+### Open-bug sweep (2026-11-25)
+
+Every open issue inventoried and classified (report:
+agent-runs/audit-verify/REPORT-SWEEP-2026-11-25.md). Main side:
+the gate now REPORTS a via-on-pad census (#72 item 1 --
+centre-in-pad split same-net vs foreign-net, plus
+annulus-overlap; reported only, never in the accept key -- the
+bounded policy work in #72 items 2-3 stays programme work);
+the LLM config read is guarded against a non-numeric
+max_tool_calls (#138 main-side item); #149's factual items
+landed (D4/D5 README-vs-code corrections, D10 CHANGELOG
+structure) and the README features/results sections now carry
+the owner's supplied wording (D7/D8). Branch side: the
+round-4 branch bugs #127/#128/#129/#130/#134-#138/#140/#142-
+#148/#151/#152 fixed on engineered-nets (see the sweep
+report); #144's proven validity-flag part landed, its
+field-model stage remains open. Feature tickets verified
+implemented were closed as such: #67-#71 + #42 (branch,
+first-draft standard) and #73 (main).
+
 ## In progress
 
 - **P2.1b** (below) is next up, with #63 as its first step. Phase 2E
