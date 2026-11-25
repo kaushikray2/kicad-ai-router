@@ -21,6 +21,7 @@ NO_TRACKS_ON_UNRESOLVED = []  # v1.9 (M4): --no-tracks-on names the canonical ta
 # pads.  Empty when no materialise markings are in force.
 DOMAINS_RAW = None
 DOMAINS = []
+_DOMAIN_LAYER_WARNED = set()   # #110: warn once per unresolvable domains layer name
 
 def _layer_id_from_name(n):
     n = n.strip()
@@ -293,6 +294,7 @@ class Grid:
         self.stack = copper_stack(b)
         self.nl = len(self.stack)
         self.lidx = {lay: k for k, lay in enumerate(self.stack)}
+        self.layer_names = [b.GetLayerName(lay) for lay in self.stack]   # #110: board layer names, for DOMAINS resolution
         _banned = BANNED_LAYER_IDS if BANNED_LAYER_IDS is not None else {pcbnew.In1_Cu}
         if NO_TRACKS_ON_UNRESOLVED:
             # v1.9 (M4): a ban name the canonical table could not
@@ -371,6 +373,61 @@ class Grid:
                     _xs = [q[0] for q in pts]; _ys = [q[1] for q in pts]
                     if max(_xs) < _wx0 or min(_xs) > _wx1 or max(_ys) < _wy0 or min(_ys) > _wy1: continue
                 self.keepouts.append((pts, layers, z.GetDoNotAllowTracks(), z.GetDoNotAllowVias()))
+    def _domain_lidx(self, names):
+        # #110 (residual of #80): domains.json carries BOARD layer
+        # names (the cmd_hvgeom facts use b.GetLayerName), so resolve
+        # them the way _resolve_banned_on_board resolves ban names:
+        # the board's own name OR the positional canonical name,
+        # case-insensitively.  A name that still cannot resolve is
+        # warned about on stderr -- never silently dropped (the
+        # pre-fix stamp used the canonical-only _layer_id_from_name,
+        # so a renamed layer's rects simply never stamped).
+        canon = {}
+        for k, lay in enumerate(self.stack):
+            canon[self.layer_names[k].strip().lower()] = lay
+            cname = 'F.Cu' if k == 0 else ('B.Cu' if k == self.nl - 1 else 'In%d.Cu' % k)
+            canon[cname.lower()] = lay
+        out = []
+        for n in names:
+            lid = canon.get(str(n).strip().lower())
+            if lid is None:
+                if str(n) not in _DOMAIN_LAYER_WARNED:
+                    _DOMAIN_LAYER_WARNED.add(str(n))
+                    print('ai_router worker: WARNING: domains layer %r not resolvable on this board -- its rects are not stamped on that layer' % (n,), file=sys.stderr)
+                continue
+            if lid in self.lidx: out.append(self.lidx[lid])
+        return out
+
+    def _stamp_domains(self, blocked, via_block, target):
+        # #80: the rect edge is already pad-edge + required spacing
+        # (the retired rule areas' geometry); grow it by the track
+        # half-width for blocked and by the via radius for via_block,
+        # matching how KiCad tested copper against the zones.  The
+        # entry's own/allowed nets are exempt -- that exemption is
+        # the whole point.  #110: shared by build() and
+        # build_owners() -- the cutset planner was blind to domains
+        # and proposed victim sets the finisher then rejected with
+        # no_plan.
+        if not DOMAINS or target is None: return
+        tw2 = self.inf - self.clr_plan
+        gx, gy = self.gx, self.gy
+        NX, NY, X0, Y0 = self.NX, self.NY, self.X0, self.Y0
+        for ent in DOMAINS:
+            if target in (ent.get('nets') or []): continue
+            for rc in ent.get('rects') or []:
+                x1, y1, x2, y2 = rc['rect']
+                lis = self._domain_lidx(rc.get('layers') or [])
+                i0, i1 = max(0, int((x1 - self.via_r - X0) / PITCH)), min(NX - 1, int((x2 + self.via_r - X0) / PITCH) + 1)
+                j0, j1 = max(0, int((y1 - self.via_r - Y0) / PITCH)), min(NY - 1, int((y2 + self.via_r - Y0) / PITCH) + 1)
+                for j in range(j0, j1 + 1):
+                    for i in range(i0, i1 + 1):
+                        dx = max(x1 - gx[i], 0.0, gx[i] - x2)
+                        dy = max(y1 - gy[j], 0.0, gy[j] - y2)
+                        d = math.hypot(dx, dy)
+                        if d < tw2:
+                            for li in lis: blocked[li, j, i] = True
+                        if d < self.via_r: via_block[j, i] = True
+
     def build(self, ignore_nets, target=None):
         NX, NY, X0, Y0 = self.NX, self.NY, self.X0, self.Y0
         gx, gy = self.gx, self.gy
@@ -416,33 +473,7 @@ class Grid:
                         if no_tracks:
                             for li in klayers: blocked[li, j, i] = True
                         if no_vias: via_block[j, i] = True
-        if DOMAINS and target is not None:
-            # #80: the rect edge is already pad-edge + required
-            # spacing (the retired rule areas' geometry); grow it by
-            # the track half-width for blocked and by the via radius
-            # for via_block, matching how KiCad tested copper
-            # against the zones.  The entry's own/allowed nets are
-            # exempt -- that exemption is the whole point.
-            tw2 = self.inf - self.clr_plan
-            for ent in DOMAINS:
-                if target in (ent.get('nets') or []): continue
-                for rc in ent.get('rects') or []:
-                    x1, y1, x2, y2 = rc['rect']
-                    lis = []
-                    for nm in (rc.get('layers') or []):
-                        lid = _layer_id_from_name(nm)
-                        if lid is not None and lid in self.lidx:
-                            lis.append(self.lidx[lid])
-                    i0, i1 = max(0, int((x1 - self.via_r - X0) / PITCH)), min(NX - 1, int((x2 + self.via_r - X0) / PITCH) + 1)
-                    j0, j1 = max(0, int((y1 - self.via_r - Y0) / PITCH)), min(NY - 1, int((y2 + self.via_r - Y0) / PITCH) + 1)
-                    for j in range(j0, j1 + 1):
-                        for i in range(i0, i1 + 1):
-                            dx = max(x1 - gx[i], 0.0, gx[i] - x2)
-                            dy = max(y1 - gy[j], 0.0, gy[j] - y2)
-                            d = math.hypot(dx, dy)
-                            if d < tw2:
-                                for li in lis: blocked[li, j, i] = True
-                            if d < self.via_r: via_block[j, i] = True
+        self._stamp_domains(blocked, via_block, target)
         def stamp_pad(layers, cx, cy, kind, a, bb, rot, cr):
             ext = math.hypot(a, bb)
             rad = ext + INF; radv = ext + self.via_r + self.clr_plan
@@ -612,6 +643,7 @@ class Grid:
                         if no_tracks:
                             for li in klayers: hard[li, j, i] = True
                         if no_vias: vhard[j, i] = True
+        self._stamp_domains(hard, vhard, target)   # #110: the cutset planner shares the domain stamp
         def stamp_pad(layers, cx, cy, kind, a, bb, rot, cr):
             ext = math.hypot(a, bb)
             rad = ext + INF; radv = ext + self.via_r + self.clr_plan
