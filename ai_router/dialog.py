@@ -765,11 +765,28 @@ class RouterDialog(wx.Dialog):
         idx = evt.GetSelection()
         entry = self._combo_entries[idx] if 0 <= idx < len(self._combo_entries) else None
         if entry is not None:
-            self.backend_url_ctrl.SetValue(entry['url'])
-            self.backend_tok_ctrl.SetValue(entry.get('token', ''))
+            # #209: on wxMSW the native combo copies the selected
+            # label (here the server NAME) into the text field
+            # after EVT_COMBOBOX returns, clobbering a synchronous
+            # SetValue -- defer the field writes past it, and do
+            # not Skip, so nothing overwrites them afterwards.
+            wx.CallAfter(self._apply_server_pick, entry)
+        else:
+            # Preset pick: the label IS the URL, so the native
+            # copy on Skip is the desired value.
+            self._refresh_remove_btn()
+            self._on_settings_changed()
+            evt.Skip()
+
+    def _apply_server_pick(self, entry):
+        # Deferred half of _on_server_pick (#209): runs after the
+        # native combo has settled its own text update.
+        if entry is None:
+            return
+        self.backend_url_ctrl.SetValue(entry['url'])
+        self.backend_tok_ctrl.SetValue(entry.get('token', ''))
         self._refresh_remove_btn()
         self._on_settings_changed()
-        evt.Skip()
 
     def _on_add_server(self, _evt):
         dlg = AddServerDialog(self, BACKEND_PRESETS, self.custom_servers)

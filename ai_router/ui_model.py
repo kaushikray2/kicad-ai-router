@@ -312,6 +312,11 @@ def validate_new_server(name, url, token, preset_urls, servers):
         return None, 'That URL is already a built-in preset.'
     if find_server(servers, url) is not None:
         return None, 'A custom server with that URL already exists.'
+    # #209: the dropdown shows customs by name (and on wxMSW the
+    # name is what a pick leaves in the URL field), so names must
+    # be unique too -- case-insensitively, like the URL compare.
+    if any(str(e.get('name', '')).strip().lower() == name.lower() for e in sanitize_servers(servers)):
+        return None, 'A custom server with that name already exists.'
     return {'name': name, 'url': url, 'token': str(token or '')}, None
 
 

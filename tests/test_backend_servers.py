@@ -150,6 +150,31 @@ def test_dialog_wires_the_feature():
         assert needle in src, needle
 
 
+def test_validate_new_server_rejects_duplicate_name():
+    # #209: the dropdown shows custom servers by NAME, so two
+    # customs sharing a name are indistinguishable there (and on
+    # wxMSW the name is what lands in the URL field on a pick).
+    servers = [{'name': 'Lab', 'url': 'http://192.168.1.50:8731', 'token': ''}]
+    entry, err = um.validate_new_server('lab', 'http://192.168.1.60:8731', '', PRESETS, servers)
+    assert entry is None and 'name' in err, (entry, err)
+    entry, err = um.validate_new_server('Bench', 'http://192.168.1.60:8731', '', PRESETS, servers)
+    assert entry is not None and err is None, (entry, err)
+
+
+def test_on_server_pick_defers_the_field_writes():
+    # #209: the pick handler must not SetValue synchronously (on
+    # wxMSW the native combo overwrites the field with the
+    # selected label after the handler returns); the writes live
+    # in a wx.CallAfter apply step. The preset path still Skips:
+    # its label IS the URL, so the native copy is desired there.
+    src = open(os.path.join(os.path.dirname(__file__), '..', 'ai_router', 'dialog.py')).read()
+    assert 'wx.CallAfter(self._apply_server_pick, entry)' in src
+    assert 'def _apply_server_pick(self, entry):' in src
+    body = src.split('def _on_server_pick(self, evt):')[1].split('\n    def ')[0]
+    assert 'self.backend_url_ctrl.SetValue' not in body, body
+    assert 'evt.Skip()' in body
+
+
 if __name__ == '__main__':
     fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for fn in fns:
