@@ -55,6 +55,7 @@ DEFAULTS = {
     'use_backend': False,
     'backend_url': 'http://127.0.0.1:8731',
     'backend_token': '',
+    'backend_servers': [],  # (#199): custom backend servers added from the dialog's Run on group -- [{'name', 'url', 'token'}]; the built-in presets stay in dialog.BACKEND_PRESETS
 }
 
 def load():

@@ -249,3 +249,104 @@ def capped_open_size(want_w, want_h, client_w, client_h):
     w = max(min(int(want_w), max_w), min_w)
     h = max(min(int(want_h), max_h), min_h)
     return w, h, min_w, min_h
+
+
+# ------------------------------------------------------- backend servers
+# Custom backend servers (#199): user-added entries for the Run on
+# group's Backend URL combo, persisted in the plugin config as
+# cfg['backend_servers'] = [{'name':..., 'url':..., 'token':...}].
+# The built-in presets stay a plain URL list in dialog.py; a custom
+# server's identity is its normalised URL -- the same value the
+# combo holds while the server is selected -- so dedupe, lookup,
+# token sync and removal all key on it. Every function here takes
+# and returns plain lists of fresh dicts; inputs are never mutated.
+
+def normalize_server_url(url):
+    # The form every comparison uses: stripped, no trailing slash
+    # (the same normalisation on_test applies before probing).
+    return str(url or '').strip().rstrip('/')
+
+
+def sanitize_servers(raw):
+    # Config-file input is untrusted: keep only well-formed entries
+    # (dicts with a non-empty name and URL), token defaulting to ''.
+    out = []
+    for e in raw or []:
+        if not isinstance(e, dict):
+            continue
+        name = str(e.get('name') or '').strip()
+        url = normalize_server_url(e.get('url'))
+        if not name or not url:
+            continue
+        out.append({'name': name, 'url': url,
+                    'token': str(e.get('token') or '')})
+    return out
+
+
+def find_server(servers, url):
+    want = normalize_server_url(url)
+    for e in servers or []:
+        if normalize_server_url(e.get('url')) == want:
+            return e
+    return None
+
+
+def validate_new_server(name, url, token, preset_urls, servers):
+    # -> (entry, None) or (None, reason). The add-server dialog
+    # shows the reason inline and does not save on error.
+    name = str(name or '').strip()
+    url = normalize_server_url(url)
+    if not name:
+        return None, 'Give the server a name.'
+    if not url:
+        return None, 'Enter the backend URL.'
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        ok = p.scheme in ('http', 'https') and bool(p.hostname)
+    except Exception:
+        ok = False
+    if not ok:
+        return None, 'URL must look like http://host or https://host - got: %s' % url
+    if any(normalize_server_url(u) == url for u in preset_urls or []):
+        return None, 'That URL is already a built-in preset.'
+    if find_server(servers, url) is not None:
+        return None, 'A custom server with that URL already exists.'
+    return {'name': name, 'url': url, 'token': str(token or '')}, None
+
+
+def add_server(servers, entry):
+    # -> new list with the (validated) entry appended.
+    return sanitize_servers(servers) + [dict(entry)]
+
+
+def remove_server(servers, url):
+    # -> new list without the entry whose URL matches.
+    want = normalize_server_url(url)
+    return [e for e in sanitize_servers(servers)
+            if normalize_server_url(e['url']) != want]
+
+
+def sync_server_token(servers, url, token):
+    # The token field was edited while a custom server was the
+    # current selection: fold the edit back into its entry, so the
+    # next selection of that server restores the edited token.
+    # No match (a preset or a hand-typed URL) -> unchanged list.
+    out = sanitize_servers(servers)
+    e = find_server(out, url)
+    if e is not None:
+        e['token'] = str(token or '')
+    return out
+
+
+def server_combo_labels(preset_urls, servers):
+    # Combo choices in display order: the preset URLs (unchanged
+    # from before custom servers existed), then each custom server
+    # shown by name. Pair with server_combo_entries.
+    return list(preset_urls or []) + [e['name'] for e in sanitize_servers(servers)]
+
+
+def server_combo_entries(preset_urls, servers):
+    # Parallel to server_combo_labels: the custom entry behind a
+    # choice index, or None for a built-in preset choice.
+    return [None] * len(preset_urls or []) + sanitize_servers(servers)

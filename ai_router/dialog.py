@@ -70,10 +70,69 @@ LAMP_COLOURS = {'IDLE': wx.Colour(0, 176, 80), 'RUNNING': wx.Colour(220, 0, 0),
                 'DONE': wx.Colour(0, 176, 80), 'FAILED': wx.Colour(255, 102, 0),
                 'CANCELLED': wx.Colour(140, 140, 140)}
 
+class AddServerDialog(wx.Dialog):
+    """#199: add a custom backend server (name / URL / token) for the
+    Run on group. Validation is ui_model.validate_new_server's; this
+    dialog only renders the reason inline and refuses to close on
+    error. On success .entry holds the validated server dict."""
+    def __init__(self, parent, preset_urls, servers):
+        super().__init__(parent, title='Add backend server', style=wx.DEFAULT_DIALOG_STYLE)
+        self._preset_urls = preset_urls
+        self._servers = servers
+        self.entry = None
+        panel = wx.Panel(self)
+        self.panel = panel
+        vbox = wx.BoxSizer(wx.VERTICAL)
+        g = wx.FlexGridSizer(0, 2, 6, 8); g.AddGrowableCol(1, 1)
+        def add(label, ctrl):
+            g.Add(wx.StaticText(panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            g.Add(ctrl, 1, wx.EXPAND)
+        self.name_ctrl = wx.TextCtrl(panel, value='')
+        add('Name', self.name_ctrl)
+        self.url_ctrl = wx.TextCtrl(panel, value='')
+        self.url_ctrl.SetToolTip('The backend base URL, e.g. http://192.168.1.50:8731')
+        add('Backend URL', self.url_ctrl)
+        self.tok_ctrl = wx.TextCtrl(panel, value='', style=wx.TE_PASSWORD)
+        self.tok_ctrl.SetToolTip('Optional. The backend’s auth token (its config.json, key auth_token). Stored with this server in your plugin config.')
+        add('Backend token', self.tok_ctrl)
+        vbox.Add(g, 0, wx.EXPAND | wx.ALL, 10)
+        self.err_label = wx.StaticText(panel, label='')
+        self.err_label.SetForegroundColour(wx.Colour(220, 0, 0))
+        vbox.Add(self.err_label, 0, wx.LEFT | wx.RIGHT, 10)
+        brow = wx.BoxSizer(wx.HORIZONTAL)
+        self.ok_btn = wx.Button(panel, label='Add server')
+        self.ok_btn.Bind(wx.EVT_BUTTON, self._on_ok)
+        brow.Add(self.ok_btn, 0)
+        cxl = wx.Button(panel, label='Cancel')
+        cxl.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL))
+        brow.Add(cxl, 0, wx.LEFT, 8)
+        vbox.Add(brow, 0, wx.ALIGN_RIGHT | wx.ALL, 10)
+        panel.SetSizer(vbox)
+        self.SetMinSize((430, -1))
+        vbox.Fit(self)
+        self.name_ctrl.SetFocus()
+
+    def _on_ok(self, _evt):
+        entry, err = ui_model.validate_new_server(self.name_ctrl.GetValue(),
+                                                  self.url_ctrl.GetValue(),
+                                                  self.tok_ctrl.GetValue(),
+                                                  self._preset_urls, self._servers)
+        if err:
+            self.err_label.SetLabel(err)
+            self.err_label.Wrap(400)
+            self.panel.GetSizer().Layout()
+            self.panel.GetSizer().Fit(self)
+            return
+        self.entry = entry
+        self.EndModal(wx.ID_OK)
+
+
 class RouterDialog(wx.Dialog):
     def __init__(self, parent, board_path):
         super().__init__(parent, title='AI Router — LLM-orchestrated routing', size=(800, 600), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.cfg = cfgmod.load()
+        self.custom_servers = ui_model.sanitize_servers(self.cfg.get('backend_servers'))
+        self._combo_entries = []
         self.cancel_event = threading.Event()
         self.worker_thread = None
         self.result = None
@@ -467,6 +526,7 @@ class RouterDialog(wx.Dialog):
         self._on_where()
         self.backend_url_ctrl.SetValue(cfg.get('backend_url', 'http://127.0.0.1:8731'))
         self.backend_tok_ctrl.SetValue(cfg.get('backend_token', ''))
+        self._refresh_remove_btn()
         self.adv_finish_signal.SetValue(int(cfg.get('finish_signal_cap', 8)))
         self.adv_finish_pour.SetValue(int(cfg.get('finish_pour_cap', 4)))
         self.adv_long_finish.SetValue(int(cfg.get('long_finish_cap', 6)))
@@ -604,7 +664,10 @@ class RouterDialog(wx.Dialog):
         self.backend_box = wx.BoxSizer(wx.VERTICAL)
         brow = wx.BoxSizer(wx.HORIZONTAL)
         brow.Add(wx.StaticText(panel, label='Backend URL'), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        self.backend_url_ctrl = wx.ComboBox(panel, choices=list(BACKEND_PRESETS))
+        self.backend_url_ctrl = wx.ComboBox(panel)
+        self._refresh_server_combo()
+        self.backend_url_ctrl.Bind(wx.EVT_COMBOBOX, self._on_server_pick)
+        self.backend_url_ctrl.Bind(wx.EVT_TEXT, lambda e: self._refresh_remove_btn())
         self.test_btn = wx.Button(panel, label='Test connection')
         self.test_btn.Bind(wx.EVT_BUTTON, self.on_test)
         brow.Add(self.backend_url_ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
@@ -621,6 +684,14 @@ class RouterDialog(wx.Dialog):
         trow.Add(self.backend_tok_ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
         trow.Add(self.page_btn, 0, wx.LEFT, 8)
         self.backend_box.Add(trow, 0, wx.EXPAND | wx.TOP, 4)
+        srow = wx.BoxSizer(wx.HORIZONTAL)
+        self.add_server_btn = wx.Button(panel, label='Add server…')
+        self.add_server_btn.Bind(wx.EVT_BUTTON, self._on_add_server)
+        srow.Add(self.add_server_btn, 0)
+        self.remove_server_btn = wx.Button(panel, label='Remove server')
+        self.remove_server_btn.Bind(wx.EVT_BUTTON, self._on_remove_server)
+        srow.Add(self.remove_server_btn, 0, wx.LEFT, 8)
+        self.backend_box.Add(srow, 0, wx.TOP, 4)
         box.Add(self.backend_box, 0, wx.EXPAND | wx.LEFT, 12)
         # Local fields
         self.local_box = wx.BoxSizer(wx.VERTICAL)
@@ -653,17 +724,81 @@ class RouterDialog(wx.Dialog):
         box.Add(self.local_box, 0, wx.EXPAND | wx.LEFT, 12)
         self._config_controls += [self.run_backend_rb, self.run_local_rb, self.backend_url_ctrl,
                                   self.test_btn, self.backend_tok_ctrl, self.page_btn,
+                                  self.add_server_btn, self.remove_server_btn,
                                   self.endpoint_ctrl, self.model_ctrl, self.key_ctrl,
                                   self.tm_ctrl, self.tm_browse_btn]
         return box
 
     def _on_where(self, _evt=None):
         backend = self.run_backend_rb.GetValue()
-        for c in (self.backend_url_ctrl, self.test_btn, self.backend_tok_ctrl, self.page_btn):
+        for c in (self.backend_url_ctrl, self.test_btn, self.backend_tok_ctrl, self.page_btn,
+                  self.add_server_btn):
             c.Enable(backend)
         for c in (self.endpoint_ctrl, self.model_ctrl, self.key_ctrl, self.tm_ctrl, self.tm_browse_btn):
             c.Enable(not backend)
+        self._refresh_remove_btn()
         self._on_settings_changed()
+
+    # ------------------------------------------------- custom servers (#199)
+    def _refresh_server_combo(self):
+        # Rebuild the Backend URL choices: the preset URLs, then the
+        # custom servers by name. _combo_entries maps each choice
+        # index to its custom entry (None for a preset). The field's
+        # current text (a URL, or a half-typed one) is preserved.
+        keep = self.backend_url_ctrl.GetValue()
+        self._combo_entries = ui_model.server_combo_entries(BACKEND_PRESETS, self.custom_servers)
+        self.backend_url_ctrl.SetItems(ui_model.server_combo_labels(BACKEND_PRESETS, self.custom_servers))
+        if keep:
+            self.backend_url_ctrl.SetValue(keep)
+
+    def _selected_custom_server(self):
+        # The custom server the URL field currently names, if any --
+        # selection is by URL, however the URL got into the field.
+        return ui_model.find_server(self.custom_servers, self.backend_url_ctrl.GetValue())
+
+    def _refresh_remove_btn(self):
+        btn = getattr(self, 'remove_server_btn', None)
+        if btn is not None:
+            btn.Enable(self.run_backend_rb.GetValue() and self._selected_custom_server() is not None)
+
+    def _on_server_pick(self, evt):
+        idx = evt.GetSelection()
+        entry = self._combo_entries[idx] if 0 <= idx < len(self._combo_entries) else None
+        if entry is not None:
+            self.backend_url_ctrl.SetValue(entry['url'])
+            self.backend_tok_ctrl.SetValue(entry.get('token', ''))
+        self._refresh_remove_btn()
+        self._on_settings_changed()
+        evt.Skip()
+
+    def _on_add_server(self, _evt):
+        dlg = AddServerDialog(self, BACKEND_PRESETS, self.custom_servers)
+        try:
+            if dlg.ShowModal() == wx.ID_OK and dlg.entry is not None:
+                self.custom_servers = ui_model.add_server(self.custom_servers, dlg.entry)
+                self._refresh_server_combo()
+                self.backend_url_ctrl.SetValue(dlg.entry['url'])
+                self.backend_tok_ctrl.SetValue(dlg.entry.get('token', ''))
+                self._refresh_remove_btn()
+                self.collect_cfg()  # persist now, the on_page precedent
+                self.test_label.SetLabel('Added backend server %s.' % dlg.entry['name'])
+        finally:
+            dlg.Destroy()
+
+    def _on_remove_server(self, _evt):
+        entry = self._selected_custom_server()
+        if entry is None:
+            return
+        if wx.MessageBox('Remove the custom server "%s" (%s)?' % (entry['name'], entry['url']),
+                         'AI Router', wx.YES_NO | wx.ICON_QUESTION) != wx.YES:
+            return
+        self.custom_servers = ui_model.remove_server(self.custom_servers, entry['url'])
+        self._refresh_server_combo()
+        self.backend_url_ctrl.SetValue(BACKEND_PRESETS[0])
+        if self.backend_tok_ctrl.GetValue() == entry.get('token', ''):
+            self.backend_tok_ctrl.SetValue('')
+        self._refresh_remove_btn()
+        self.collect_cfg()  # persist now, the on_page precedent
 
     def _refresh_tm_note(self):
         p = self.tm_ctrl.GetValue().strip()
@@ -774,6 +909,9 @@ class RouterDialog(wx.Dialog):
         cfg['use_backend'] = self.run_backend_rb.GetValue()
         cfg['backend_url'] = self.backend_url_ctrl.GetValue().strip()
         cfg['backend_token'] = self.backend_tok_ctrl.GetValue()
+        self.custom_servers = ui_model.sync_server_token(self.custom_servers,
+                                                         cfg['backend_url'], cfg['backend_token'])
+        cfg['backend_servers'] = [dict(e) for e in self.custom_servers]
         cfg['finish_signal_cap'] = self.adv_finish_signal.GetValue()
         cfg['finish_pour_cap'] = self.adv_finish_pour.GetValue()
         cfg['long_finish_cap'] = self.adv_long_finish.GetValue()
@@ -834,6 +972,7 @@ class RouterDialog(wx.Dialog):
             self._apply_row_enable()
             self._apply_finish_state()
             self._apply_det_state()
+            self._refresh_remove_btn()
         if on:
             self.open_btn.Disable()
 

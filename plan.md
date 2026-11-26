@@ -620,7 +620,11 @@ one AIRouterPlugin under KiCad's own pcbnew.LoadPlugins.
 
 ## In progress
 
-- Nothing in flight. v1.12.3 (external audit round 5
+- **Add server… (#199)** -- in flight on branch
+  `add-server-button`: custom backend servers in the Run on
+  group (Add server… modal, persisted `backend_servers`
+  list, Remove server with confirmation; presets unchanged).
+  v1.12.3 (external audit round 5
   fixes #184-#189) is released and recorded in Done above;
   production backends stay on 1.10.2 until the owner calls
   a deploy.
