@@ -341,6 +341,66 @@ unguarded module-level pcbnew import -- no code change. The
 branch-area fixes (#173-#180) are recorded on
 phase2-adoption-v1.12.2.
 
+### Off-plan -- external audit round 6 fix pass (2026-11-26)
+
+Eight claims from a sixth external audit (of v1.12.3, main
+328e62f) were verified claim by claim; all eight proved REAL
+(C5 and C8 per sub-part) and each is fixed on main in its own
+commit chain with a fail-before/pass-after regression test, no
+version bump: #191 (CRITICAL regression from #189: Pipeline
+copies cfg, but run_auto switched Variant B by mutating the
+caller's dict, so the B attempt ran Variant A's layer law and
+escalation ran A twice -- proven on the shipped build from the
+v1.12.3 Nomad acceptance job itself: its B and A final keys
+are identical and its B ledger records no_tracks_on [In1.Cu]
+only; run_auto now builds Variant B on its own Pipeline from
+an explicit cfg copy, like Variant A already did), #192
+(pinned engine bootstrap let the stored config URL beat
+TRACEMAKER_URL when the pinned install was missing,
+reinstalling the old engine every restart; env-first
+selection only when the pin is missing, plus the tm_update
+and tm_pinned_install_missing edges), #193 (failed engine
+runs could become the delivered board: tool_route assigned
+current/last_route before the engine_error check,
+_route_variant consulted engine_error only when output was
+missing, tool_reroute_window ignored rc and the route JSON;
+failure is now checked before any state mutation on all three
+paths), #194 (#185's llm+deterministic coercion now also
+lives in Pipeline.__init__, so direct/local callers cannot
+run --deterministic under LLM mode), #195 (fix_violations
+could delete free stitching vias on a successful repair --
+both rip loops now skip free vias per _via_is_free;
+_zone_layers_by_net gained #181's rule-area skip; rollback
+via keys come from the item add_via created, via _track_key),
+#196 (#180's 40M work value never reached existing installs:
+a persisted work of exactly 20000000 -- the pre-#180 default
+-- is migrated to 40000000 on both the server and client load
+paths, any other operator value untouched; run_job status
+records banned_layer_tracks_delta and selftest_status gates
+on it with a raw-count fallback), #197 (config page rendered
+engine provenance into innerHTML unescaped; it now goes
+through a prov() helper -- lines joined with ' | ', then the
+page's esc() -- and the neighbouring version fields through
+esc()), #198 (sidecar_paths never checked the board-stem
+.kicad_dru when a different project stem won;
+skeleton_intrusions counted vias layer-blind and treated
+arcs as chords -- vias now intrude only on layers they span,
+arcs are sampled start->mid->end under one item key).
+Suites at the batch tip: pytest 127 passed, standalone 55/55
+(baselines at 328e62f: 103, 46/46). Post-fix Nomad AUTO rerun
+(local pipeline, phase-2-end binary, one run, not re-rolled):
+Variant B's ledger records no_tracks_on [In1.Cu, In2.Cu], B
+was kept with no escalation, final gate 0 unconnected / 0
+split nets / 13 copper -- the v1.12.2 envelope restored; the
+v1.12.3 acceptance's 3/1/13 is explained by #191 (its only
+split was the 3V3 pour split Variant B exists to prevent),
+not by AUTO wander. Incompleteness note: #189, #185, #181,
+#180 and #173 were each incomplete in exactly the way this
+round found -- the same pattern as round 5's corrections of
+#176/#161. Whether this batch warrants a v1.12.4 patch
+release is the owner's call; v1.12.3 as shipped contains the
+#191 regression.
+
 ### Off-plan -- external audit round 5 fix pass (2026-11-26)
 
 Six claims from a fifth external audit (of v1.12.2, main
