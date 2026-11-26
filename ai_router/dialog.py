@@ -207,6 +207,10 @@ class RouterDialog(wx.Dialog):
         # what a Run would do now).
         if not self._running and self._lamp_state in ('DONE', 'FAILED', 'CANCELLED'):
             self.set_status('IDLE', 'Ready')
+        # v1.12.2 (#176): the mode radios land here too -- keep the
+        # Reproducible checkbox's enabled state in step with the mode.
+        try: self._apply_det_state()
+        except Exception: pass
 
     # ---------------------------------------------------------- Board group
     def _build_board_group(self, panel, board_path):
@@ -247,7 +251,8 @@ class RouterDialog(wx.Dialog):
         self.finish_ctrl.Bind(wx.EVT_CHECKBOX, self._on_finish_toggle)
         box.Add(self.finish_ctrl, 0, wx.LEFT | wx.TOP, 4)
         self.det_ctrl = wx.CheckBox(panel, label='Reproducible run — deterministic engine, bounded by the work budget')
-        self.det_ctrl.SetToolTip('Engine --deterministic: the same board and settings produce the same result board. No time limit is used in this mode; the work budget (Advanced) bounds the run.')
+        self._det_tip = 'Engine --deterministic: the same board and settings produce the same result board. No time limit is used in this mode; the work budget (Advanced) bounds the run.'
+        self.det_ctrl.SetToolTip(self._det_tip)
         self.det_ctrl.Bind(wx.EVT_CHECKBOX, self._on_settings_changed)
         box.Add(self.det_ctrl, 0, wx.LEFT | wx.BOTTOM, 4)
         self._config_controls += [self.mode_auto_rb, self.mode_llm_rb, self.passes_ctrl, self.strip_ctrl,
@@ -394,6 +399,18 @@ class RouterDialog(wx.Dialog):
         elif not getattr(self, '_running', False):
             self.strip_ctrl.Enable(True)
 
+    def _apply_det_state(self):
+        # v1.12.2 (#176): Reproducible is an Auto-mode property --
+        # the LLM path picks each step as it goes and varies run to
+        # run by design, so the checkbox is disabled while LLM mode
+        # is selected (the Finish/Strip disable-with-reason pattern).
+        if self.mode_llm_rb.GetValue():
+            self.det_ctrl.Enable(False)
+            self.det_ctrl.SetToolTip('Reproducible run needs Auto mode: the LLM path picks each step as it goes, so it varies run to run.')
+        elif not getattr(self, '_running', False):
+            self.det_ctrl.Enable(True)
+            self.det_ctrl.SetToolTip(getattr(self, '_det_tip', 'Engine --deterministic: the same board and settings produce the same result board.'))
+
     def _apply_row_enable(self):
         auto = self.facts and self.law_auto_rb.GetValue()
         for row in self.layer_rows.values():
@@ -437,6 +454,7 @@ class RouterDialog(wx.Dialog):
         self.finish_ctrl.SetValue(bool(cfg.get('route_open_only', False)))
         self.det_ctrl.SetValue(bool(cfg.get('deterministic', False)))
         self._apply_finish_state()
+        self._apply_det_state()
         if cfg.get('use_backend'):
             self.run_backend_rb.SetValue(True)
         else:
@@ -795,6 +813,7 @@ class RouterDialog(wx.Dialog):
         if not on:
             self._apply_row_enable()
             self._apply_finish_state()
+            self._apply_det_state()
         if on:
             self.open_btn.Disable()
 

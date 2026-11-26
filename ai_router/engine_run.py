@@ -62,6 +62,26 @@ def route_flags(cfg, work, time_s=3600, open_only=True):
     return flags
 
 
+def scaled_timeout(base_seconds, work, ref_work=20000000):
+    """Wall-clock timeout for an engine leg, scaled by work budget.
+
+    v1.12.2 (#176): the leg constants (3900 / 2400 / 1900 s) were
+    tuned at the 20M work budget; a leg's runtime grows with the
+    budget it is given, so a recalibrated budget would let a
+    healthy leg outgrow a fixed timeout and be killed mid-run.
+    Linear in work, floored at 1x -- at or below the tuning budget
+    the historical values hold exactly. An unusable budget value
+    falls back to the tuned constant.
+    """
+    try:
+        w = float(work)
+    except (TypeError, ValueError):
+        w = float(ref_work)
+    if w <= 0:
+        w = float(ref_work)
+    return int(round(base_seconds * max(1.0, w / float(ref_work))))
+
+
 def engine_error(rc, summary=None):
     """Error text when an engine route run failed, else None.
 

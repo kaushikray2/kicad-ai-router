@@ -375,7 +375,7 @@ class Pipeline:
         if _cost: cmdline += ['--layer-cost', _cost]
         cmdline += engine_run.route_flags(self.cfg, work or self.cfg.get('work', 20000000))  # v1.12.2 (#170/#171)
         with open(log_path, 'w') as lf:
-            p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=3900)
+            p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(3900, work or self.cfg.get('work', 20000000)))  # v1.12.2 (#176): scales with the work budget
         if not os.path.exists(outp):
             _err = engine_run.engine_error(p.returncode, None)
             if _err:
@@ -472,6 +472,7 @@ class Pipeline:
         # Exclude them while a valid cost spec is in force, loudly.
         excluded = []
         excluded_roo = []
+        excluded_det = []
         _cost = self._layer_cost_spec(self.base)
         if _cost:
             for eng in ('freerouting', 'krt'):
@@ -489,6 +490,16 @@ class Pipeline:
                     engines.remove(eng)
                     excluded_roo.append(eng)
                     self.log('portfolio: %s excluded -- route_open_only keeps existing copper; %s re-routes from scratch (#174)' % (eng, eng))
+        # v1.12.2 (#176): deterministic mode excludes the same two
+        # engines for its own reason -- freerouting runs -mt 2
+        # (multithreaded, run-variant) and krt has no determinism
+        # contract, so neither may win a Reproducible run.
+        if self.cfg.get('deterministic'):
+            for eng in ('freerouting', 'krt'):
+                if eng in engines:
+                    engines.remove(eng)
+                    excluded_det.append(eng)
+                    self.log('portfolio: %s excluded -- deterministic mode requires the reproducible engine only (#176)' % eng)
         results = []
         winner = None
         for eng in engines:
@@ -530,6 +541,7 @@ class Pipeline:
                 'winner': winner[1] if winner else None}
         if excluded: _rec['excluded_layer_cost'] = excluded
         if excluded_roo: _rec['excluded_route_open_only'] = excluded_roo
+        if excluded_det: _rec['excluded_deterministic'] = excluded_det
         self._record('portfolio', _rec)
         if winner:
             self.current = winner[1]
@@ -553,7 +565,7 @@ class Pipeline:
         cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 20000000), 1800)  # v1.12.2 (#170/#171)
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
-            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=2400).returncode
+            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(2400, self.cfg.get('work', 20000000))).returncode  # v1.12.2 (#176)
         if _rc != 0:
             self.log('TraceMaker variant %s exited with code %d (log: %s)' % (eng, _rc, log_path))  # v1.9.6 (#40)
         if not os.path.exists(outp):
@@ -863,7 +875,7 @@ class Pipeline:
         log_path = os.path.join(self.workdir, 'tm-rw-%d.log' % self._oseq)
         try:
             with open(log_path, 'w') as lf:
-                subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=1900)
+                subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(1900, self.cfg.get('work', 20000000)))  # v1.12.2 (#176)
         except Exception as e:
             self._record('reroute_window', {'net': net, 'status': 'error', 'detail': str(e)[:200]})
             return {'status': 'error', 'net': net}
