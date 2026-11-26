@@ -60,10 +60,12 @@ def test_gate_summarises_once_per_board():
     # In1's 3 tracks count as banned-layer tracks
     assert g['banned_layer_tracks'] == 3, g['banned_layer_tracks']
     g2 = pipe.tool_gate()
-    # the gate's own census fetch is per-gate by design (it measures
-    # the board as it stands now); the invariant is ONE summary per
-    # gate, not two -- the layer-info cache serves the policy half.
-    assert calls.count('summary') == 2, calls
+    # P2.7a: a repeat gate of identical bytes under identical state
+    # is served from the verdict cache -- no second measurement at
+    # all, so the summary count stays at one. The #101 invariant
+    # holds a fortiori: never two summaries for one measurement.
+    assert calls.count('summary') == 1, calls
+    assert g2.get('cached') is True
     assert g2['banned_layer_tracks'] == 3
 
 if __name__ == '__main__':

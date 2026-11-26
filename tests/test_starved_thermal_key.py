@@ -65,7 +65,10 @@ SUMM = {'tracks_by_layer': {}, 'tracks_by_layer_net': {}, 'pour_layers': {}, 'po
         'locked_items': 0, 'free_vias': 0, 'copper_layers': ['F.Cu', 'B.Cu'],
         'layer_aliases': {'f.cu': 'F.Cu', 'b.cu': 'B.Cu'}}
 for _f in ('base.kicad_pcb', 'step1.kicad_pcb', 'step2.kicad_pcb'):
-    open(os.path.join(pipe.workdir, _f), 'w').write('(kicad_pcb)')
+    # P2.7a: distinct bytes per board -- the gate caches verdicts by
+    # board content, and to any real measurement identical bytes ARE
+    # the same board; three different boards need three contents.
+    open(os.path.join(pipe.workdir, _f), 'w').write('(kicad_pcb %s)' % _f)
 pipe._worker = lambda cmd, *a, **k: dict(SUMM)
 queue = []
 pipe._drc_measure = lambda board: queue.pop(0)
