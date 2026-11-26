@@ -292,7 +292,7 @@ def _router_added(cur, base):
 
 class Pipeline:
     def __init__(self, cfg, board_path, log):
-        self.cfg = cfg
+        self.cfg = dict(cfg)  # #189: the run coerces keys (route_open_only forces strip_existing off); that write belongs to the run, not to the caller's dict
         self.log = log
         self.board_path = os.path.abspath(board_path)
         stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -311,13 +311,13 @@ class Pipeline:
             shutil.copy(_dru, os.path.join(self.workdir, 'input.kicad_dru'))
         self._gseq = 0   # v1.8.2 (#15): unique gate report names
         self._oseq = 0   # v1.8.2 (#14): unique step output names
-        if cfg.get('route_open_only') and cfg.get('strip_existing', True):
+        if self.cfg.get('route_open_only') and self.cfg.get('strip_existing', True):
             # v1.12.2 (#171): Finish-this-board routes only what is
             # open and never touches existing copper -- stripping
             # first would delete the copper the mode exists to keep.
-            cfg['strip_existing'] = False
+            self.cfg['strip_existing'] = False
             self.log('route_open_only: strip_existing forced off (existing copper is kept)')
-        if cfg.get('strip_existing', True):
+        if self.cfg.get('strip_existing', True):
             self.base = os.path.join(self.workdir, 'base.kicad_pcb')
             r = self._worker('strip', '--board', src_copy, '--out', self.base)
             self.log('Stripped existing routing: %s items removed; kept %s locked items, %s free vias' % (r.get('removed_tracks_vias'), r.get('kept_locked'), r.get('kept_free_vias')))  # v1.11.5 (#119)
@@ -325,7 +325,7 @@ class Pipeline:
             self.base = src_copy
         self.current = self.base
         self._record('setup', {'base': self.base})
-        if cfg.get('route_open_only'):
+        if self.cfg.get('route_open_only'):
             # v1.12.2 (#174): structural copper protection for
             # Finish-this-board. Strip is already forced off above;
             # now snapshot the input's lock flags and lock EVERY

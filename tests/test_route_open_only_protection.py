@@ -139,7 +139,15 @@ def _pcbnew_part():
     cfg = {'route_open_only': True, 'strip_existing': True, 'tracemaker_path': '/nonexistent',
            'kicad_cli': 'kicad-cli', 'layer_cost': '', 'no_tracks_on': 'In1.Cu'}
     pipe = pl.Pipeline(cfg, src, logs.append)
-    assert cfg['strip_existing'] is False
+    assert pipe.cfg['strip_existing'] is False  # coerced on the run's own copy (#189; the #174-era assert read the caller's dict, which is exactly the aliasing #189 removes)
+    # #189: that coercion must live on the Pipeline's OWN copy --
+    # a second construction from a fresh caller dict proves the
+    # caller's dict is not the thing being written to.
+    cfg2 = {'route_open_only': True, 'strip_existing': True, 'tracemaker_path': '/nonexistent',
+            'kicad_cli': 'kicad-cli', 'layer_cost': '', 'no_tracks_on': 'In1.Cu'}
+    pipe2 = pl.Pipeline(cfg2, src, logs.append)
+    assert cfg2['strip_existing'] is True, 'Pipeline.__init__ mutated the caller cfg (#189)'
+    assert pipe2.cfg['strip_existing'] is False
     base_locks = locks(pipe.base)
     assert len(base_locks) == 3 and all(base_locks.values()), base_locks
     # the gate censuses invariance against the PROTECTED base here
