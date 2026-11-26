@@ -258,6 +258,18 @@ stale-config notice path (21 checks, screenshots in
 agent-runs/dialog-smoke/). Code only -- production backends
 stay on 1.10.2, no redeploy.
 
+### Off-plan -- SiliconBrane copyright headers (2026-11-25)
+
+Template A of the SiliconBrane Copyright Header Standard
+applied to every SiliconBrane-authored source file that lacked
+one: the ai_router package, docker/server + run_job, the tests,
+the bench/dataset scripts and the backend config page (HTML
+comment form), each carrying its git creation year (2026 for
+every file -- the repo history starts 2026-11-22). Pure comment
+insertions (diff deletions: 0), no behaviour change, no version
+bump; the shipped v1.12.0 PCM zip is unchanged -- the headers
+ride the next release.
+
 ## In progress
 
 - **P2.1b** is implemented on branch `p21b-fix-violations` and
