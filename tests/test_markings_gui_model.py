@@ -254,3 +254,15 @@ def test_impedance_coplanar_requires_gap():
     e = mm.impedance_entry({'net': 'RF_IN', 'z0': 50,
                              'model': 'coplanar', 'gap_mm': 0.2})
     assert e['gap_mm'] == 0.2
+
+
+def test_power_load_modes_roundtrip():
+    # #202: per-load modes are validated by markings.py and
+    # consumed by powertree (per-mode EVA sums); a form round-trip
+    # must not strip them.
+    p = {'net': 'VCC5', 'loads': {'U1': {'peak_a': 1.0, 'modes': ['TX', 'RX']}}}
+    rt = mm.power_entry(mm.power_form(p))
+    assert rt['loads']['U1']['modes'] == ['TX', 'RX'], rt
+    m = mm.MarkingsEditorModel({}, copy.deepcopy(INDEX))
+    m.add_entry('power', mm.power_entry(mm.power_form(p)))
+    assert m.entries('power')[0]['loads']['U1']['modes'] == ['TX', 'RX']
