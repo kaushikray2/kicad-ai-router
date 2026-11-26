@@ -470,7 +470,8 @@ def _load_form(ref, spec):
     return {'ref': ref, 'kind': spec.get('kind') or '',
             'peak_a': spec.get('peak_a'), 'sustained_a': spec.get('sustained_a'),
             'duty': spec.get('duty'), 'mpn': kb.get('mpn') or '',
-            'datasheet_rev': kb.get('datasheet_rev') or ''}
+            'datasheet_rev': kb.get('datasheet_rev') or '',
+            'modes': ', '.join(spec.get('modes') or [])}
 
 
 def _load_entry(row):
@@ -493,6 +494,9 @@ def _load_entry(row):
         kb['datasheet_rev'] = row['datasheet_rev'].strip()
     if kb:
         ld['kb'] = kb
+    modes = _csv_list(row.get('modes'))
+    if modes:
+        ld['modes'] = modes
     return ref, ld
 
 

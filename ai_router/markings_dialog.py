@@ -188,7 +188,8 @@ class _RowDialog(wx.Dialog):
 class LoadRowDialog(_RowDialog):
     FIELDS = [('ref', 'Ref', 'text'), ('kind', 'Kind', 'choice:|constant_current|resistive|constant_power'),
               ('peak_a', 'Peak (A)', 'text'), ('sustained_a', 'Sustained (A)', 'text'),
-              ('duty', 'Duty (0\u20131)', 'text'), ('mpn', 'Datasheet MPN', 'text'),
+              ('duty', 'Duty (0\u20131)', 'text'), ('modes', 'Modes (csv)', 'text'),
+              ('mpn', 'Datasheet MPN', 'text'),
               ('datasheet_rev', 'Datasheet rev', 'text')]
 
     def __init__(self, parent, row):
@@ -473,7 +474,8 @@ class PowerForm(_FormBase):
             return row.get('mpn') or ''
         key = {'Ref': 'ref', 'Kind': 'kind', 'Type': 'type', 'Peak (A)': 'peak_a',
                'Sustained (A)': 'sustained_a', 'Duty': 'duty', 'From': 'from', 'To': 'to',
-               'Rating (A)': 'rating_a'}.get(col, '')
+               'Rating (A)': 'rating_a', 'Eta min': 'eta_min', 'Iq (A)': 'iq_a',
+               'R (m\u03a9)': 'r_mohm', 'Modes': 'modes'}.get(col, '')
         v = row.get(key)
         return '' if v is None else str(v)
 
@@ -498,16 +500,16 @@ class PowerForm(_FormBase):
         self.grid.Add(_label(self, ''), 0)
         self.grid.Add(_label(self, 'Blank = the board-level power-corners budget applies.', wrap=430), 0, wx.EXPAND)
         self.grid.Add(_label(self, 'Loads', bold=True), 0)
-        self.loads = _SubTable(self, [('Ref', 60), ('Kind', 100), ('Peak (A)', 64), ('Sustained (A)', 84), ('Duty', 44), ('KB ref', 90), ('State', 190)], LoadRowDialog, self)
+        self.loads = _SubTable(self, [('Ref', 60), ('Kind', 100), ('Peak (A)', 64), ('Sustained (A)', 84), ('Duty', 44), ('Modes', 80), ('KB ref', 90), ('State', 190)], LoadRowDialog, self)
         self.grid.Add(self.loads, 0, wx.EXPAND)
         self.import_b = wx.Button(self, label='Import connected parts\u2026')
         self.grid.Add(wx.StaticText(self, label=''), 0)
         self.grid.Add(self.import_b, 0)
         self.grid.Add(_label(self, 'Regulators', bold=True), 0)
-        self.regulators = _SubTable(self, [('Ref', 60), ('Type', 70), ('Rating (A)', 70)], RegulatorRowDialog, self)
+        self.regulators = _SubTable(self, [('Ref', 60), ('Type', 70), ('Eta min', 60), ('Iq (A)', 60)], RegulatorRowDialog, self)
         self.grid.Add(self.regulators, 0, wx.EXPAND)
         self.grid.Add(_label(self, 'Conduits', bold=True), 0)
-        self.conduits = _SubTable(self, [('From', 60), ('To', 60), ('Kind', 90), ('Rating (A)', 70)], ConduitRowDialog, self)
+        self.conduits = _SubTable(self, [('Ref', 50), ('From', 55), ('To', 55), ('Kind', 80), ('R (m\u03a9)', 60), ('Rating (A)', 64)], ConduitRowDialog, self)
         self.grid.Add(self.conduits, 0, wx.EXPAND)
         self.grid.Add(_label(self, 'Protective', bold=True), 0)
         self.protective = _SubTable(self, [('Ref', 60), ('Kind', 90), ('Rating (A)', 70)], ProtectiveRowDialog, self)
