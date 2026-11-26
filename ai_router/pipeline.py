@@ -311,6 +311,15 @@ class Pipeline:
             shutil.copy(_dru, os.path.join(self.workdir, 'input.kicad_dru'))
         self._gseq = 0   # v1.8.2 (#15): unique gate report names
         self._oseq = 0   # v1.8.2 (#14): unique step output names
+        if self.cfg.get('mode') == 'llm' and self.cfg.get('deterministic'):
+            # (#194): Reproducible is an AUTO-mode property (#171).
+            # #185 enforced that at the config boundaries (dialog,
+            # run_job.build_cfg), but a direct Pipeline caller could
+            # still hand an LLM run --deterministic; the pipeline is
+            # the layer every construction path passes through, so
+            # the coercion lives here too.
+            self.cfg['deterministic'] = False
+            self.log('deterministic forced off -- mode is llm (Reproducible is an Auto-mode property)')
         if self.cfg.get('route_open_only') and self.cfg.get('strip_existing', True):
             # v1.12.2 (#171): Finish-this-board routes only what is
             # open and never touches existing copper -- stripping
