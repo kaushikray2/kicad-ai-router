@@ -346,8 +346,8 @@ def _worker_loop():
         _prune_retention()
         _job_queue.task_done()
 
-def submit_job(board_bytes, pro_bytes, board_name, overrides, kind='route', dru_bytes=None, markings_bytes=None):
-    digest = hashlib.sha256(board_bytes + (markings_bytes or b'') + json.dumps(overrides or {}, sort_keys=True).encode()).hexdigest()
+def submit_job(board_bytes, pro_bytes, board_name, overrides, kind='route', dru_bytes=None, markings_bytes=None, netlist_bytes=None):
+    digest = hashlib.sha256(board_bytes + (markings_bytes or b'') + (netlist_bytes or b'') + json.dumps(overrides or {}, sort_keys=True).encode()).hexdigest()
     with _jobs_lock:
         for rec in _jobs.values():
             if rec.get('digest') == digest and rec.get('status') in ('queued', 'running') and rec.get('kind') == kind:
@@ -364,6 +364,10 @@ def submit_job(board_bytes, pro_bytes, board_name, overrides, kind='route', dru_
         # markings loader derives from the job's board path
         # (input.kicad_pcb -> input.ai-router-markings.json).
         with open(os.path.join(jd, 'input.ai-router-markings.json'), 'wb') as f: f.write(markings_bytes)
+    if netlist_bytes:
+        # The pipeline's power stage finds the netlist beside the
+        # board (input.kicad_pcb -> input.net).
+        with open(os.path.join(jd, 'input.net'), 'wb') as f: f.write(netlist_bytes)
     rec = {'id': jid, 'kind': kind, 'status': 'queued', 'board_name': board_name,
            'created': time.strftime('%Y-%m-%d %H:%M:%S'), 'digest': digest,
            'overrides': overrides or {}}
@@ -598,7 +602,8 @@ class Handler(BaseHTTPRequestHandler):
                 pro = base64.b64decode(req['pro_b64']) if req.get('pro_b64') else None
                 dru = base64.b64decode(req['dru_b64']) if req.get('dru_b64') else None
                 markings = base64.b64decode(req['markings_b64']) if req.get('markings_b64') else None
-                jid, dup = submit_job(board, pro, req.get('board_name', 'board.kicad_pcb'), req.get('overrides') or {}, dru_bytes=dru, markings_bytes=markings)
+                netlist = base64.b64decode(req['netlist_b64']) if req.get('netlist_b64') else None
+                jid, dup = submit_job(board, pro, req.get('board_name', 'board.kicad_pcb'), req.get('overrides') or {}, dru_bytes=dru, markings_bytes=markings, netlist_bytes=netlist)
                 self._send(200, {'job_id': jid, 'duplicate': dup}); return
             if path.startswith('/api/runs/') and path.endswith('/cancel'):
                 jid = path.split('/')[3]; rec = _jobs.get(jid)

@@ -23,7 +23,7 @@ deterministic AUTO policy that encodes the same playbook as rules.
 
 The LLM never emits geometry. It only chooses among verified tool moves;
 constraints (layer law, clearances) are enforced inside the tools."""
-import json
+import json, os
 try:
     from .llm_client import LLMClient, LLMError
 except ImportError:
@@ -177,7 +177,9 @@ def run_llm(cfg, pipe, log):
         if finished: break
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): report the gate of the DELIVERED file
-    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
+    result = {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
+    result['ledger_path'] = os.path.join(pipe.workdir, 'ledger.json')
+    return result
 
 def default_first_nets(pipe):
     summ = pipe.tool_board_summary()
@@ -512,4 +514,5 @@ def _run_auto_once(cfg, pipe, log):
     audit = getattr(pipe, '_audit', None)  # #42: independent of markings
     if audit is not None:
         result['placement_audit'] = audit
+    result['ledger_path'] = os.path.join(pipe.workdir, 'ledger.json')
     return result

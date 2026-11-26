@@ -42,6 +42,9 @@ try:
     from . import naming
     from . import ui_model
     from . import board_facts
+    from . import board_index
+    from . import markings_model as eng_model
+    from . import markings_dialog
 except ImportError:
     import config as cfgmod
     from pipeline import Pipeline
@@ -50,6 +53,9 @@ except ImportError:
     import naming
     import ui_model
     import board_facts
+    import board_index
+    import markings_model as eng_model
+    import markings_dialog
 
 class Cancelled(Exception):
     pass
@@ -86,6 +92,9 @@ class RouterDialog(wx.Dialog):
         self.layer_rows = {}
         self.extra_bans = []
         self.extra_costs = {}
+        self._last_summary = None
+        self._last_ledger = None
+        self._last_result_board = None
         self.cost_spec_error = None
         # Layout (#169): the status band, the action buttons and the
         # log live on the outer panel, always visible. The settings
@@ -97,6 +106,7 @@ class RouterDialog(wx.Dialog):
         vbox = wx.BoxSizer(wx.VERTICAL)
         self._outer_sizer = vbox
         vbox.Add(self._build_status_band(outer), 0, wx.EXPAND | wx.ALL, 8)
+        vbox.Add(self._build_verdict_bar(outer), 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
         self.scroll = wx.ScrolledWindow(outer, style=wx.VSCROLL)
         self.scroll.SetScrollRate(0, 10)
         self.scroll.SetMinSize((-1, 160))
@@ -113,6 +123,7 @@ class RouterDialog(wx.Dialog):
         nb.Add(self.use_rec_btn, 0, wx.LEFT, 8)
         settings_box.Add(nb, 0, wx.EXPAND | wx.TOP, 8)
         settings_box.Add(self._build_layers_group(panel), 0, wx.EXPAND | wx.TOP, 8)
+        settings_box.Add(self._build_engineered_group(panel), 0, wx.EXPAND | wx.TOP, 8)
         settings_box.Add(self._build_runon_group(panel), 0, wx.EXPAND | wx.TOP, 8)
         settings_box.Add(self._build_advanced(panel), 0, wx.EXPAND | wx.TOP, 8)
         panel.SetSizer(settings_box)
@@ -478,7 +489,9 @@ class RouterDialog(wx.Dialog):
         self.adv_max_tool_calls.SetValue(int(cfg.get('max_tool_calls', 48)))
         self.adv_work.SetValue(int(cfg.get('work', 40000000)))
         self.adv_timeout.SetValue(int(cfg.get('request_timeout_s', 600)))
+        self.eng_enable.SetValue(bool(cfg.get('engineered_nets', True)))
         self._populate_layers()
+        self._refresh_eng_group()
 
     def _set_combo(self, combo, value):
         items = [combo.GetString(i) for i in range(combo.GetCount())]
@@ -709,7 +722,168 @@ class RouterDialog(wx.Dialog):
         self.board_ctrl.SetValue(path)
         self._load_board_facts(path)
         self._populate_layers()
+        self._refresh_eng_group()
         self._on_settings_changed()
+
+
+    # ---------------------------------------------------------- Engineered nets
+    def _build_verdict_bar(self, panel):
+        bar = wx.Panel(panel)
+        s = wx.BoxSizer(wx.HORIZONTAL)
+        self.verdict_label = wx.StaticText(bar, label='Engineered nets:')
+        self.verdict_text = wx.StaticText(bar, label='')
+        f = self.verdict_text.GetFont(); f.SetWeight(wx.FONTWEIGHT_BOLD); self.verdict_text.SetFont(f)
+        self.verdict_hint = wx.StaticText(bar, label='(click for the report)')
+        s.Add(self.verdict_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        s.Add(self.verdict_text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        s.Add(self.verdict_hint, 0, wx.ALIGN_CENTER_VERTICAL)
+        bar.SetSizer(s)
+        bar.Hide()
+        self.verdict_bar = bar
+        for c in (bar, self.verdict_label, self.verdict_text, self.verdict_hint):
+            c.Bind(wx.EVT_LEFT_DOWN, self._on_verdict_click)
+        return bar
+
+    def _build_engineered_group(self, panel):
+        box = wx.StaticBox(panel, label='Engineered nets')
+        s = wx.StaticBoxSizer(box, wx.VERTICAL)
+        self.eng_enable = wx.CheckBox(box, label='Enable engineered nets (impedance, differential, power, length, HV, quiet)')
+        s.Add(self.eng_enable, 0, wx.BOTTOM, 4)
+        self.eng_file_label = wx.StaticText(box, label='')
+        s.Add(self.eng_file_label, 0, wx.BOTTOM, 4)
+        self.eng_banner = wx.StaticText(box, label='')
+        self.eng_banner.SetForegroundColour(wx.Colour(200, 0, 0))
+        self.eng_banner.Hide()
+        s.Add(self.eng_banner, 0, wx.EXPAND | wx.BOTTOM, 4)
+        self.eng_chips = {}
+        for sec in eng_model.SECTIONS:
+            lbl = wx.StaticText(box, label='')
+            self.eng_chips[sec] = lbl
+            s.Add(lbl, 0, wx.BOTTOM, 1)
+        self.eng_honesty = wx.StaticText(box, label=eng_model.HONESTY_LINE)
+        self.eng_honesty.Wrap(560)
+        s.Add(self.eng_honesty, 0, wx.EXPAND | wx.TOP, 4)
+        btns = wx.BoxSizer(wx.HORIZONTAL)
+        self.eng_markings_btn = wx.Button(box, label='Markings\u2026')
+        self.eng_repair_btn = wx.Button(box, label='Repair in editor\u2026')
+        self.eng_open_btn = wx.Button(box, label='Open JSON\u2026')
+        self.eng_repair_btn.Hide(); self.eng_open_btn.Hide()
+        btns.Add(self.eng_markings_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.eng_repair_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.eng_open_btn, 0)
+        s.Add(btns, 0, wx.TOP, 6)
+        self._config_controls += [self.eng_enable, self.eng_markings_btn]
+        self.eng_enable.Bind(wx.EVT_CHECKBOX, self._on_eng_toggle)
+        self.eng_markings_btn.Bind(wx.EVT_BUTTON, lambda e: self._open_markings_editor())
+        self.eng_repair_btn.Bind(wx.EVT_BUTTON, lambda e: self._open_markings_editor())
+        self.eng_open_btn.Bind(wx.EVT_BUTTON, self._on_open_sidecar_json)
+        return s
+
+    def _refresh_eng_group(self):
+        board = self.board_ctrl.GetValue().strip()
+        state = (eng_model.load_sidecar_state(board) if board else
+                 {'state': 'none', 'path': '', 'data': None, 'error': None})
+        self._eng_state = state
+        fname = os.path.basename(state['path']) if state['path'] else '(board).ai-router-markings.json'
+        if state['state'] == 'valid':
+            counts = eng_model.section_counts(state['data'])
+            self.eng_file_label.SetLabel('Sidecar: %s — %d markings' % (fname, sum(counts.values())))
+        elif state['state'] == 'invalid':
+            self.eng_file_label.SetLabel('Sidecar: %s — INVALID' % fname)
+        else:
+            self.eng_file_label.SetLabel('Sidecar: %s — none yet; Markings… creates it' % fname)
+        invalid = state['state'] == 'invalid'
+        if invalid:
+            self.eng_banner.SetLabel('⚠ This sidecar will not load: %s — the board will route unmarked until repaired.' % state['error'])
+            self.eng_banner.Wrap(560)
+        self.eng_banner.Show(invalid)
+        self.eng_repair_btn.Show(invalid)
+        self.eng_open_btn.Show(invalid)
+        cond = eng_model.evaluate_conditions(board, state['data']) if board else {}
+        counts = eng_model.section_counts(state['data'])
+        enabled = self.eng_enable.GetValue()
+        for sec, lbl in self.eng_chips.items():
+            lbl.SetLabel(eng_model.chip_text(sec, counts.get(sec, 0), cond))
+            lbl.Enable(enabled)
+        self._relayout()
+
+    def _on_eng_toggle(self, _evt=None):
+        self._refresh_eng_group()
+        if not self.eng_enable.GetValue():
+            self.verdict_bar.Hide()
+        self._on_settings_changed()
+
+    def _open_markings_editor(self):
+        board = self.board_ctrl.GetValue().strip()
+        if not board or not os.path.exists(board):
+            wx.MessageBox('Board file not found: %s' % board, 'AI Router', wx.OK | wx.ICON_ERROR)
+            return
+        state = eng_model.load_sidecar_state(board)
+        if state['state'] == 'invalid':
+            # Repair path: open the raw JSON so the editor's own
+            # validation can guide the fix; Save stays blocked
+            # until the sidecar validates.
+            try:
+                import json
+                with open(state['path'], encoding='utf-8') as fh:
+                    data = json.load(fh)
+                if not isinstance(data, dict):
+                    data = {}
+            except Exception as e:
+                wx.MessageBox('The sidecar cannot even be parsed as JSON (%s). Use Open JSON… to fix it by hand.' % e,
+                              'Markings', wx.OK | wx.ICON_ERROR)
+                return
+        else:
+            data = state['data'] or {}
+        index = board_index.load_index(board)
+        ban, _cost = self._current_law()
+        conditions = eng_model.evaluate_conditions(board, data)
+        dlg = markings_dialog.MarkingsEditorDialog(self, board, data, index,
+                                                   banned_layers=ban, conditions=conditions)
+        try:
+            dlg.ShowModal()
+            saved = dlg.saved
+        finally:
+            dlg.Destroy()
+        if saved:
+            self._refresh_eng_group()
+            self._on_settings_changed()
+
+    def _on_open_sidecar_json(self, _evt):
+        path = (self._eng_state or {}).get('path')
+        if path and os.path.exists(path):
+            wx.LaunchDefaultApplication(path)
+
+    def _show_verdict(self, summary, result):
+        if not summary or not summary.get('rows'):
+            self.verdict_bar.Hide()
+            self._last_summary = None
+            return
+        self._last_summary = summary
+        self._last_ledger = (result or {}).get('ledger_path')
+        self._last_result_board = (result or {}).get('final_board')
+        self.verdict_text.SetLabel(eng_model.verdict_bar_text(summary['counts']))
+        self.verdict_bar.Show()
+        self._outer_sizer.Layout()
+
+    def _on_verdict_click(self, _evt):
+        if not self._last_summary:
+            return
+        dlg = markings_dialog.ReportDialog(self, self._last_summary,
+                                           self.board_ctrl.GetValue().strip(),
+                                           self._last_result_board, self._last_ledger)
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+
+    def set_status_done_gate_fail(self, n, detail=''):
+        # Screen 4's amber lamp state: the run completed, and n
+        # engineered markings failed their gate checks.
+        self._lamp_state = 'DONE'
+        self.lamp_dot.SetForegroundColour(wx.Colour(230, 150, 0))
+        self.lamp_state_ctrl.SetLabel('DONE (%d GATE FAIL)' % n)
+        self.lamp_detail.SetLabel(detail)
 
     # ---------------------------------------------------------- Advanced
     def _build_advanced(self, panel):
@@ -785,6 +959,7 @@ class RouterDialog(wx.Dialog):
         cfg['max_tool_calls'] = self.adv_max_tool_calls.GetValue()
         cfg['work'] = self.adv_work.GetValue()
         cfg['request_timeout_s'] = self.adv_timeout.GetValue()
+        cfg['engineered_nets'] = self.eng_enable.GetValue()
         order = [l['canonical'] for l in self.facts['layers']] if self.facts else []
         if not self.facts:
             cfg['no_tracks_on'] = self.fallback_layers_ctrl.GetValue().strip()
@@ -860,6 +1035,7 @@ class RouterDialog(wx.Dialog):
         self.cancel_event.clear()
         self.result = None
         self._set_running(True)
+        self.verdict_bar.Hide()
         if cfg.get('use_backend'):
             self.set_status('RUNNING', 'Backend run — submitting…')
         else:
@@ -887,9 +1063,23 @@ class RouterDialog(wx.Dialog):
                     g.get('unconnected_total'), g.get('pour_items'), g.get('split_nets'), g.get('violations_total')))
                 # DONE means the run completed, never that the board
                 # is clean -- the gate numbers ride in the same line.
-                self._set_status('DONE', '%s unconnected · %s pour · %s violations · result: %s' % (
+                summary = None
+                if cfg.get('engineered_nets', True) and self.result:
+                    try:
+                        summary = eng_model.summarize_report(
+                            self.result.get('engineered_nets'),
+                            self.result.get('placement_audit'))
+                    except Exception:
+                        summary = None
+                wx.CallAfter(self._show_verdict, summary, self.result)
+                detail = '%s unconnected · %s pour · %s violations · result: %s' % (
                     g.get('unconnected_total'), g.get('pour_items'), g.get('violations_total'),
-                    os.path.basename(final) if final else '(none)'))
+                    os.path.basename(final) if final else '(none)')
+                if summary and summary['counts'].get('FAIL'):
+                    wx.CallAfter(self.set_status_done_gate_fail,
+                                 summary['counts']['FAIL'], detail)
+                else:
+                    self._set_status('DONE', detail)
                 wx.CallAfter(self._open_done, final)
             except Cancelled:
                 self._log_ui('Cancelled by user (takes effect at step boundaries).')
@@ -991,7 +1181,11 @@ class RouterDialog(wx.Dialog):
                     except Exception:
                         pass
                 self.log('Result downloaded to %s' % dest)
-                return {'final_board': dest, 'gate': job.get('gate') or {}}
+                out = {'final_board': dest, 'gate': job.get('gate') or {}}
+                for _k in ('engineered_nets', 'placement_audit'):
+                    if job.get(_k) is not None:
+                        out[_k] = job[_k]
+                return out
             if st == 'cancelled':
                 raise Cancelled()
             if st in ('error', 'interrupted'):
