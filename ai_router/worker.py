@@ -740,11 +740,23 @@ def skeleton_intrusions(b, skeletons=None):
     vias = []
     for t in b.GetTracks():
         if t.Type() == pcbnew.PCB_VIA_T:
-            vias.append((t.GetNetname(), mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetWidth(pcbnew.F_Cu)) / 2))
+            vias.append((t.GetNetname(), mm(t.GetPosition().x), mm(t.GetPosition().y), t))
         else:
             li = lidx.get(t.GetLayer())
-            if li is not None:
-                segs_by_layer.setdefault(li, []).append((t.GetNetname(), mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y), mm(t.GetWidth()) / 2))
+            if li is None: continue
+            if t.Type() == pcbnew.PCB_ARC_T:
+                # (#198): an arc is not its chord -- sample it as
+                # start->mid and mid->end; both halves carry the
+                # arc's own item key so the arc still counts once.
+                _sx, _sy = mm(t.GetStart().x), mm(t.GetStart().y)
+                _mx, _my = mm(t.GetMid().x), mm(t.GetMid().y)
+                _ex, _ey = mm(t.GetEnd().x), mm(t.GetEnd().y)
+                _hr = mm(t.GetWidth()) / 2
+                _akey = ('A', t.GetNetname(), li, round(_sx, 2), round(_sy, 2), round(_mx, 2), round(_my, 2), round(_ex, 2), round(_ey, 2))
+                segs_by_layer.setdefault(li, []).append((t.GetNetname(), _sx, _sy, _mx, _my, _hr, _akey))
+                segs_by_layer.setdefault(li, []).append((t.GetNetname(), _mx, _my, _ex, _ey, _hr, _akey))
+            else:
+                segs_by_layer.setdefault(li, []).append((t.GetNetname(), mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y), mm(t.GetWidth()) / 2, None))
     items = 0; total_mm = 0.0; per_net = {}
     for sk in skeletons:
         net = sk['net']; li = sk['layer_idx']; cor = sk['corridor']
@@ -753,16 +765,25 @@ def skeleton_intrusions(b, skeletons=None):
             sx1, sy1 = sk['pads'][i]; sx2, sy2 = sk['pads'][j]
             bx0, bx1 = min(sx1, sx2) - cor - 1.0, max(sx1, sx2) + cor + 1.0
             by0, by1 = min(sy1, sy2) - cor - 1.0, max(sy1, sy2) + cor + 1.0
-            for (n2, x1, y1, x2, y2, hr) in segs_by_layer.get(li, []):
+            for (n2, x1, y1, x2, y2, hr, ikey) in segs_by_layer.get(li, []):
                 if n2 == net: continue
                 if max(x1, x2) < bx0 or min(x1, x2) > bx1 or max(y1, y2) < by0 or min(y1, y2) > by1: continue
                 if seg_seg_dist((x1, y1, x2, y2), (sx1, sy1, sx2, sy2)) < cor + hr:
-                    key = ('T', n2, li, round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2))
+                    key = ikey or ('T', n2, li, round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2))
                     if key not in seen:
                         seen.add(key); items += 1; per_net[net] = per_net.get(net, 0) + 1
                     total_mm += _seg_in_band(x1, y1, x2, y2, sx1, sy1, sx2, sy2, cor + hr)
-            for (n2, cx, cy, vr) in vias:
+            for (n2, cx, cy, vobj) in vias:
                 if n2 == net: continue
+                # (#198): a via intrudes only on a layer it
+                # actually spans -- the layer-blind test counted
+                # blind/buried vias against corridors on layers
+                # they never touch, at F.Cu width.
+                try:
+                    if not vobj.IsOnLayer(stack[li]): continue
+                    vr = mm(vobj.GetWidth(stack[li])) / 2
+                except Exception:
+                    continue
                 if not (bx0 <= cx <= bx1 and by0 <= cy <= by1): continue
                 if seg_pt(cx, cy, sx1, sy1, sx2, sy2) < cor + vr:
                     key = ('V', n2, round(cx, 2), round(cy, 2))

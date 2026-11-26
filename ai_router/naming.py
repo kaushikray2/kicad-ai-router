@@ -82,6 +82,7 @@ def sidecar_paths(board_path):
     board_path = os.path.abspath(board_path)
     d = os.path.dirname(board_path)
     stem = os.path.splitext(os.path.basename(board_path))[0]
+    board_stem = stem
     pro = os.path.join(d, stem + '.kicad_pro')
     if not os.path.exists(pro):
         pros = glob.glob(os.path.join(d, '*.kicad_pro'))
@@ -90,7 +91,13 @@ def sidecar_paths(board_path):
             stem = os.path.splitext(os.path.basename(pro))[0]
         else:
             pro = None
-    dru = os.path.join(d, stem + '.kicad_dru')
+    # (#198): the .kicad_dru is the BOARD's sidecar first -- when
+    # the project stem won above, a board-stem .kicad_dru
+    # (variant.kicad_dru beside myproj.kicad_pro) was never
+    # checked and the renamed board silently lost its DRC rules.
+    dru = os.path.join(d, board_stem + '.kicad_dru')
+    if not os.path.exists(dru):
+        dru = os.path.join(d, stem + '.kicad_dru')
     if not os.path.exists(dru):
         dru = None
     return pro, dru
