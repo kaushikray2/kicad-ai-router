@@ -223,3 +223,34 @@ def test_rule_footprints_and_connected_parts():
     parts = m.connected_parts('VCC5')
     assert [p['ref'] for p in parts] == ['U17', 'U18']
     assert m.nets_for_ref('U17') == ['GND', 'VCC5']
+
+
+def test_impedance_roundtrip_carries_solver_fields():
+    # #201: dk / layers / loss_budget_db are validated by
+    # markings.py and consumed by the pipeline (solve dielectric,
+    # layer candidates, rfcheck loss budget); tol_pct is declared
+    # in the schema header.  A form round-trip must not drop any.
+    e = {'net': 'RF_IN', 'z0_ohm': 50.0, 'dk': 4.2, 'layers': ['F.Cu'],
+         'loss_budget_db': 1.5, 'tol_pct': 5.0}
+    rt = mm.impedance_entry(mm.impedance_form(e))
+    assert rt['dk'] == 4.2 and rt['layers'] == ['F.Cu'], rt
+    assert rt['loss_budget_db'] == 1.5 and rt['tol_pct'] == 5.0, rt
+    m = mm.MarkingsEditorModel({}, copy.deepcopy(INDEX))
+    m.add_entry('impedance', dict(e))
+    m.update_entry('impedance', 0, mm.impedance_entry(
+        mm.impedance_form(m.entries('impedance')[0])))
+    assert m.entries('impedance')[0] == e, m.entries('impedance')[0]
+
+
+def test_impedance_coplanar_requires_gap():
+    # #201: the pipeline refuses a coplanar marking without
+    # gap_mm at run time; entry construction must refuse it here.
+    try:
+        mm.impedance_entry({'net': 'RF_IN', 'z0': 50, 'model': 'coplanar'})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('coplanar without gap_mm accepted')
+    e = mm.impedance_entry({'net': 'RF_IN', 'z0': 50,
+                             'model': 'coplanar', 'gap_mm': 0.2})
+    assert e['gap_mm'] == 0.2
