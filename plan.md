@@ -649,6 +649,57 @@ the 1.12.3 zip retired; the shipped zip registers exactly
 one AIRouterPlugin under KiCad pcbnew.LoadPlugins.
 
 
+### Off-plan -- external audit round 7 fix pass (2026-11-26)
+
+Five claims audited against v1.12.4 (d653e6e) and the held
+P2.7a branch; all five verified real. Four fixed, one filed
+for the owner's ruling:
+
+- #209 (HIGH, code-verified; the wxMSW leg is unverified by
+  us -- the bench is wxGTK): picking a custom server left
+  its NAME in the Backend URL field on Windows -- the
+  native combo overwrites the field with the selected label
+  after the handler returns. The pick now defers its field
+  writes (wx.CallAfter) and does not Skip for a custom
+  entry; validate_new_server also rejects duplicate names.
+- #211 (MEDIUM): switching servers leaked the custom token
+  to presets (persisted as cfg['backend_token'], sent to
+  the preset, 401) and dropped unsaved token edits
+  (sync_server_token ran only in collect_cfg);
+  _refresh_remove_btn lacked the _running guard. The dialog
+  now tracks the represented entry (_sel_entry), folds an
+  outgoing custom's token in at pick/add time, and stashes
+  and restores the non-custom token (_preset_token), so a
+  preset never inherits a custom server's token.
+- #207 (HIGH; latent on main, live on combination): the
+  P2.7a gate-verdict cache key omitted the .kicad_pro /
+  .kicad_dru sidecars the DRC verdict depends on --
+  reproduced behaviourally (a sidecar-only clearance edit,
+  0.25 -> 3.0, was served the stale 138-violation verdict;
+  a fresh DRC read 445). Not reachable in a main-line run
+  as shipped -- nothing mutates the sidecar snapshot
+  mid-run; it fires when the engineered-nets in-place
+  .kicad_pro patch combines with the cache. Fixed on the
+  branch before merge: the key now fingerprints the
+  sidecars _sidecars() places beside the measured board.
+- #208 (LOW): the cache keyed the base board as 'self' but
+  byte-identical files under the reference tuple, so a
+  finalize-pattern twin was re-measured. Byte-identical
+  boards now share the base's entry (their deltas are the
+  base's own -- 0 -- under either reference state).
+- #212 (LOW, OPEN for the owner's ruling): run_auto orphans
+  the caller-constructed Pipeline (workdir + strip + the
+  1.1 s sleep) on every Variant B run -- the #191
+  construction. The reuse fix is foreclosed by #191's own
+  isolation test; the ticket carries a design sketch
+  (accept the cost / caller-contract change / lazy
+  Pipeline).
+
+#190 (P2.7a) landed with this pass: the held local merge
+was dropped, the cache corrected on the branch, and the
+merge redone. No version bump; production backends stay
+on 1.10.2.
+
 ## In progress
 
 - Nothing in flight. v1.12.4 (external audit round 6
@@ -670,7 +721,7 @@ winner is re-gated — ~2 gate cycles saved per run, ~4 on escalation);
 a persistent worker process or batched gate calls; profile one AUTO run
 end to end and attack the top fixed cost.
 
-**Implemented on branch `p27a-perf` (#190), awaiting merge.** The
+**Landed on main (#190).** The
 profile was worse than the estimate: a mapone AUTO run made 12 gate
 calls for 2 distinct board states — 85.1 s of gate wall in a 174.6 s
 run (base twice, portfolio winner 8x on identical bytes, final
@@ -690,6 +741,13 @@ pinned engine; the one miss is a 3V3 pour connection — the
 fixture's documented AUTO wander class, cf. the v1.12.3
 acceptance run's 3/1/13 on the phase-2-end backend). Suites:
 pytest 107, standalone 47/47.
+
+Landed via the round 7 pass (below): the cache was corrected
+on the branch first (#207 sidecar fingerprint, #208
+byte-identical keying), then merged. Merged tree: pytest
+150, standalone 57/57. Merged-tree mapone AUTO profile:
+12 gate calls, 2 DRC measurements, gate wall 14.8 s of a
+98.0 s run, final envelope 0/0/0.
 
 ### Phase 2E — engine & measurement block
 Six features adapted from the WeaveEngine review (2026-11-24; ideas
