@@ -116,6 +116,32 @@ ch.SetClosed(True); b.Add(ka)
 check('rollback: fix refused', w._fix_one_violation(b, 'B', 40, 20) is False)
 check('rollback: B copper restored', len(tracks_of(b, 'B')) == 1 and ncomp(b, 'B') == 1)
 
+# --- rollback identity: via type/span/free + exact nm (#187) ----------
+# _track_key/_restore_key are the rollback pair: what they do not
+# capture, rollback cannot restore. The old via key carried only
+# position/F.Cu width/drill, so a ripped blind or free via came
+# back as a default through via; and every key rounded through
+# round(mm(...), 3), shifting off-grid endpoints by up to 0.5 um.
+b, ac, bc = base_board()
+v = pcbnew.PCB_VIA(b)
+v.SetPosition(pcbnew.VECTOR2I(12345678, 23456789))  # off-grid nm on purpose
+v.SetWidth(NM(0.6)); v.SetDrill(NM(0.3)); v.SetNetCode(bc)
+v.SetViaType(pcbnew.VIATYPE_BLIND); v.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu); v.SetIsFree(True)
+b.Add(v)
+k = w._track_key(v); b.RemoveNative(v); w._restore_key(b, k)
+rvs = [t for t in b.GetTracks() if t.Type() == pcbnew.PCB_VIA_T]
+check('via restore: exactly one via', len(rvs) == 1)
+rv = rvs[0]
+check('via restore: type/span/free preserved (#187)', rv.GetViaType() == pcbnew.VIATYPE_BLIND and rv.TopLayer() == pcbnew.F_Cu and rv.BottomLayer() == pcbnew.B_Cu and bool(rv.GetIsFree()))
+check('via restore: exact nm position (#187)', (rv.GetPosition().x, rv.GetPosition().y) == (12345678, 23456789))
+check('via restore: key round-trips (#187)', w._track_key(rv) == k)
+t = pcbnew.PCB_TRACK(b)
+t.SetStart(pcbnew.VECTOR2I(11111111, 22222222)); t.SetEnd(pcbnew.VECTOR2I(33333333, 22222222))
+t.SetWidth(250001); t.SetLayer(pcbnew.F_Cu); t.SetNetCode(bc); b.Add(t)
+k2 = w._track_key(t); b.RemoveNative(t); w._restore_key(b, k2)
+rts = [x for x in b.GetTracks() if x.Type() != pcbnew.PCB_VIA_T and x.GetNetCode() == bc]
+check('seg restore: exact nm endpoints/width (#187)', len(rts) == 1 and rts[0].GetStart().x == 11111111 and rts[0].GetEnd().x == 33333333 and rts[0].GetWidth() == 250001 and w._track_key(rts[0]) == k2)
+
 # --- clean failures ---------------------------------------------------
 b, ac, bc = base_board()
 check('unknown net fails', w._fix_one_violation(b, 'NOPE', 40, 20) is False)

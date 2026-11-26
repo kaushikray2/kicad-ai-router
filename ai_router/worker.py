@@ -344,32 +344,43 @@ def cmd_summary(board_path, fast=False):
 # ---------------------------------------------------------------- fix_violations (#155)
 def _track_key(t):
     # Geometry identity of one track/via item, for rollback matching.
+    # #187: exact integer nanometres throughout -- the old keys
+    # rounded through round(mm(...), 3), so rollback shifted
+    # off-grid endpoints by up to 0.5 um and was not bit-exact. A
+    # via's key also carries its FULL identity (type, layer span,
+    # free flag): the old via key held only position/F.Cu width/
+    # drill, so _restore_key rebuilt every ripped via as a default
+    # through via -- a blind/micro via gained copper on layers it
+    # never touched, and a free (stitching) via lost its free flag,
+    # tripping the #119 free-via invariance.
     if t.Type() == pcbnew.PCB_VIA_T:
         dr = t.GetDrill()
-        drm = mm(dr.x) if hasattr(dr, 'x') else mm(dr)
-        return ('via', t.GetNetCode(), round(mm(t.GetPosition().x), 3), round(mm(t.GetPosition().y), 3), round(mm(t.GetWidth(pcbnew.F_Cu)), 3), round(drm, 3))
+        dr = dr.x if hasattr(dr, 'x') else dr
+        return ('via', t.GetNetCode(), t.GetPosition().x, t.GetPosition().y,
+                t.GetWidth(pcbnew.F_Cu), dr, t.GetViaType(), t.TopLayer(), t.BottomLayer(), bool(t.GetIsFree()))
     if t.Type() == pcbnew.PCB_ARC_T:
         # #159: the midpoint is part of an arc's geometry -- keying
         # it as a plain segment made rollback recreate it as a
         # straight chord.
-        return ('arc', t.GetNetCode(), t.GetLayer(), round(mm(t.GetStart().x), 3), round(mm(t.GetStart().y), 3), round(mm(t.GetMid().x), 3), round(mm(t.GetMid().y), 3), round(mm(t.GetEnd().x), 3), round(mm(t.GetEnd().y), 3), round(mm(t.GetWidth()), 3))
-    return ('seg', t.GetNetCode(), t.GetLayer(), round(mm(t.GetStart().x), 3), round(mm(t.GetStart().y), 3), round(mm(t.GetEnd().x), 3), round(mm(t.GetEnd().y), 3), round(mm(t.GetWidth()), 3))
+        return ('arc', t.GetNetCode(), t.GetLayer(), t.GetStart().x, t.GetStart().y, t.GetMid().x, t.GetMid().y, t.GetEnd().x, t.GetEnd().y, t.GetWidth())
+    return ('seg', t.GetNetCode(), t.GetLayer(), t.GetStart().x, t.GetStart().y, t.GetEnd().x, t.GetEnd().y, t.GetWidth())
 
 def _restore_key(b, key):
     if key[0] == 'via':
-        _k, code, x, y, dia, drill = key
-        v = pcbnew.PCB_VIA(b); v.SetPosition(pcbnew.VECTOR2I(nm(x), nm(y)))
-        v.SetWidth(nm(dia)); v.SetDrill(nm(drill)); v.SetNetCode(code); b.Add(v)
+        _k, code, x, y, dia, drill, vtype, top, bottom, free = key
+        v = pcbnew.PCB_VIA(b); v.SetPosition(pcbnew.VECTOR2I(x, y))
+        v.SetWidth(dia); v.SetDrill(drill); v.SetNetCode(code)
+        v.SetViaType(vtype); v.SetLayerPair(top, bottom); v.SetIsFree(free); b.Add(v)
     elif key[0] == 'arc':
         _k, code, lay, x1, y1, xm, ym, x2, y2, wdt = key
         t = pcbnew.PCB_ARC(b)
-        t.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1))); t.SetMid(pcbnew.VECTOR2I(nm(xm), nm(ym))); t.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
-        t.SetWidth(nm(wdt)); t.SetLayer(lay); t.SetNetCode(code); b.Add(t)
+        t.SetStart(pcbnew.VECTOR2I(x1, y1)); t.SetMid(pcbnew.VECTOR2I(xm, ym)); t.SetEnd(pcbnew.VECTOR2I(x2, y2))
+        t.SetWidth(wdt); t.SetLayer(lay); t.SetNetCode(code); b.Add(t)
     else:
         _k, code, lay, x1, y1, x2, y2, wdt = key
         t = pcbnew.PCB_TRACK(b)
-        t.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1))); t.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
-        t.SetWidth(nm(wdt)); t.SetLayer(lay); t.SetNetCode(code); b.Add(t)
+        t.SetStart(pcbnew.VECTOR2I(x1, y1)); t.SetEnd(pcbnew.VECTOR2I(x2, y2))
+        t.SetWidth(wdt); t.SetLayer(lay); t.SetNetCode(code); b.Add(t)
 
 def _fix_one_violation(b, net, x, y, radius=3.0):
     # P2.1b (#155): rip ONLY `net`'s copper within `radius` of the
@@ -426,10 +437,10 @@ def _fix_one_violation(b, net, x, y, radius=3.0):
         code = nets[net].GetNetCode()
         for (li, x1, y1, x2, y2) in segs:
             add_seg(b, nets, net, li, x1, y1, x2, y2, tw)
-            drawn.append(('seg', code, stack[li], round(x1, 3), round(y1, 3), round(x2, 3), round(y2, 3), round(tw, 3)))
+            drawn.append(('seg', code, stack[li], nm(x1), nm(y1), nm(x2), nm(y2), nm(tw)))  # #187: exact-nm key shape, matching _track_key of the drawn item
         for (vx, vy) in vias:
             add_via(b, nets, net, vx, vy, vd, vdr)
-            drawn.append(('via', code, round(vx, 3), round(vy, 3), round(vd, 3), round(vdr, 3)))
+            drawn.append(('via', code, nm(vx), nm(vy), nm(vd), nm(vdr), pcbnew.VIATYPE_THROUGH, pcbnew.F_Cu, pcbnew.B_Cu, False))  # #187: add_via creates a default through via; the tuple is its _track_key
         conn = b.GetConnectivity(); conn.Build(b)
         now = len(_pad_clusters(b, conn, net)[1])
         rounds += 1
