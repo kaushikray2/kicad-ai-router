@@ -303,10 +303,14 @@ hygiene), #177 (portfolio route record), #178 (config page
 controls + provenance), #179 (pour-split escalation), #180 (work
 default recalibrated 20M -> 40M on the job-0d50e2a7 measurement).
 Branch suites: pytest 87, standalone 40/40. NOT pushed and NOT
-released: the owner's sequence is fixes first, then the engine
-A/B comparison reruns and Nomad routes through the fixed
-pipeline; the adoption ruling follows that evidence. #172
-(route-batch) stays open with its assessment.
+released. The owner's sequence then ran: Nomad through the
+fixed pipeline on scratch :8734 met acceptance (0/0/14 at the
+shipped 40M default; hbridge/mapone 0/0/0), and the rerun
+engine A/B met the pre-declared decision rule on both clauses
+(13/15 boards tie exactly, f91w improves 14-15 -> 9 open,
+aggregate 17 vs ~22.5 open; full table on #170). The adoption
+ruling is the owner's. #172 (route-batch) stays open with its
+assessment.
 
 ## In progress
 
