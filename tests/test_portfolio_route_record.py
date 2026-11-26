@@ -86,6 +86,57 @@ def test_tm_variant_win_seeds_route_record():
     assert recs and recs[0]['data'].get('source') == 'portfolio:tm_relax', pipe.ledger
 
 
+REFUSING_TM = '''#!/usr/bin/env python3
+import sys
+print('error: --deterministic needs a work budget (--work, --round-work, or --rounds with --relax)')
+sys.exit(1)
+'''
+
+
+def _pipe_tm(body):
+    d = tempfile.mkdtemp()
+    tm = os.path.join(d, 'faketm')
+    open(tm, 'w').write(body); os.chmod(tm, stat.S_IRWXU)
+    pipe = object.__new__(pl.Pipeline)
+    pipe.workdir = d; pipe.pass_no = 0; pipe._oseq = 0; pipe.ledger = []
+    pipe.board_path = os.path.join(d, 'input.kicad_pcb')
+    pipe.base = os.path.join(d, 'base.kicad_pcb'); pipe.current = pipe.base
+    open(pipe.base, 'w').write('board')
+    pipe.cfg = {'tracemaker_path': tm}
+    pipe.last_gate = None; pipe.last_route = None
+    pipe.logs = []; pipe.log = lambda m: pipe.logs.append(m)
+    pipe._copper_layers = list(LAYERS)
+    def fake_worker(cmd, *args, **kw):
+        if cmd == 'summary':
+            return {'copper_layers': list(LAYERS), 'layer_aliases': dict(ALIASES)}
+        if '--out' in args:
+            open(args[args.index('--out') + 1], 'w').write('board')
+        return {'status': 'ok', 'seconds': 0.1}
+    pipe._worker = fake_worker
+    pipe.tool_gate = lambda board: dict(GATE)
+    return pipe
+
+
+def test_variant_refusal_surfaces_engine_message():
+    # #188: the raised error must carry the engine's own message
+    # (tool_route has done this since #170); a bare 'produced no
+    # board' discarded the refusal text, unread in the .tm.log.
+    pipe = _pipe_tm(REFUSING_TM)
+    try:
+        pipe._route_variant('tm_relax', os.path.join(pipe.workdir, 'pf-tm-relax.kicad_pcb'))
+        raise AssertionError('a refused variant did not raise')
+    except pl.PipelineError as e:
+        assert 'work budget' in str(e), str(e)
+
+
+def test_variant_rc3_is_not_logged_as_an_error():
+    # #188: exit 3 is the engine's normal partial-route result,
+    # not an error -- the stock fake exits 3 with a board.
+    pipe = _pipe()
+    pipe._route_variant('tm_relax', os.path.join(pipe.workdir, 'pf-tm-relax.kicad_pcb'))
+    assert not any('exited with code' in m for m in pipe.logs), pipe.logs
+
+
 def test_freerouting_win_stays_recordless():
     pipe = _pipe()
     g = pipe.tool_portfolio(['freerouting'])
@@ -97,5 +148,7 @@ def test_freerouting_win_stays_recordless():
 
 if __name__ == '__main__':
     test_tm_variant_win_seeds_route_record()
+    test_variant_refusal_surfaces_engine_message()
+    test_variant_rc3_is_not_logged_as_an_error()
     test_freerouting_win_stays_recordless()
     print('portfolio route record OK')

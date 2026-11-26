@@ -649,10 +649,21 @@ class Pipeline:
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
             _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(2400, self.cfg.get('work', 40000000))).returncode  # v1.12.2 (#176)
-        if _rc != 0:
-            self.log('TraceMaker variant %s exited with code %d (log: %s)' % (eng, _rc, log_path))  # v1.9.6 (#40)
+        if _rc not in (0, 3):
+            self.log('TraceMaker variant %s exited with code %d (log: %s)' % (eng, _rc, log_path))  # v1.9.6 (#40); #188: rc 3 is a normal partial result, not an error
         if not os.path.exists(outp):
-            raise PipelineError('TraceMaker variant %s produced no board' % eng)
+            # #188: surface the engine's own message, as tool_route
+            # does -- the bare 'produced no board' discarded the
+            # refusal text (it sat unread in the .tm.log; the
+            # deterministic tm_relax refusal hid there on every
+            # Reproducible run until #184).
+            _err = engine_run.engine_error(_rc, None)
+            if _err:
+                _tail = ''
+                try: _tail = open(log_path).read().strip().splitlines()[-1][:200]
+                except Exception: pass
+                raise PipelineError('%s: %s (see %s)' % (_err, _tail, log_path))
+            raise PipelineError('TraceMaker variant %s produced no board (see %s)' % (eng, log_path))
         try: self._worker('refill', '--board', outp, '--out', outp)
         except Exception: pass
         self._sidecars(outp)
