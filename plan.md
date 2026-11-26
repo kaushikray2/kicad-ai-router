@@ -73,6 +73,41 @@ material-group fields. Suites on the branch tree: pytest
 341 passed, standalone 96 passed + 10 not standalone-runnable (the 8 pre-existing pytest-only files + the new pytest/xvfb GUI tests) (merged-base before
 the GUI: pytest 321, standalone 94 + 8 pytest-only files).
 
+**Round 7 audit fixes (branch `engineered-nets-gui`, 2026-11-26):**
+the external audit's seven engineered-nets-GUI claims were
+verified claim-by-claim against 59e52ea -- all REAL -- and fixed
+as #201-#206 and #210, each in its own commit chain on this
+branch: impedance round-trip field carriage (dk / layers /
+loss_budget_db surfaced, tol_pct preserved verbatim) +
+coplanar-without-gap refused at entry construction (#201);
+power load modes round-trip + regulator/conduit table columns
+aligned with the real row schemas (#202); the placement audit's
+apply side gated on the engineered_nets switch for local runs,
+mirroring the backend gate (#203); #182 project-stem resolution
+(naming.project_sidecar_path) for the markings / netlist /
+condition lookups (#204); un-applied form-edit tracking in the
+editor -- Save applies a pending form first, Close and every
+form switch prompt Apply/Discard/Cancel (#205); unmatched-net
+preservation in all net pickers, the differential solved
+preview + auto-pair pre-fill, and the HV pairwise Required
+spacing column with live form reflection (#206);
+fix_violations reordered to run BEFORE the engineered stages
+(it re-closes ripped copper at netclass width -- a 1.00 mm rail
+measured re-closed at 0.20 mm under the old order's machinery)
++ the backend job ledger persisted beside the result and wired
+to the Report dialog (#210). Functional re-proof: round-trip
+diffs lossless (fail-before probes at 59e52ea, pass after);
+fixture parity leg -- switch OFF with a sidecar present leaves
+the audit report-only, switch ON unchanged, the explicit
+placement_audit apply opt-in unaffected; a 6 A fixture rail the
+power stage widened to 2.80 mm measures 2.80 mm on the
+delivered board after the reorder, verdict counts unchanged
+(4 PASS / 3 FAIL / 0 WARN / 0 LIB GAP / 2 CONDITIONAL). Suites
+after round 7: pytest 367 passed (355 at 59e52ea + 12 new),
+standalone 100 passed with the same not-standalone-runnable
+set as before plus the three new xvfb smokes (each verified
+under xvfb-run). #200 remains parked, per the owner.
+
 ## Done
 
 ### Step 0 — v1.9.6 hotfix (3–5 h) — shipped 2026-11-23
