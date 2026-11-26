@@ -207,6 +207,10 @@ class RouterDialog(wx.Dialog):
         # what a Run would do now).
         if not self._running and self._lamp_state in ('DONE', 'FAILED', 'CANCELLED'):
             self.set_status('IDLE', 'Ready')
+        # (#183): keep the stale-settings notice in step with the
+        # controls -- a manual fix must clear it without a reopen.
+        try: self._refresh_notice()
+        except Exception: pass
 
     # ---------------------------------------------------------- Board group
     def _build_board_group(self, panel, board_path):
@@ -479,7 +483,7 @@ class RouterDialog(wx.Dialog):
             self.cost_err_label.Show()
         else:
             self.cost_err_label.Hide()
-        self._refresh_notice(saved_ban, cost_canon)
+        self._refresh_notice()
 
     def _saved_law_text(self, saved_ban, cost_canon):
         disp = {l['canonical']: self._layer_display(l) for l in self.facts['layers']}
@@ -492,24 +496,39 @@ class RouterDialog(wx.Dialog):
             parts.append('layers priced')
         return ', '.join(parts)
 
-    def _refresh_notice(self, saved_ban=None, cost_canon=None):
+    def _current_law(self):
+        # (#183): the layer law the Run button would send right now
+        # -- the same computation _collect_config performs.
+        # Automatic IS the recommendation; Custom is the rows plus
+        # the unresolved extras.
+        if self.law_auto_rb.GetValue():
+            return set(ui_model.recommended_ban(self.classif)), {}
+        ban = {c for c, r in self.layer_rows.items() if r['ban'].GetValue()}
+        cost = {}
+        for c in self.layer_rows:
+            f = self._row_factor(c)
+            if f is not None and c not in ban:
+                cost[c] = f
+        cost.update(self.extra_costs)
+        return ban | set(self.extra_bans), cost
+
+    def _refresh_notice(self):
+        # (#183): ONE comparison basis -- the current UI state
+        # (live mode radio + the law Run would send) against the
+        # recommendation. The pre-fix version mixed the live mode
+        # with the SAVED law and ran only at populate time, so a
+        # manual fix never cleared the notice.
         if not self.facts:
             self.notice_label.Hide(); self.use_rec_btn.Hide(); return
-        if saved_ban is None:
-            saved_ban, _x = ui_model.resolve_names(ui_model.parse_ban_list(self.cfg.get('no_tracks_on', 'In1.Cu')), self.aliases)
-            _c, _e = ui_model.parse_cost_map(self.cfg.get('layer_cost', ''))
-            cost_canon = {}
-            for name, f in (_c or {}).items():
-                r, _u = ui_model.resolve_names([name], self.aliases)
-                if r: cost_canon[r[0]] = f
+        ban, cost = self._current_law()
         diffs = []
         mode = 'llm' if self.mode_llm_rb.GetValue() else 'auto'
         if mode != 'auto':
             diffs.append('LLM mode')
-        if ui_model.law_differs(saved_ban, cost_canon, self.classif) or self.extra_bans or self.extra_costs:
-            diffs.append(self._saved_law_text(saved_ban, cost_canon))
+        if ui_model.law_differs(ban, cost, self.classif):
+            diffs.append(self._saved_law_text(ban, cost))
         if diffs:
-            self.notice_label.SetLabel('Saved settings differ from this board’s recommended start: %s.' % '; '.join(diffs))
+            self.notice_label.SetLabel('Settings differ from this board’s recommended start: %s.' % '; '.join(diffs))
             self.notice_label.Show(); self.use_rec_btn.Show()
         else:
             self.notice_label.Hide(); self.use_rec_btn.Hide()
