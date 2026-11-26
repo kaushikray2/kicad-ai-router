@@ -281,3 +281,21 @@ def test_pending_edits_state_machine():
     assert p.pending({'a': 3})
     p.cleared()                               # form gone / discarded
     assert not p.pending({'a': 3})
+
+
+def test_hv_pairwise_rows_carry_required_spacing():
+    # #206: the pairwise preview shows the IPC-2221B requirement
+    # (hvdomains) next to the delta -- 400 V uncoated external is
+    # the B2 column, 2.50 mm (the same number the checker FAILs
+    # against in the acceptance fixture).
+    m = _full_model()
+    rows = mm.hv_pairwise_rows(m)
+    row = [r for r in rows if r['a'] == 'HVPRI' and 'Rest' in r['b']][0]
+    assert row['delta_v'] == 400.0
+    assert abs(row['required_mm'] - 2.50) < 1e-9, row
+    # The form's live values substitute for the saved entry.
+    live = mm.hv_pairwise_rows(m, extra={'name': 'HVPRI', 'peak_v': 100.0,
+                                         'coating': 'uncoated', 'altitude_m': 0,
+                                         'nets': ['HV_A']})
+    row2 = [r for r in live if r['a'] == 'HVPRI' and 'Rest' in r['b']][0]
+    assert row2['delta_v'] == 100.0 and abs(row2['required_mm'] - 0.60) < 1e-9, row2
