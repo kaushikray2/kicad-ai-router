@@ -1085,6 +1085,7 @@ def cmd_finish_probe(board_path, net, victims):
             hits = []
             for t in list(b.GetTracks()):
                 if t.GetNetname() != v: continue
+                if t.IsLocked(): continue  # v1.12.2 (#174): locked copper is never ripped -- the leg must fail its exact check instead of displacing it
                 hit = False
                 if t.Type() == pcbnew.PCB_VIA_T:
                     cx, cy = mm(t.GetPosition().x), mm(t.GetPosition().y)
@@ -1149,6 +1150,7 @@ def _finish_attempt(board_path, out_path, net, A, Bp, simp, victims, window):
         hits = []
         for t in list(b.GetTracks()):
             if t.GetNetname() != v: continue
+            if t.IsLocked(): continue  # v1.12.2 (#174): locked copper is never a victim -- if it blocks the leg, _new_items_clean rejects the leg below
             hit = False
             if t.Type() == pcbnew.PCB_VIA_T:
                 cx, cy = mm(t.GetPosition().x), mm(t.GetPosition().y)
@@ -2417,6 +2419,28 @@ def cmd_restore_locks(board_path, out_path, locks_file):
     pcbnew.SaveBoard(out_path, b)
     return {'status': 'restored', 'changed': n}
 
+def cmd_lock_all(board_path, out_path):
+    # v1.12.2 (#174): snapshot EVERY track/via lock state (the
+    # cmd_lock_window record format, restorable by cmd_restore_locks)
+    # and lock them all on the output board. The pipeline runs this
+    # on the working base under route_open_only so pre-existing
+    # copper becomes untouchable for every downstream removal or
+    # displacement path (prune and strip already skip locked items;
+    # the victim rips do too, below) until finalize() restores the
+    # snapshot onto the delivered board.
+    b = pcbnew.LoadBoard(board_path)
+    states = {}
+    newly = 0
+    for t in list(b.GetTracks()):
+        try: states[t.m_Uuid.AsString()] = bool(t.IsLocked())
+        except Exception: continue
+        if not t.IsLocked():
+            t.SetLocked(True); newly += 1
+    pcbnew.SaveBoard(out_path, b)
+    locks_file = out_path + '.locks.json'
+    with open(locks_file, 'w') as f: json.dump(states, f)
+    return {'status': 'locked_all', 'items': len(states), 'newly_locked': newly, 'locks_file': locks_file}
+
 def cmd_stitch(board_path, out_path):
     b = pcbnew.LoadBoard(board_path)
     refill(b)
@@ -3026,6 +3050,7 @@ def main():
         res = cmd_heal_attempt(a.board, a.out, a.net, _pt(a.frm), _pt(a.dst))
     elif a.cmd == 'lock_window': res = cmd_lock_window(a.board, a.out, a.net, margin=a.margin, fx=a.fx, fy=a.fy, tx=a.tx, ty=a.ty)
     elif a.cmd == 'restore_locks': res = cmd_restore_locks(a.board, a.out, a.locks)
+    elif a.cmd == 'lock_all': res = cmd_lock_all(a.board, a.out)
     elif a.cmd == 'freeroute': res = cmd_freeroute(a.board, a.out, passes=a.passes)
     elif a.cmd == 'krt_route': res = cmd_krt_route(a.board, a.out)
     elif a.cmd == 'prune': res = cmd_prune(a.board, a.out)

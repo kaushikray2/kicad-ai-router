@@ -247,6 +247,22 @@ class Pipeline:
             self.base = src_copy
         self.current = self.base
         self._record('setup', {'base': self.base})
+        if cfg.get('route_open_only'):
+            # v1.12.2 (#174): structural copper protection for
+            # Finish-this-board. Strip is already forced off above;
+            # now snapshot the input's lock flags and lock EVERY
+            # pre-existing track/via on the working base, so no
+            # engine, finisher or victim selection can remove or
+            # displace the user's copper during the run. finalize()
+            # restores the snapshot onto the delivered board.
+            _locked_base = os.path.join(self.workdir, 'base.kicad_pcb')
+            _lr = self._worker('lock_all', '--board', self.base, '--out', _locked_base)
+            self._locks_file = _lr.get('locks_file')
+            self._locks_protected = True
+            self.base = _locked_base
+            self.current = self.base
+            self._record('lock_protect', {'items': _lr.get('items'), 'newly_locked': _lr.get('newly_locked')})
+            self.log('route_open_only: %s pre-existing items locked for the run (original lock flags are restored at finalize)' % _lr.get('items'))
 
     # ------------------------------------------------------------ internals
     def _record(self, step, data):
@@ -440,6 +456,7 @@ class Pipeline:
         # TraceMaker's priced cost with the mis-score invisible.
         # Exclude them while a valid cost spec is in force, loudly.
         excluded = []
+        excluded_roo = []
         _cost = self._layer_cost_spec(self.base)
         if _cost:
             for eng in ('freerouting', 'krt'):
@@ -447,6 +464,16 @@ class Pipeline:
                     engines.remove(eng)
                     excluded.append(eng)
                     self.log('portfolio: %s excluded -- cannot honour layer_cost %s; priced-layer tracks would carry no gate penalty (#109)' % (eng, _cost))
+        # v1.12.2 (#174): under route_open_only the same two engines
+        # are excluded for the stronger reason -- they re-route the
+        # base from scratch and know nothing of the mode, so a win
+        # would replace the user's existing copper wholesale.
+        if self.cfg.get('route_open_only'):
+            for eng in ('freerouting', 'krt'):
+                if eng in engines:
+                    engines.remove(eng)
+                    excluded_roo.append(eng)
+                    self.log('portfolio: %s excluded -- route_open_only keeps existing copper; %s re-routes from scratch (#174)' % (eng, eng))
         results = []
         winner = None
         for eng in engines:
@@ -487,6 +514,7 @@ class Pipeline:
         _rec = {'engines': list(engines), 'results': results,
                 'winner': winner[1] if winner else None}
         if excluded: _rec['excluded_layer_cost'] = excluded
+        if excluded_roo: _rec['excluded_route_open_only'] = excluded_roo
         self._record('portfolio', _rec)
         if winner:
             self.current = winner[1]
@@ -712,7 +740,14 @@ class Pipeline:
         # loss warns. The same census serves the #45 invariance gate.
         if getattr(self, '_input_census', None) is None:
             try:
-                _is = self._worker('summary', '--board', self.board_path, '--fast')
+                # v1.12.2 (#174): while route_open_only lock
+                # protection is active the honest reference is the
+                # protected base (every pre-existing item locked) --
+                # a stage losing one must warn. finalize() restores
+                # the original locks and resets the census, so the
+                # delivered board is compared against the input.
+                _census_src = self.base if getattr(self, '_locks_protected', False) else self.board_path
+                _is = self._worker('summary', '--board', _census_src, '--fast')
                 self._input_census = {'locked_items': _is.get('locked_items'), 'free_vias': _is.get('free_vias')}
             except Exception:
                 self._input_census = {'locked_items': None, 'free_vias': None}
@@ -977,6 +1012,14 @@ class Pipeline:
         return r
 
     def tool_prune(self):
+        if self.cfg.get('route_open_only'):
+            # v1.12.2 (#174): prune's whole diet is unlocked,
+            # pad-less, zone-less copper -- under Finish-this-board
+            # that describes the user's unfinished stubs and fanouts,
+            # not router debris. The stage does not run in this mode.
+            self._record('prune', {'pruned': 0, 'status': 'skipped_route_open_only'})
+            self.log('prune: skipped -- route_open_only keeps all existing copper')
+            return {'pruned': 0, 'status': 'skipped_route_open_only'}
         # v1.8.2 (#16): prune is gated like every other step -- before
         # it accepted its output unconditionally, so a prune that
         # disconnected live copper was invisible to the run.
@@ -1004,6 +1047,15 @@ class Pipeline:
         # introduced delta was previously invisible in the ledger.
         pre = self.last_gate if (self.last_gate and self.last_gate.get('board') == self.current) else None
         self._worker('refill', '--board', self.current, '--out', final)
+        if getattr(self, '_locks_protected', False) and getattr(self, '_locks_file', None):
+            # v1.12.2 (#174): hand the delivered board its ORIGINAL
+            # lock flags back (items added during the run keep the
+            # state they were created with), then reset the census
+            # reference to the input for the caller's final gate.
+            self._worker('restore_locks', '--board', final, '--out', final, '--locks', self._locks_file)
+            self._locks_protected = False
+            self._input_census = None
+            self._record('lock_restore', {'locks_file': self._locks_file})
         pro = os.path.join(self.workdir, 'input.kicad_pro')
         if os.path.exists(pro):
             shutil.copy(pro, os.path.join(self.workdir, 'final.kicad_pro'))
