@@ -875,7 +875,15 @@ class Pipeline:
             _cfgfp = hashlib.sha256(json.dumps(self.cfg, sort_keys=True, default=str).encode()).hexdigest()
         except Exception:
             _cfgfp = 'nocfg'
-        if board == self.base:
+        # Round 7 (#208): a file carrying the base's exact bytes
+        # (the finalize pattern) shares the base's 'self' keying --
+        # its counts ARE the base's, so its deltas against the base
+        # references are 0, exactly the base record's self-relative
+        # deltas. tool_gate records _base_sha whenever the base is
+        # gated. A board measured before the references existed
+        # still keys under the unset tuple, never 'self', so the
+        # pre-references invariant above is untouched.
+        if board == self.base or (getattr(self, '_base_sha', None) is not None and sha == self._base_sha):
             _refs = 'self'
         else:
             _refs = (getattr(self, '_base_starved', None), getattr(self, '_base_banned', None))
@@ -899,6 +907,7 @@ class Pipeline:
         # condition is preserved: the cached verdict was itself
         # computed by _drc_measure (which refills) on these bytes.
         _sha = hashlib.sha256(open(board, 'rb').read()).hexdigest()
+        if board == self.base: self._base_sha = _sha  # #208: byte-identical files share the base's cache entry
         _key = self._gate_cache_key(board, _sha)
         _cache = getattr(self, '_gate_cache', None)
         if _cache is None: _cache = self._gate_cache = {}

@@ -95,12 +95,12 @@ def test_same_bytes_other_path_served_with_its_own_board_field():
     step = os.path.join(pipe.workdir, 'step-1.kicad_pcb')
     open(step, 'w').write('board')
     pipe.tool_gate(pipe.base)   # sets the base references
-    pipe.tool_gate(step)        # measured under those references
-    assert calls['drc'] == 2
+    pipe.tool_gate(step)        # #208: step byte-matches the base, so it is
+    assert calls['drc'] == 1    # served the base's entry, not re-measured
     final = os.path.join(pipe.workdir, 'final.kicad_pcb')
     open(final, 'w').write('board')  # refill produced identical bytes
     g = pipe.tool_gate(final)
-    assert calls['drc'] == 2 and g.get('cached') is True, calls
+    assert calls['drc'] == 1 and g.get('cached') is True, calls
     assert g['board'] == final
 
 def test_state_change_forces_fresh_measure():
@@ -111,17 +111,18 @@ def test_state_change_forces_fresh_measure():
     assert calls['drc'] == 1
     pipe.tool_gate(pipe.base)       # the base gate sets the references
     assert calls['drc'] == 2
-    pipe.tool_gate(step)            # same bytes, NEW reference state: measure
-    assert calls['drc'] == 3, calls
-    pipe.tool_gate(step)            # ... and only then serve repeats
-    assert calls['drc'] == 3
+    g = pipe.tool_gate(step)        # #208: step byte-matches the base, so the base's
+    assert calls['drc'] == 2, calls # entry serves it -- its deltas are the base's own
+    assert g.get('cached') is True and g['board'] == step  # (0) under either reference state;
+    pipe.tool_gate(step)            # a NON-identical board still re-measures here (below)
+    assert calls['drc'] == 2
     pipe._locks_protected = True    # census reference flip (finalize pattern)
     pipe.tool_gate(step)
-    assert calls['drc'] == 4, calls
+    assert calls['drc'] == 3, calls
     pipe._locks_protected = False
     pipe.cfg = {'no_tracks_on': 'In2.Cu'}  # config change: measure
     pipe.tool_gate(step)
-    assert calls['drc'] == 5, calls
+    assert calls['drc'] == 4, calls
 
 
 def test_sidecar_change_forces_fresh_measure():
@@ -154,10 +155,27 @@ def test_sidecar_change_forces_fresh_measure():
     assert calls['drc'] == 3 and not g4.get('cached'), (calls, g4.get('cached'))
     assert g4['violations_total'] == 11, g4
 
+
+def test_byte_identical_file_shares_the_base_entry():
+    # #208: a downstream file carrying the base's exact bytes (the
+    # finalize pattern) must be served the base's verdict, not
+    # re-measured -- its counts ARE the base's, so its deltas
+    # against the base references are 0, exactly the base record's
+    # self-relative deltas.
+    pipe, calls = _bare_pipe({'no_tracks_on': 'In1.Cu'})
+    pipe.tool_gate()                    # base measured; references set
+    assert calls['drc'] == 1
+    twin = os.path.join(pipe.workdir, 'twin.kicad_pcb')
+    open(twin, 'w').write('board')      # same bytes, different path
+    g = pipe.tool_gate(twin)
+    assert calls['drc'] == 1 and g.get('cached') is True, calls
+    assert g['board'] == twin
+
 if __name__ == '__main__':
     test_repeat_gate_of_identical_bytes_measures_once()
     test_mutated_board_is_regated()
     test_same_bytes_other_path_served_with_its_own_board_field()
     test_state_change_forces_fresh_measure()
     test_sidecar_change_forces_fresh_measure()
+    test_byte_identical_file_shares_the_base_entry()
     print('gate verdict cache OK')
