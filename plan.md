@@ -270,6 +270,23 @@ insertions (diff deletions: 0), no behaviour change, no version
 bump; the shipped v1.12.0 PCM zip is unchanged -- the headers
 ride the next release.
 
+### Off-plan -- dialog display-fit fix, v1.12.1 (2026-11-25)
+
+#169: the v1.12.0 dialog opened at a fixed 800x740 while its
+content's natural size is ~950 px tall, so on 768-line displays
+the bottom of the dialog (layers group tail, Advanced, status
+lamp, Run/Cancel/Open buttons) was clipped with no way to reach
+it. The settings stack now lives in a scrolled panel; the lamp
+band, the action buttons and the log stay pinned outside the
+scroll area; the opening size is the natural size capped at the
+display's usable client area (95% x 93%, ui_model.capped_open_
+size, unit-tested), and the dialog is explicitly resizable.
+Layout/sizing only -- no control or behaviour changes. GUI
+smoke at 1366x768 and 1024x768 under xvfb asserts the cap, the
+pinned lamp/buttons and scroll reachability (screenshots in
+agent-runs/dialog-smoke/). Code only -- production backends
+stay on 1.10.2, no redeploy.
+
 ## In progress
 
 - **P2.1b** is implemented on branch `p21b-fix-violations` and

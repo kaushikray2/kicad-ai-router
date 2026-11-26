@@ -25,7 +25,7 @@ the silent 'updates never appear' failure, so it happens here, always."""
 import datetime, hashlib, json, os, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VERSION = '1.12.0'
+VERSION = '1.12.1'
 IDENTIFIER = 'ca.siliconbrane.ai-router'
 REPO_BASE_URL = 'https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo'
 DESCRIPTION = ('LLM-orchestrated PCB routing for KiCad: deterministic TraceMaker passes, '
