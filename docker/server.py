@@ -96,6 +96,25 @@ def local_ips():
 # ------------------------------------------------------------- tracemaker
 def tm_root(): return os.path.join(DATA, 'tracemaker')
 
+def tm_selected_sha256(cfg):
+    # v1.12.2 (#170): the installed engine archive's sha256 for the
+    # selected version -- the version STRING stays 0.12.1 across
+    # engine generations, so the hash (and PROVENANCE.txt below)
+    # is what identifies the actual engine build.
+    sel = cfg.get('tracemaker', {}).get('selected_version', '')
+    return (cfg.get('tracemaker', {}).get('sha256', {}) or {}).get(sel, '')
+
+def tm_provenance(cfg):
+    # v1.12.2 (#170): the engine tree's PROVENANCE.txt (repo / tag /
+    # commit lines), when the installed archive carried one.
+    sel = cfg.get('tracemaker', {}).get('selected_version', '')
+    if not sel: return ''
+    try:
+        with open(os.path.join(DATA, 'tracemaker', sel, 'PROVENANCE.txt')) as f:
+            return f.read().strip()[:400]
+    except Exception:
+        return ''
+
 def tm_versions():
     out = []
     root = tm_root()
@@ -414,6 +433,8 @@ class Handler(BaseHTTPRequestHandler):
                                  'schema_version': SCHEMA_VERSION,
                                  'tracemaker_versions': tm_versions(),
                                  'tracemaker_selected': cfg.get('tracemaker', {}).get('selected_version', ''),
+                                 'tracemaker_selected_sha256': tm_selected_sha256(cfg),
+                                 'tracemaker_provenance': tm_provenance(cfg),
                                  'queue_depth': _job_queue.qsize(),
                                  'jobs_running': sum(1 for r in _jobs_snapshot() if r.get('status') == 'running')})
                 return
@@ -494,7 +515,7 @@ class Handler(BaseHTTPRequestHandler):
                 if llm.get('api_key'): cfg['llm']['api_key'] = llm['api_key']
                 if llm.get('clear_api_key'): cfg['llm']['api_key'] = ''
                 rt = upd.get('routing') or {}
-                for k in ('mode', 'max_passes', 'work', 'no_tracks_on', 'layer_cost', 'strip_existing', 'engine_portfolio', 'layer_law_policy', 'reroute_window_cap', 'reroute_accept', 'reroute_margin', 'pass_advice', 'advice_regions', 'first_nets_policy', 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap', 'ilp_repair_cap', 'attempt_select'):  # v1.9.6 (#40): Phase 1 keys were silently dropped
+                for k in ('mode', 'max_passes', 'work', 'no_tracks_on', 'layer_cost', 'strip_existing', 'engine_portfolio', 'layer_law_policy', 'reroute_window_cap', 'reroute_accept', 'reroute_margin', 'pass_advice', 'advice_regions', 'first_nets_policy', 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap', 'ilp_repair_cap', 'attempt_select', 'deterministic', 'route_open_only'):  # v1.9.6 (#40): Phase 1 keys were silently dropped; v1.12.2 (#171): the Phase 2 run actions
                     if k in rt: cfg['routing'][k] = rt[k]
                 if 'allowed_hosts' in upd: cfg['allowed_hosts'] = upd['allowed_hosts']
                 if 'retention' in upd: cfg['retention'] = upd['retention']

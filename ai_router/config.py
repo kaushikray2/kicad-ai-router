@@ -46,6 +46,8 @@ DEFAULTS = {
     'layer_law_policy': 'auto',  # v1.8: B-first + escalate on >=4L In2-pour boards (dataset-v3 gap)
     'layer_cost': '',  # v1.11 (#73): graded layer pricing, engine syntax 'In1.Cu=10,In2.Cu=10' (1 = normal, max 1000; fractional factors to two decimal places since v1.11.5, #121); '' = off. A costed layer is NOT banned -- it leaves the effective no_tracks_on set, and an explicit spec disables layer_law_policy 'auto' escalation.
     'strip_existing': True,
+    'deterministic': False,  # v1.12.2 (#171): Reproducible run -- engine --deterministic, bounded by the work budget alone (no --time is passed)
+    'route_open_only': False,  # v1.12.2 (#171): Finish this board -- engine --route-open-only; forces strip_existing off (the existing copper is the point)
     'max_tool_calls': 48,
     'request_timeout_s': 600,
     'use_backend': False,

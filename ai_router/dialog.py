@@ -242,7 +242,16 @@ class RouterDialog(wx.Dialog):
         self.strip_ctrl.SetToolTip('Removes unlocked tracks/arcs and dangling vias; locked routing and free/stitching vias are kept.')
         row.Add(self.strip_ctrl, 0, wx.LEFT | wx.ALIGN_CENTER_VERTICAL, 16)
         box.Add(row, 0, wx.LEFT | wx.BOTTOM, 6)
-        self._config_controls += [self.mode_auto_rb, self.mode_llm_rb, self.passes_ctrl, self.strip_ctrl]
+        self.finish_ctrl = wx.CheckBox(panel, label='Finish this board — route only what is still open')
+        self.finish_ctrl.SetToolTip('Engine --route-open-only: routes the connections still open and never touches existing copper. Strip is disabled in this mode — the copper is the point.')
+        self.finish_ctrl.Bind(wx.EVT_CHECKBOX, self._on_finish_toggle)
+        box.Add(self.finish_ctrl, 0, wx.LEFT | wx.TOP, 4)
+        self.det_ctrl = wx.CheckBox(panel, label='Reproducible run — deterministic engine, bounded by the work budget')
+        self.det_ctrl.SetToolTip('Engine --deterministic: the same board and settings produce the same result board. No time limit is used in this mode; the work budget (Advanced) bounds the run.')
+        self.det_ctrl.Bind(wx.EVT_CHECKBOX, self._on_settings_changed)
+        box.Add(self.det_ctrl, 0, wx.LEFT | wx.BOTTOM, 4)
+        self._config_controls += [self.mode_auto_rb, self.mode_llm_rb, self.passes_ctrl, self.strip_ctrl,
+                                  self.finish_ctrl, self.det_ctrl]
         return box
 
     # ---------------------------------------------------------- Layers group
@@ -371,6 +380,20 @@ class RouterDialog(wx.Dialog):
                                   else 'Custom law is applied exactly as set — the pipeline will not escalate or second-guess it, in either mode.')
         self._on_settings_changed()
 
+    def _on_finish_toggle(self, _evt=None):
+        self._apply_finish_state()
+        self._on_settings_changed()
+
+    def _apply_finish_state(self):
+        # v1.12.2 (#171): Finish-this-board keeps the board's copper;
+        # Strip would remove it, so Strip is off and disabled while
+        # Finish is on (the pipeline forces no-strip in this mode too).
+        if self.finish_ctrl.GetValue():
+            self.strip_ctrl.SetValue(False)
+            self.strip_ctrl.Enable(False)
+        elif not getattr(self, '_running', False):
+            self.strip_ctrl.Enable(True)
+
     def _apply_row_enable(self):
         auto = self.facts and self.law_auto_rb.GetValue()
         for row in self.layer_rows.values():
@@ -411,6 +434,9 @@ class RouterDialog(wx.Dialog):
             self.mode_auto_rb.SetValue(True)
         self.passes_ctrl.SetValue(int(cfg.get('max_passes', 4)))
         self.strip_ctrl.SetValue(bool(cfg.get('strip_existing', True)))
+        self.finish_ctrl.SetValue(bool(cfg.get('route_open_only', False)))
+        self.det_ctrl.SetValue(bool(cfg.get('deterministic', False)))
+        self._apply_finish_state()
         if cfg.get('use_backend'):
             self.run_backend_rb.SetValue(True)
         else:
@@ -705,6 +731,8 @@ class RouterDialog(wx.Dialog):
         cfg['mode'] = 'llm' if self.mode_llm_rb.GetValue() else 'auto'
         cfg['max_passes'] = self.passes_ctrl.GetValue()
         cfg['strip_existing'] = self.strip_ctrl.GetValue()
+        cfg['route_open_only'] = self.finish_ctrl.GetValue()
+        cfg['deterministic'] = self.det_ctrl.GetValue()
         cfg['use_backend'] = self.run_backend_rb.GetValue()
         cfg['backend_url'] = self.backend_url_ctrl.GetValue().strip()
         cfg['backend_token'] = self.backend_tok_ctrl.GetValue()
@@ -766,6 +794,7 @@ class RouterDialog(wx.Dialog):
         self.cancel_btn.Enable(on)
         if not on:
             self._apply_row_enable()
+            self._apply_finish_state()
         if on:
             self.open_btn.Disable()
 
@@ -883,6 +912,10 @@ class RouterDialog(wx.Dialog):
         self.log('Backend %s - KiCad %s - TraceMaker selected: %s (installed: %s)' % (
             h.get('backend_version'), h.get('kicad_cli'), h.get('tracemaker_selected') or 'none',
             ', '.join(h.get('tracemaker_versions') or [])))
+        if h.get('tracemaker_provenance'):
+            self.log('Engine provenance: %s' % ' | '.join(l for l in h['tracemaker_provenance'].splitlines() if l.strip()))
+        elif h.get('tracemaker_selected_sha256'):
+            self.log('Engine archive sha256: %s' % h['tracemaker_selected_sha256'])
         overrides = ui_model.build_overrides(cfg)  # the five keys the dialog has always sent + max_tool_calls (#168, decision 12)
         jid = backend_client.submit(url, tok, board, overrides)
         self.log('Submitted job %s - routing runs on the backend; this window just watches.' % jid)

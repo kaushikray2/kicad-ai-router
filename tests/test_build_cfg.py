@@ -61,3 +61,21 @@ def test_server_owned_keys_not_overridable():
     cfg = run_job.build_cfg({'endpoint': 'http://evil', 'api_key': 'x'},
                             {'endpoint': 'http://llm', 'api_key': 'k'}, '/tm')
     assert cfg['endpoint'] == 'http://llm' and cfg['api_key'] == 'k'
+
+
+def test_phase2_actions_forward_and_default_off():
+    # v1.12.2 (#171): the two new run actions ride the same contract
+    # as strip_existing -- an explicit bool mapping in build_cfg, so
+    # the dialog's overrides reach the job and the defaults are off.
+    cfg = run_job.build_cfg({'deterministic': True, 'route_open_only': True}, {}, '/tm')
+    assert cfg['deterministic'] is True and cfg['route_open_only'] is True
+    cfg = run_job.build_cfg({}, {}, '/tm')
+    assert cfg['deterministic'] is False and cfg['route_open_only'] is False
+    cfg = run_job.build_cfg({'deterministic': 'yes'}, {}, '/tm')
+    assert cfg['deterministic'] is True     # bool() coercion, like strip_existing
+
+
+def test_phase2_actions_in_server_config_whitelist():
+    server = open(os.path.join(os.path.dirname(__file__), '..', 'docker', 'server.py')).read()
+    line = [l for l in server.splitlines() if l.strip().startswith('for k in (')][0]
+    assert "'deterministic'" in line and "'route_open_only'" in line
