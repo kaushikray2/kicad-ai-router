@@ -141,6 +141,27 @@ def ps_to_mm(ps, er_eff):
 
 
 # ------------------------------------------------------------ editor model
+class PendingEdits:
+    """Un-applied form-edit tracking for the markings editor
+    (#205).  The dialog snapshots the active form's dict when the
+    form is shown; any later difference is a pending edit that
+    Save / Close / selection changes must account for instead of
+    silently dropping.  wx-free so the state machine is
+    unit-testable."""
+
+    def __init__(self):
+        self._snapshot = None
+
+    def shown(self, form_dict):
+        self._snapshot = copy.deepcopy(form_dict)
+
+    def cleared(self):
+        self._snapshot = None
+
+    def pending(self, current_dict):
+        return self._snapshot is not None and current_dict != self._snapshot
+
+
 class MarkingsEditorModel:
     """Working copy of one sidecar against one board index.
 

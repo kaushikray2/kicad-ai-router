@@ -799,6 +799,11 @@ class CornersForm(wx.Panel):
         self.SetSizer(grid)
         self.refresh()
 
+    def form_dict(self):
+        # Raw control strings -- apply() parses these same values;
+        # the dialog's pending-edit tracking compares them (#205).
+        return {key: self.ctrls[key].GetValue() for key, _l in self.FIELDS}
+
     def refresh(self):
         corners = self.model.power_corners()
         for key, _l in self.FIELDS:
@@ -858,6 +863,9 @@ class MarkingsEditorDialog(wx.Dialog):
         self.filter = 'marked'
         self.selection = None      # {'kind': 'entry'|'new'|'corners'|'rules', ...}
         self.form = None
+        self._pending = mm.PendingEdits()   # #205: un-applied form edits
+        self._list_sel = -1                 # list row whose form is showing
+        self._sel_guard = False
         self._rows = []            # row descriptors parallel to list items
         top = wx.BoxSizer(wx.HORIZONTAL)
         self.view_net = wx.RadioButton(self, label='By Net', style=wx.RB_GROUP)
@@ -963,6 +971,7 @@ class MarkingsEditorDialog(wx.Dialog):
         return ' \u00b7 '.join(out)
 
     def refresh_list(self):
+        self._list_sel = -1
         marked = self.model.marked_nets()
         issues = self.model.issues()
         self.pill_marked.SetLabel('Marked nets (%d)' % len(marked))
@@ -1018,6 +1027,15 @@ class MarkingsEditorDialog(wx.Dialog):
             self.form_sizer.Add(form, 1, wx.EXPAND)
         self.form_sizer.Layout()
         self.form_host.Layout()
+        # #205: snapshot the freshly shown form -- any later
+        # difference is an un-applied (pending) edit.
+        if form is not None and hasattr(form, 'form_dict'):
+            try:
+                self._pending.shown(form.form_dict())
+            except Exception:
+                self._pending.cleared()
+        else:
+            self._pending.cleared()
 
     def _show_entry(self, section, index, missing=None):
         self.selection = {'kind': 'entry', 'section': section, 'index': index, 'missing': missing}
@@ -1027,8 +1045,51 @@ class MarkingsEditorDialog(wx.Dialog):
         self.rebind_b.Show(bool(missing))
         self.Layout()
 
+    # ------------------------------------------------- pending edits (#205)
+    def _form_pending(self):
+        if self.form is None or not hasattr(self.form, 'form_dict'):
+            return False
+        try:
+            return self._pending.pending(self.form.form_dict())
+        except Exception:
+            return False
+
+    def _confirm_pending(self):
+        # True when leaving the active form loses nothing: no
+        # pending edits, or the user applied / discarded them.
+        if not self._form_pending():
+            return True
+        dlg = wx.MessageDialog(self, 'The current form has edits that have not been applied.',
+                               'Markings', wx.YES_NO | wx.CANCEL | wx.ICON_QUESTION)
+        dlg.SetYesNoLabels('Apply', 'Discard')
+        try:
+            r = dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+        if r == wx.ID_YES:
+            return bool(self._on_apply(None))
+        if r == wx.ID_NO:
+            self._pending.cleared()
+            return True
+        return False
+
     def _on_select(self, evt):
+        if self._sel_guard:
+            return
         idx = evt.GetIndex()
+        if idx >= 0 and not self._confirm_pending():
+            # Stay on the form that is showing: restore the list
+            # selection to its row.
+            self._sel_guard = True
+            try:
+                if self._list_sel >= 0:
+                    self.list.Select(self._list_sel)
+                    self.list.Focus(self._list_sel)
+            finally:
+                self._sel_guard = False
+            return
+        if idx >= 0:
+            self._list_sel = idx
         if idx < 0 or idx >= len(self._rows):
             return
         desc = self._rows[idx]
@@ -1062,6 +1123,15 @@ class MarkingsEditorDialog(wx.Dialog):
 
     def _on_entry_pick(self, _evt):
         # The selected net carries several markings: switch forms.
+        if not self._confirm_pending():
+            sel = self.list.GetFirstSelected()
+            if 0 <= sel < len(self._rows) and self.selection:
+                marks = self.model.marked_nets().get(self._rows[sel].get('net'), [])
+                for k, (s, i) in enumerate(marks):
+                    if s == self.selection.get('section') and i == self.selection.get('index'):
+                        self.entry_pick.SetSelection(k)
+                        break
+            return
         sel = self.list.GetFirstSelected()
         if sel < 0:
             return
@@ -1077,18 +1147,19 @@ class MarkingsEditorDialog(wx.Dialog):
     # ---------------------------------------------------------- actions
     def _on_apply(self, _evt):
         if self.form is None or self.selection is None:
-            return
+            return False
         try:
             if isinstance(self.form, CornersForm):
                 self.form.apply()
+                self._pending.shown(self.form.form_dict())
                 self.set_form_note('Applied \u2713 (unsaved until Save)')
-                return
+                return True
             if isinstance(self.form, RulesPanel):
-                return
+                return True
             entry = self.form.get_entry()
         except ValueError as e:
             self.set_form_note('Not applied: %s' % e)
-            return
+            return False
         section = self.selection['section']
         if self.selection['kind'] == 'new':
             index = self.model.add_entry(section, entry)
@@ -1101,6 +1172,7 @@ class MarkingsEditorDialog(wx.Dialog):
         self.selection = {'kind': 'entry', 'section': section, 'index': index}
         self.refresh_list()
         self._show_entry(section, index)
+        return True
 
     def _on_add_menu(self, _evt):
         menu = wx.Menu()
@@ -1118,6 +1190,8 @@ class MarkingsEditorDialog(wx.Dialog):
             self._new_entry(choice['s'])
 
     def _new_entry(self, section):
+        if not self._confirm_pending():
+            return
         nets = self.model.board_nets()
         blank = {'impedance': {'net': nets[0] if nets else '', 'z0_ohm': 50.0},
                  'differential': {'name': '', 'nets': []},
@@ -1145,6 +1219,8 @@ class MarkingsEditorDialog(wx.Dialog):
     def _on_rebind(self, _evt):
         if not self.selection or not self.selection.get('missing'):
             return
+        if not self._confirm_pending():
+            return
         dlg = wx.SingleChoiceDialog(self, 'Rebind %s to which board net?' % self.selection['missing'],
                                     'Rebind net', self.model.board_nets())
         try:
@@ -1160,6 +1236,8 @@ class MarkingsEditorDialog(wx.Dialog):
         self._show_entry(self.selection['section'], self.selection['index'])
 
     def _on_save(self, _evt=None):
+        if self._form_pending() and not self._on_apply(None):
+            return False
         err = self.model.validate_working()
         if err:
             wx.MessageBox('The markings do not validate, so nothing was saved:\n\n%s' % err,
@@ -1171,7 +1249,7 @@ class MarkingsEditorDialog(wx.Dialog):
         return True
 
     def _guard_close(self):
-        if self.model.dirty:
+        if self.model.dirty or self._form_pending():
             dlg = wx.MessageDialog(self, 'You have unsaved marking changes.', 'Markings',
                                    wx.YES_NO | wx.CANCEL | wx.ICON_QUESTION)
             dlg.SetYesNoCancelLabels('Save', 'Discard', 'Cancel')
