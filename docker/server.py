@@ -121,7 +121,23 @@ def tm_pinned_install_missing(cfg):
     pin = tm_pinned_sha()
     if not pin: return False
     known = (cfg.get('tracemaker') or {}).get('sha256') or {}
-    return pin not in known.values()
+    # (#192): over the hashes of ACTUALLY INSTALLED versions --
+    # the recorded map alone reads a deleted install dir (with
+    # another version still present) as 'installed' forever.
+    return pin not in {known.get(v) for v in tm_versions()}
+
+def tm_bootstrap_url(cfg):
+    # (#192): when the PINNED install is missing, the deployment's
+    # TRACEMAKER_URL is the release's intent and wins over the URL
+    # the previous release stored -- the stored-first order
+    # re-downloaded the old engine on every restart of an upgraded
+    # volume (its recorded sha still matched, so TOFU passed) and
+    # the pinned build was never installed. With no pin missing,
+    # the stored URL (an operator's config-page choice) stays
+    # authoritative.
+    if tm_pinned_install_missing(cfg):
+        return os.environ.get('TRACEMAKER_URL', '') or cfg.get('tracemaker', {}).get('url', '')
+    return cfg.get('tracemaker', {}).get('url', '') or os.environ.get('TRACEMAKER_URL', '')
 
 def tm_provenance_for(version):
     if not version: return ''
@@ -244,7 +260,10 @@ def tm_update(url):
             if version in known and known[version] != sha and not _pinned:
                 raise RuntimeError('TOFU mismatch for %s: recorded %s, downloaded %s' % (version, known[version][:12], sha[:12]))
             known[version] = sha
-            if not cfg['tracemaker'].get('selected_version'): cfg['tracemaker']['selected_version'] = version
+            # (#192): a pinned install is the image's chosen engine
+            # -- select it even when an older version is currently
+            # selected, or the server keeps running the old tree.
+            if _pinned or not cfg['tracemaker'].get('selected_version'): cfg['tracemaker']['selected_version'] = version
             cfg['tracemaker']['url'] = url
             save_config(cfg)
         return {'version': version, 'sha256': sha}
@@ -607,7 +626,7 @@ def main():
         # of an existing volume -- the installed tree can hold a
         # different build reporting the same version string as the
         # pin, which the empty-volume test alone would keep forever.
-        url = cfg.get('tracemaker', {}).get('url') or os.environ.get('TRACEMAKER_URL', '')
+        url = tm_bootstrap_url(cfg)
         if url:
             try:
                 r = tm_update(url); print('TraceMaker bootstrap: installed %s' % r['version'], flush=True)
