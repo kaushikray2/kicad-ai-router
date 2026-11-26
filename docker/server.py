@@ -104,16 +104,37 @@ def tm_selected_sha256(cfg):
     sel = cfg.get('tracemaker', {}).get('selected_version', '')
     return (cfg.get('tracemaker', {}).get('sha256', {}) or {}).get(sel, '')
 
-def tm_provenance(cfg):
-    # v1.12.2 (#170): the engine tree's PROVENANCE.txt (repo / tag /
-    # commit lines), when the installed archive carried one.
-    sel = cfg.get('tracemaker', {}).get('selected_version', '')
-    if not sel: return ''
+def tm_pinned_sha():
+    # v1.12.2 (#173): the Dockerfile-pinned engine archive sha256.
+    # The adopted build still reports the "0.12.1" version string,
+    # so the pin is the ARCHIVE HASH: the one build the image
+    # trusts by construction, installable in-band even when a
+    # different build of the same version is already recorded.
+    return os.environ.get('TRACEMAKER_PINNED_SHA256', '').strip().lower()
+
+def tm_pinned_install_missing(cfg):
+    # True when a pinned build is configured but no installed
+    # version's recorded archive sha matches it -- the bootstrap
+    # must (re)install in that state, not only on an empty volume:
+    # an existing volume can hold a DIFFERENT build that merely
+    # reports the same version string.
+    pin = tm_pinned_sha()
+    if not pin: return False
+    known = (cfg.get('tracemaker') or {}).get('sha256') or {}
+    return pin not in known.values()
+
+def tm_provenance_for(version):
+    if not version: return ''
     try:
-        with open(os.path.join(DATA, 'tracemaker', sel, 'PROVENANCE.txt')) as f:
+        with open(os.path.join(DATA, 'tracemaker', version, 'PROVENANCE.txt')) as f:
             return f.read().strip()[:400]
     except Exception:
         return ''
+
+def tm_provenance(cfg):
+    # v1.12.2 (#170): the engine tree's PROVENANCE.txt (repo / tag /
+    # commit lines), when the installed archive carried one.
+    return tm_provenance_for(cfg.get('tracemaker', {}).get('selected_version', ''))
 
 def tm_versions():
     out = []
@@ -208,14 +229,19 @@ def tm_update(url):
         # refused here, untouched.
         ver_hint = tm_archive_version(tmp)
         if not ver_hint: raise RuntimeError('archive layout names no TraceMaker version -- refused (TOFU: the version must be readable from the layout, without executing the archive)')  # v1.10.1 (#44)
+        # v1.12.2 (#173): the Dockerfile-pinned archive is trusted by
+        # construction -- a pinned build that shares a version string
+        # with the recorded build REPLACES it (the recorded sha is
+        # migrated below); every other mismatch stays refused.
+        _pinned = bool(tm_pinned_sha()) and sha == tm_pinned_sha()
         known0 = (load_config().get('tracemaker') or {}).get('sha256') or {}
-        if ver_hint and ver_hint in known0 and known0[ver_hint] != sha:
+        if ver_hint and ver_hint in known0 and known0[ver_hint] != sha and not _pinned:
             raise RuntimeError('TOFU mismatch for %s: recorded %s, downloaded %s -- refused before install' % (ver_hint, known0[ver_hint][:12], sha[:12]))
         version = tm_install_from_archive(tmp, sha, ver_hint)
         with _lock:
             cfg = load_config()
             known = cfg.setdefault('tracemaker', {}).setdefault('sha256', {})
-            if version in known and known[version] != sha:
+            if version in known and known[version] != sha and not _pinned:
                 raise RuntimeError('TOFU mismatch for %s: recorded %s, downloaded %s' % (version, known[version][:12], sha[:12]))
             known[version] = sha
             if not cfg['tracemaker'].get('selected_version'): cfg['tracemaker']['selected_version'] = version
@@ -453,7 +479,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/tracemaker':
                 cfg = self._cfg(); tm = cfg.get('tracemaker', {})
                 self._send(200, {'installed': [{'version': v, 'sha256': (tm.get('sha256') or {}).get(v, ''),
+                                                'provenance': tm_provenance_for(v),
                                                 'selected': v == tm.get('selected_version')} for v in tm_versions()],
+                                 'pinned_sha256': tm_pinned_sha(),
                                  'url': tm.get('url', '')}); return
             if path == '/api/runs':
                 rows = sorted(_jobs_snapshot(), key=lambda r: r.get('created', ''), reverse=True)
@@ -574,7 +602,11 @@ def main():
     cfg = load_config()
     _kicad_cli_version()  # v1.11.5 (#126): warm the /health cache at startup
     _load_existing_jobs()
-    if not tm_versions():
+    if not tm_versions() or tm_pinned_install_missing(cfg):
+        # v1.12.2 (#173): the second disjunct is the in-band upgrade
+        # of an existing volume -- the installed tree can hold a
+        # different build reporting the same version string as the
+        # pin, which the empty-volume test alone would keep forever.
         url = cfg.get('tracemaker', {}).get('url') or os.environ.get('TRACEMAKER_URL', '')
         if url:
             try:

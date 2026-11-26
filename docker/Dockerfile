@@ -38,6 +38,12 @@ ENV AIR_DATA_DIR=/data AIR_PORT=8731
 # The tarball for this pin carries a PROVENANCE.txt in its root,
 # which the backend surfaces on /health next to the archive sha256.
 ENV TRACEMAKER_REF=phase-2-end TRACEMAKER_COMMIT=598c4e51c2938eaf784a433afc2451a432652399
+# v1.12.2 (#173): the pinned archive's sha256 -- the build identity
+# the version string cannot give (both engine generations report
+# 0.12.1). server.py trusts this hash in-band: bootstrap installs
+# it over a same-version install, and tm_update accepts it where a
+# non-pinned mismatch stays TOFU-refused.
+ENV TRACEMAKER_PINNED_SHA256=c6c2f89d34d713c2fada9168537728e6b15f024ad7647c3df4af62a3c14a7354
 EXPOSE 8731
 # v1.11.5 (#126): do not run as root; /data is the only writable
 # tree the service needs (job dirs, config, tracemaker installs).
