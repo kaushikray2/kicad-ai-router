@@ -22,7 +22,7 @@
 Every tool works on FILES in a work directory; the user's open board is
 never modified. The gate is kicad-cli DRC after a zone refill — the same
 gate used to validate the method by hand."""
-import hashlib, json, math, os, re, shutil, subprocess, sys, time
+import copy, hashlib, json, math, os, re, shutil, subprocess, sys, time
 from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -870,9 +870,94 @@ class Pipeline:
             self.log('WARNING: no_tracks_on names not on this board (ban vacuous here): %s (board layers: %s)' % (unknown, info['copper_layers']))
         return eff
 
+    def _gate_cache_key(self, board, sha):
+        # P2.7a: everything a gate verdict depends on besides the
+        # board's own bytes. The config fingerprint covers the layer
+        # law / layer cost / skeleton switches the census reads. The
+        # starved/banned deltas are keyed against the base board's
+        # first-gate references, so the reference values belong in
+        # the key: a board measured before the references existed
+        # (its deltas keyed against itself) is never served again
+        # once they do. For the base board itself the references ARE
+        # its own counts -- its deltas are 0 by construction --
+        # marked 'self'. The invariance census flips its reference
+        # when finalize() restores the input's lock flags
+        # (_locks_protected True -> False), so the flag is in the
+        # key too: a verdict measured against the protected base is
+        # never served for the delivered board, or vice versa.
+        # Round 7 (#207): the verdict is read by kicad-cli against
+        # the sibling .kicad_pro (netclasses) and .kicad_dru
+        # (custom rules) -- _sidecars() has just placed the run's
+        # copies beside this board (tool_gate calls it before
+        # keying), so fingerprint the files the DRC will actually
+        # read. A sibling change under identical board bytes must
+        # never be served the pre-change verdict.
+        _sidefp = []
+        _stem = os.path.splitext(board)[0]
+        for _ext in ('.kicad_pro', '.kicad_dru'):
+            try:
+                with open(_stem + _ext, 'rb') as _f:
+                    _sidefp.append(hashlib.sha256(_f.read()).hexdigest())
+            except Exception:
+                _sidefp.append(None)
+        try:
+            _cfgfp = hashlib.sha256(json.dumps(self.cfg, sort_keys=True, default=str).encode()).hexdigest()
+        except Exception:
+            _cfgfp = 'nocfg'
+        # Round 7 (#208): a file carrying the base's exact bytes
+        # (the finalize pattern) shares the base's 'self' keying --
+        # its counts ARE the base's, so its deltas against the base
+        # references are 0, exactly the base record's self-relative
+        # deltas. tool_gate records _base_sha whenever the base is
+        # gated. A board measured before the references existed
+        # still keys under the unset tuple, never 'self', so the
+        # pre-references invariant above is untouched.
+        if board == self.base or (getattr(self, '_base_sha', None) is not None and sha == self._base_sha):
+            _refs = 'self'
+        else:
+            _refs = (getattr(self, '_base_starved', None), getattr(self, '_base_banned', None))
+        return (sha, _cfgfp, _refs, bool(getattr(self, '_locks_protected', False)), tuple(_sidefp))
+
     def tool_gate(self, board=None):
         board = board or self.current
         self._sidecars(board)
+        # P2.7a: verdict cache keyed on the board's exact bytes. A
+        # gate is a pure measurement of (board bytes, this run's
+        # config, base-reference and census state -- see
+        # _gate_cache_key), and the policies re-gate unchanged boards
+        # constantly: the base twice at AUTO start, the portfolio
+        # winner after selection, the current board at every stage
+        # boundary a stage already gated internally, and the final
+        # board again by finalize's callers. Identical bytes under
+        # identical state reproduce the verdict exactly, so those
+        # repeats are served from the cache; any mutation changes
+        # the bytes and misses, so a stale verdict can never be
+        # served for a changed board. The refill-before-measure side
+        # condition is preserved: the cached verdict was itself
+        # computed by _drc_measure (which refills) on these bytes.
+        _sha = hashlib.sha256(open(board, 'rb').read()).hexdigest()
+        if board == self.base: self._base_sha = _sha  # #208: byte-identical files share the base's cache entry
+        _key = self._gate_cache_key(board, _sha)
+        _cache = getattr(self, '_gate_cache', None)
+        if _cache is None: _cache = self._gate_cache = {}
+        _hit = _cache.get(_key)
+        if _hit is not None:
+            rec = copy.deepcopy(_hit)
+            rec['board'] = board
+            rec['cached'] = True
+            if board == self.base:
+                # the base's first gate sets the delta references;
+                # keep that bookkeeping true even if a base gate is
+                # somehow served as a run's first cache hit
+                if getattr(self, '_base_starved', None) is None: self._base_starved = rec.get('starved_thermal')
+                if getattr(self, '_base_banned', None) is None: self._base_banned = rec.get('banned_layer_tracks')
+            self.last_gate = rec
+            self._record('gate', rec)
+            self.log('Gate: %d unconnected (%d pour, %d signal), %d violations (cached -- board bytes unchanged)' % (rec['unconnected_total'], rec['pour_items'], len(rec['signal_items']), rec['violations_total']))
+            if not (rec.get('invariance') or {}).get('ok', True): self.log('WARNING: invariance census -- this board lost locked items or free vias vs the input: %s' % rec['invariance'])
+            if rec.get('skeleton_intrusions'):
+                self.log('Gate: %d foreign items inside reserved pour corridors (%.1f mm) -- router-added pour faults (#63)' % (rec['skeleton_intrusions'], rec.get('skeleton_intrusion_mm') or 0.0))
+            return rec
         # v1.8.2 (#15): a UNIQUE report per gate + the return code is
         # checked. Before, every post-pass gate reused gate<pass>.drc.txt
         # and a failed kicad-cli silently left the PREVIOUS board's
@@ -974,6 +1059,7 @@ class Pipeline:
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
         if self.last_gate.get('skeleton_intrusions'):
             self.log('Gate: %d foreign items inside reserved pour corridors (%.1f mm) -- router-added pour faults (#63)' % (self.last_gate['skeleton_intrusions'], self.last_gate.get('skeleton_intrusion_mm') or 0.0))
+        _cache[_key] = copy.deepcopy(self.last_gate)  # P2.7a: verdict for these exact bytes, under the state _key captured at entry
         return self.last_gate
 
     def _drc_fault_items(self, board):

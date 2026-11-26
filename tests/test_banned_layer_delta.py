@@ -63,7 +63,10 @@ pipe.current = pipe.base
 pipe._gseq = 0; pipe.ledger = []; pipe.last_gate = None
 pipe.log = lambda m: None
 for _f in ('base.kicad_pcb', 'step1.kicad_pcb', 'step2.kicad_pcb'):
-    open(os.path.join(pipe.workdir, _f), 'w').write('(kicad_pcb)')
+    # P2.7a: distinct bytes per board -- the gate caches verdicts by
+    # board content, and to any real measurement identical bytes ARE
+    # the same board; three different boards need three contents.
+    open(os.path.join(pipe.workdir, _f), 'w').write('(kicad_pcb %s)' % _f)
 COUNTS = {'base.kicad_pcb': 7, 'step1.kicad_pcb': 7, 'step2.kicad_pcb': 9}
 def summ_for(cmd, *a, **k):
     board = a[a.index('--board') + 1] if '--board' in a else ''
