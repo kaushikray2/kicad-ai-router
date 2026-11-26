@@ -365,7 +365,11 @@ def impedance_form(entry):
             'fence': bool(entry.get('fence')), 'smooth': bool(entry.get('smooth')),
             'pi_radio': list(pi.get('radio') or []),
             'pi_antenna': list(pi.get('antenna') or []),
-            'pi_radio_ref': pi.get('radio_ref') or ''}
+            'pi_radio_ref': pi.get('radio_ref') or '',
+            'dk': entry.get('dk'),
+            'layers': list(entry.get('layers') or []),
+            'loss_budget_db': entry.get('loss_budget_db'),
+            'tol_pct': entry.get('tol_pct')}
 
 
 def impedance_entry(form):
@@ -379,12 +383,31 @@ def impedance_entry(form):
         e['model'] = form['model']
         if form['model'] == 'coplanar':
             gap = _opt_float(form, 'gap_mm', 'Coplanar gap')
-            if gap is not None:
-                e['gap_mm'] = gap
+            if gap is None:
+                # The pipeline refuses a coplanar marking without
+                # gap_mm (it cannot solve the geometry); refuse it
+                # at entry construction instead of at run time
+                # (#201).
+                raise ValueError('coplanar topology needs a gap (mm)')
+            e['gap_mm'] = gap
     if form.get('dk_basis'):
         e['dk_basis'] = form['dk_basis']
     if form.get('mask'):
         e['mask'] = form['mask']
+    dk = _opt_float(form, 'dk', 'Dk override')
+    if dk is not None:
+        e['dk'] = dk
+    layers = _csv_list(form.get('layers'))
+    if layers:
+        e['layers'] = layers
+    loss = _opt_float(form, 'loss_budget_db', 'Loss budget')
+    if loss is not None:
+        e['loss_budget_db'] = loss
+    if form.get('tol_pct') is not None:
+        # Declared in the markings.py schema header but consumed
+        # nowhere yet: carried verbatim so an edit never deletes
+        # it (#201).  Deliberately not surfaced in the form.
+        e['tol_pct'] = form['tol_pct']
     mhz = _opt_float(form, 'freq_mhz', 'Frequency')
     if mhz is not None:
         e['freq_hz'] = _freq_mhz_to_hz(mhz)

@@ -256,6 +256,11 @@ class ImpedanceForm(_FormBase):
         self.gap = self.row('Coplanar gap (mm)', _text(self))
         self.dk_basis = self.row('Dk basis', _choice(self, ['', 'design', 'process', '1mhz', 'stackup']))
         self.mask = self.row('Solder mask', _choice(self, ['', 'covered', 'open']))
+        self.dk = self.row('Dk override', _text(self))
+        self.loss = self.row('Loss budget (dB)', _text(self))
+        layers = self.model.board_index.get('layers') or []
+        self.layers = wx.CheckListBox(self, choices=layers, size=(-1, 74))
+        self.row('Layers', self.layers)
         self.freq = self.row('Frequency (MHz)', _text(self))
         self.fence = self.row('Via fence', wx.CheckBox(self, label='Stitch a via fence along the run'))
         self.smooth = self.row('Smooth', wx.CheckBox(self, label='Smooth the routed run'))
@@ -291,6 +296,8 @@ class ImpedanceForm(_FormBase):
                 'model': self.model_c.GetStringSelection(),
                 'gap_mm': _num(self.gap), 'dk_basis': self.dk_basis.GetStringSelection(),
                 'mask': self.mask.GetStringSelection(), 'freq_mhz': _num(self.freq),
+                'dk': _num(self.dk), 'loss_budget_db': _num(self.loss),
+                'layers': [self.layers.GetString(i) for i in self.layers.GetCheckedItems()],
                 'fence': self.fence.GetValue(), 'smooth': self.smooth.GetValue(),
                 'pi_radio': self.pi_radio.GetValue(), 'pi_antenna': self.pi_antenna.GetValue(),
                 'pi_radio_ref': self.pi_radio_ref.GetValue()}
@@ -312,6 +319,10 @@ class ImpedanceForm(_FormBase):
         self.gap.SetValue('' if f['gap_mm'] is None else str(f['gap_mm']))
         self.dk_basis.SetStringSelection(f['dk_basis'])
         self.mask.SetStringSelection(f['mask'])
+        self.dk.SetValue('' if f['dk'] is None else str(f['dk']))
+        self.loss.SetValue('' if f['loss_budget_db'] is None else str(f['loss_budget_db']))
+        for i in range(self.layers.GetCount()):
+            self.layers.Check(i, self.layers.GetString(i) in f['layers'])
         self.freq.SetValue('' if f['freq_mhz'] is None else str(f['freq_mhz']))
         self.fence.SetValue(f['fence'])
         self.smooth.SetValue(f['smooth'])
