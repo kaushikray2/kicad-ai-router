@@ -9,8 +9,8 @@
   },
   "packages": {
     "url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/packages.json",
-    "sha256": "e97d4e7eca29515cba97a1d9227329cbf0364d9d297a55f938a2d6aaf10ac1b4",
-    "update_timestamp": 1795708853,
-    "update_time_utc": "2026-11-26 16:00:53"
+    "sha256": "77d80e179a4efb43df364f57ef12209e690716e8d4dafcd9036485c356bfc84b",
+    "update_timestamp": 1795719873,
+    "update_time_utc": "2026-11-26 19:04:33"
   }
 }

@@ -536,12 +536,34 @@ starved_delta, intrusions, cost_tail), with fault_count =
 FAULT_CLASSES + banned_delta (#175) and intrusions priced as
 their own term (#158).
 
+### Off-plan -- v1.12.3 release: external audit round 5 fixes (2026-11-26)
+
+Patch release carrying only the external audit round 5 fix
+pass (#184-#189, recorded above): #184 (deterministic
+tm_relax portfolio leg refused on every Reproducible run --
+route_flags now budgets --relax by rounds), #185 (LLM mode
+could run with deterministic=True), #186 (pour-skeleton
+cache served a stale skeleton on a count-preserving via
+move), #187 (fix_violations rollback lost via type/span/
+free and rounded geometry to 1 um), #188 (_route_variant
+dropped the engine's error message -- the reporting gap
+that hid #184), #189 (Pipeline.__init__ mutated the
+caller's cfg dict). The shipped v1.12.2 contained all six
+bugs; the fixes landed on main after that release and ship
+here. VERSION and BACKEND_VERSION to 1.12.3 (code only;
+production backends stay on 1.10.2, no redeploy). pcm-repo
+regenerated: ai-router-1.12.3.zip (120749 bytes, sha256
+46a473dc97326d9dd618f28ddb94f02374dad9af7a4d6cb3641089f71a4f66ff),
+the 1.12.2 zip retired; the shipped zip registers exactly
+one AIRouterPlugin under KiCad's own pcbnew.LoadPlugins.
+
 
 ## In progress
 
-- Nothing in flight. v1.12.2 (Phase 2 engine adoption +
-  P2.1b) is released and recorded in Done above; production
-  backends stay on 1.10.2 until the owner calls a deploy.
+- Nothing in flight. v1.12.3 (external audit round 5
+  fixes #184-#189) is released and recorded in Done above;
+  production backends stay on 1.10.2 until the owner calls
+  a deploy.
   Next in sequence: **P2.7a** (below). Open owner items: the
   #164/#165/#166 design rulings; #172 (route-batch) stays
   open with its assessment.
