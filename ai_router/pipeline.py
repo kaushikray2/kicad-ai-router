@@ -176,6 +176,19 @@ def starved_delta(g):
     # for). Absent on records from before the tier existed: 0.
     return int((g or {}).get('starved_thermal_delta') or 0)
 
+def banned_delta(g):
+    # v1.12.2 (#175): the routing-caused banned-layer delta the gate
+    # baked into this record (the #116 treatment: the base board's
+    # own count under the same law subtracted, floored at 0 --
+    # inherited tracks on a banned layer are not this run's to
+    # answer for, and each variant Pipeline baking its own base
+    # reference is what removes the A/B asymmetry). Records from
+    # before the field existed fall back to the RAW count, so old
+    # ledgers keep their historical meaning.
+    if (g or {}).get('banned_layer_tracks_delta') is None:
+        return int((g or {}).get('banned_layer_tracks') or 0)
+    return int(g['banned_layer_tracks_delta'] or 0)
+
 def _accept_key(g):
     # v1.8.2 (#16): step acceptance is lexicographic -- a step is kept
     # only if it is no worse in (copper faults, unconnected items,
@@ -208,7 +221,9 @@ def fault_count(g):
     # v1.3.2: tracks on a banned layer (the layer-law census) count
     # as faults -- DRC cannot see them (the pour refills around a
     # track drawn on its own plane), so the census is the only guard.
-    return sum(c.get(k, 0) for k in FAULT_CLASSES) + int((g or {}).get('banned_layer_tracks') or 0)
+    # v1.12.2 (#175): the term keys on the DELTA above the base
+    # board's own count (banned_delta), not the raw census.
+    return sum(c.get(k, 0) for k in FAULT_CLASSES) + banned_delta(g)
 
 
 class Pipeline:
@@ -788,6 +803,12 @@ class Pipeline:
         if board == self.base and getattr(self, '_base_starved', None) is None:
             self._base_starved = _st
         _st_delta = max(0, _st - int(getattr(self, '_base_starved', _st) or 0))
+        # v1.12.2 (#175): same baking for the banned-layer census --
+        # the first gate of the base board sets the reference under
+        # THIS pipeline's law, later gates key on the excess only.
+        if board == self.base and getattr(self, '_base_banned', None) is None:
+            self._base_banned = banned_layer_tracks
+        _banned_delta = max(0, banned_layer_tracks - int(getattr(self, '_base_banned', banned_layer_tracks) or 0))
         self.last_gate = {'violations_total': total, 'unconnected_total': unc,
                           'violations_excl_unconnected': total,  # v1.8.2 (#18): the KiCad header total ALREADY excludes unconnected items (proven on a live report); subtracting them again undercounted
                           'board_sha256': hashlib.sha256(open(board, 'rb').read()).hexdigest(),
@@ -795,7 +816,7 @@ class Pipeline:
                           'vias': summ.get('vias'), 'wirelength_mm': summ.get('wirelength_mm'),
                           'classes': classes, 'starved_thermal': _st, 'starved_thermal_delta': _st_delta, 'isolated_copper': int(classes.get('isolated_copper') or 0), 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
                           'signal_items': signal, 'split_nets': split_nets,
-                          'pour_nets': pour_nets, 'invariance': _inv, 'tracks_by_layer': _tbl, 'via_on_pad': summ.get('via_on_pad'), 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
+                          'pour_nets': pour_nets, 'invariance': _inv, 'tracks_by_layer': _tbl, 'via_on_pad': summ.get('via_on_pad'), 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_layer_tracks_delta': _banned_delta, 'banned_exempt_own_plane': banned_exempt_own_plane, 'board': board}
         self._record('gate', self.last_gate)
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
         return self.last_gate
