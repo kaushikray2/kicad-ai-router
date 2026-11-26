@@ -501,6 +501,7 @@ class Pipeline:
                     excluded_det.append(eng)
                     self.log('portfolio: %s excluded -- deterministic mode requires the reproducible engine only (#176)' % eng)
         results = []
+        route_recs = {}
         winner = None
         for eng in engines:
             outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
@@ -535,8 +536,9 @@ class Pipeline:
                             'seconds': (r or {}).get('seconds')})
             self.log('portfolio: %s key %s (unc %s, copper %s, banned %s)' %
                      (eng, key, g.get('unconnected_total'), g.get('copper_violations'), g.get('banned_layer_tracks')))
+            if (r or {}).get('route'): route_recs[eng] = r['route']
             if winner is None or key < winner[0]:
-                winner = (key, outp, g)
+                winner = (key, outp, g, eng)
         _rec = {'engines': list(engines), 'results': results,
                 'winner': winner[1] if winner else None}
         if excluded: _rec['excluded_layer_cost'] = excluded
@@ -545,6 +547,14 @@ class Pipeline:
         self._record('portfolio', _rec)
         if winner:
             self.current = winner[1]
+            # v1.12.2 (#177): a TraceMaker win seeds the job route
+            # record from the winning variant's route JSON -- with
+            # the main passes skipped on a clean win, nothing else
+            # would ever populate it.
+            _wr = route_recs.get(winner[3])
+            if _wr:
+                self.last_route = dict(_wr, source='portfolio:' + winner[3])
+                self._record('route', self.last_route)
             return winner[2]
         return None
 
@@ -558,6 +568,7 @@ class Pipeline:
             except Exception: self._copper_layers = []
         banned = self._banned_for(self.base)  # v1.10.1 (#49)
         cmdline = [self.cfg['tracemaker_path'], 'route', self.base, '-o', outp, flag,
+                   '--json', outp + '.route.json',  # v1.12.2 (#177): the variant's structured record, seeded into last_route if it wins
                    '--soft-zones', '--keep-vias-off-pads', '--diff-pairs', '--si-rules', '--critical-auto']
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.base)  # v1.11 (#73)
@@ -573,7 +584,18 @@ class Pipeline:
         try: self._worker('refill', '--board', outp, '--out', outp)
         except Exception: pass
         self._sidecars(outp)
-        return {'status': 'routed'}
+        # v1.12.2 (#177): hand the caller the variant's structured
+        # record (same fields tool_route bakes into last_route), so
+        # a portfolio win can seed the job's route record.
+        _rj = {}
+        try: _rj = json.load(open(outp + '.route.json'))
+        except Exception: pass
+        _rec = {'engine': eng, 'board': outp,
+                'exit_code': _rj.get('exit_code', _rc),
+                'stopped_by': _rj.get('stopped_by'),
+                'route_open_only': bool(_rj.get('route_open_only')),
+                'open_at_start': _rj.get('open_at_start')}
+        return {'status': 'routed', 'seconds': _rj.get('seconds'), 'route': _rec}
 
     def _drc_measure(self, board):
         # v1.9: parse the JSON DRC report -- structured output instead
