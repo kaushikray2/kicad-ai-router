@@ -1254,7 +1254,13 @@ class Pipeline:
         # when a markings sidecar exists for the board, or the
         # placement_audit setting explicitly says 'apply'.
         apply = (self.cfg.get('placement_audit') == 'apply')
-        if not apply and _markings is not None:
+        if not apply and _markings is not None                 and self.cfg.get('engineered_nets', True):
+            # #203: sidecar PRESENCE alone must not apply -- with
+            # the engineered_nets switch off the audit stays
+            # report-only on local runs, exactly as on backend
+            # runs (where the gated upload means no sidecar is
+            # present).  The explicit placement_audit == 'apply'
+            # opt-in above stays independent of the switch.
             try:
                 apply = _markings.load_markings(self.board_path) is not None
             except Exception:
