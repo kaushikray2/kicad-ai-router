@@ -211,6 +211,18 @@ def _final_key(g):
     # as in _accept_key).
     return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), starved_delta(g), cost_tail(g))
 
+def _b_needs_escalation(gate):
+    # v1.12.2 (#179): B is kept only when it left NOTHING split.
+    # The original condition looked at split SIGNAL nets alone, so
+    # a B run whose only splits were POUR nets (the v1.12.2 Stage C
+    # sample-2 shape: split_pour [GND], split_signal []) never
+    # escalated -- yet a pour split is exactly what Variant A's
+    # different layer law can change. A is still kept only when
+    # the final key prefers it, so this can only add the A run,
+    # never force its result.
+    g = gate or {}
+    return bool((g.get('split_signal_nets') or []) or (g.get('split_pour_nets') or []))
+
 def run_auto(cfg, pipe, log):
     # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54
     # multilayer boards -- the 44-connection gap is layer-law-driven).
@@ -251,10 +263,10 @@ def run_auto(cfg, pipe, log):
             res_b = _run_auto_once(cfg, pipe, log)
             if orig is None: cfg.pop('no_tracks_on', None)
             else: cfg['no_tracks_on'] = orig
-            if not (res_b['gate'].get('split_signal_nets') or []):
-                log('Layer-law policy: B left no split signal nets -- keeping B')
+            if not _b_needs_escalation(res_b['gate']):
+                log('Layer-law policy: B left no split nets -- keeping B')
                 return res_b
-            log('Layer-law policy: B left split signal nets %s -- escalating to Variant A' % res_b['gate'].get('split_signal_nets'))
+            log('Layer-law policy: B left split nets (signal %s, pour %s) -- escalating to Variant A' % (res_b['gate'].get('split_signal_nets'), res_b['gate'].get('split_pour_nets')))
             import time as _time; _time.sleep(1.1)  # pipe2 needs a distinct workdir stamp
             cfg2 = dict(cfg); cfg2['no_tracks_on'] = 'In1.Cu'
             res_a = _run_auto_once(cfg2, Pipeline(cfg2, pipe.board_path, log), log)
