@@ -402,11 +402,13 @@ def _fix_one_violation(b, net, x, y, radius=3.0):
     pads, clusters = _pad_clusters(b, conn, net)
     if not pads: return False
     before = len(clusters)
+    _zl = _zone_layers_by_net(b)  # (#195): the #119 free-via determination, shared with strip and the invariance census
     rip = []
     for t in list(b.GetTracks()):
         if t.GetNetname() != net: continue
         if t.IsLocked(): continue  # #159: user-locked copper is never ripped (the #100/#119 class)
         if t.Type() == pcbnew.PCB_VIA_T:
+            if _via_is_free(t, _zl): continue  # (#195): free (stitching/thermal) vias are user copper (#119) -- never ripped, locked or not; #187 preserved them on rollback but a successful repair deleted them outright
             if math.hypot(mm(t.GetPosition().x) - x, mm(t.GetPosition().y) - y) < radius + mm(t.GetWidth(pcbnew.F_Cu)) / 2: rip.append(t)
         elif seg_pt(x, y, mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y)) < radius + mm(t.GetWidth()) / 2:
             rip.append(t)
@@ -421,9 +423,10 @@ def _fix_one_violation(b, net, x, y, radius=3.0):
         if t.GetNetname() != net or t.Type() != pcbnew.PCB_VIA_T: continue
         if math.hypot(mm(t.GetPosition().x) - x, mm(t.GetPosition().y) - y) >= radius + 1.0: continue
         if t.IsLocked(): continue  # #159: a locked via stays even when stranded
+        if _via_is_free(t, _zl): continue  # (#195): a stranded free via is still user copper
         if not [it for it in conn.GetConnectedItems(t) if it.Type() != pcbnew.PCB_PAD_T]:
             saved.append(_track_key(t)); b.RemoveNative(t)
-    nets = b.GetNetsByName(); stack = copper_stack(b)
+    nets = b.GetNetsByName()
     drawn = []
     conn = b.GetConnectivity(); conn.Build(b)
     now = len(_pad_clusters(b, conn, net)[1])
@@ -434,13 +437,10 @@ def _fix_one_violation(b, net, x, y, radius=3.0):
         segs, vias = plan
         if not segs and not vias: break
         tw = net_class_width(b, net, W_TRACK); vd, vdr = net_class_via(b, net)
-        code = nets[net].GetNetCode()
         for (li, x1, y1, x2, y2) in segs:
-            add_seg(b, nets, net, li, x1, y1, x2, y2, tw)
-            drawn.append(('seg', code, stack[li], nm(x1), nm(y1), nm(x2), nm(y2), nm(tw)))  # #187: exact-nm key shape, matching _track_key of the drawn item
+            drawn.append(_track_key(add_seg(b, nets, net, li, x1, y1, x2, y2, tw)))  # (#195): key the item add_seg actually created -- the hand-built tuple desyncs silently if its defaults ever change, and rollback would leave drawn copper behind
         for (vx, vy) in vias:
-            add_via(b, nets, net, vx, vy, vd, vdr)
-            drawn.append(('via', code, nm(vx), nm(vy), nm(vd), nm(vdr), pcbnew.VIATYPE_THROUGH, pcbnew.F_Cu, pcbnew.B_Cu, False))  # #187: add_via creates a default through via; the tuple is its _track_key
+            drawn.append(_track_key(add_via(b, nets, net, vx, vy, vd, vdr)))
         conn = b.GetConnectivity(); conn.Build(b)
         now = len(_pad_clusters(b, conn, net)[1])
         rounds += 1
@@ -1317,12 +1317,14 @@ def add_seg(b, nets, netname, li, x1, y1, x2, y2, w=0.20):
     t.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1))); t.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
     t.SetWidth(nm(w)); t.SetLayer(copper_stack(b)[li])
     t.SetNetCode(nets[netname].GetNetCode()); b.Add(t)
+    return t
 
 def add_via(b, nets, netname, x, y, w=0.60, drill=0.30):
     v = pcbnew.PCB_VIA(b)
     v.SetPosition(pcbnew.VECTOR2I(nm(x), nm(y)))
     v.SetWidth(nm(w)); v.SetDrill(nm(drill))
     v.SetNetCode(nets[netname].GetNetCode()); b.Add(v)
+    return v
 
 def path_segs_vias(simp):
     segs = [(a[0], a[1], a[2], bb[1], bb[2]) for a, bb in zip(simp, simp[1:]) if a[0] == bb[0]]
@@ -3052,6 +3054,7 @@ def _zone_layers_by_net(b):
     # the free-via fallback and the summary census share this).
     out = {}
     for z in b.Zones():
+        if _is_rule_area(z): continue  # (#195): the #181 skip, missed here -- a rule area retaining a net name is not a pour, and counting it makes _via_is_free call ordinary routing vias free
         n = z.GetNetname()
         if not n: continue
         try: lays = list(z.GetLayerSet().CuStack())
