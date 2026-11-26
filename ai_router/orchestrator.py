@@ -493,15 +493,24 @@ def _run_auto_once(cfg, pipe, log):
                 try: pipe.tool_reroute_window(net, margin=float(cfg.get('reroute_margin', 6.0)))
                 except Exception as e: log('reroute_window %s failed: %s' % (net, e))
             gate = pipe.tool_gate()
-    _run_engineered_stages(pipe, log)
     # v1.12 (#155, P2.1b): repair router-added copper faults on
     # already-connected nets -- after reroute_window, so it also
     # cleans up the trades that stage accepted. Gate-verified
     # inside the tool; a no-op when the base diff finds nothing.
+    # #210: this runs BEFORE the engineered stages, not after:
+    # the fix rips a faulted net's copper within +-3 mm and
+    # re-closes it at NETCLASS width, so run after the engineered
+    # stages it could silently un-widen a power rail or un-meander
+    # a length-matched run the stages just built (and the recorded
+    # plan would still claim the sizing).  The engineered stages
+    # are each internally checker-gated, so nothing after them
+    # needs to rip copper; the final gate still measures whatever
+    # they leave.
     if cfg.get('fix_violations', True):
         try: pipe.tool_fix_violations()
         except Exception as e: log('fix_violations failed: %s' % e)
         gate = pipe.tool_gate()
+    _run_engineered_stages(pipe, log)
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))

@@ -1324,6 +1324,21 @@ class RouterDialog(wx.Dialog):
                 for _k in ('engineered_nets', 'placement_audit'):
                     if job.get(_k) is not None:
                         out[_k] = job[_k]
+                if job.get('ledger') is not None:
+                    # #210: persist the winning pipeline's ledger
+                    # beside the result and wire ledger_path, so
+                    # the Report dialog's 'Open ledger.json' works
+                    # after backend runs too (the local path sets
+                    # ledger_path from the run result).
+                    try:
+                        import json
+                        lpath = os.path.splitext(dest)[0] + '.ledger.json'
+                        with open(lpath, 'w', encoding='utf-8') as fh:
+                            json.dump(job['ledger'], fh, indent=1)
+                        out['ledger_path'] = lpath
+                        self.log('Ledger saved to %s' % lpath)
+                    except Exception:
+                        pass
                 return out
             if st == 'cancelled':
                 raise Cancelled()
