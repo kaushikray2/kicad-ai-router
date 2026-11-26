@@ -95,7 +95,7 @@ async function loadAll(){
     document.getElementById('keystate').textContent = c.llm.api_key_set ? '(a key is saved)' : '(no key saved)';
     document.getElementById('rt_mode').value=c.routing.mode||'auto';
     document.getElementById('rt_passes').value=c.routing.max_passes||4;
-    document.getElementById('rt_work').value=c.routing.work||20000000;
+    document.getElementById('rt_work').value=c.routing.work||40000000;
     document.getElementById('rt_ban').value=c.routing.no_tracks_on||'';
     document.getElementById('rt_cost').value=c.routing.layer_cost||'';
     document.getElementById('rt_strip').checked=!!c.routing.strip_existing;

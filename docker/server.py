@@ -58,7 +58,7 @@ def default_config():
             'auth_token': secrets.token_hex(24),
             'allowed_hosts': [],
             'llm': {'endpoint': 'http://127.0.0.1:8080/v1', 'model': 'local-model', 'api_key': ''},
-            'routing': {'mode': 'auto', 'max_passes': 4, 'work': 20000000,
+            'routing': {'mode': 'auto', 'max_passes': 4, 'work': 40000000,
                         'no_tracks_on': 'In1.Cu', 'strip_existing': True},
             'max_concurrent_jobs': 1,
             'selftest_tolerance': {'unconnected': 2, 'split_nets': 0},

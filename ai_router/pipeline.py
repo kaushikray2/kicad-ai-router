@@ -373,9 +373,9 @@ class Pipeline:
             cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(inp)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += engine_run.route_flags(self.cfg, work or self.cfg.get('work', 20000000))  # v1.12.2 (#170/#171)
+        cmdline += engine_run.route_flags(self.cfg, work or self.cfg.get('work', 40000000))  # v1.12.2 (#170/#171)
         with open(log_path, 'w') as lf:
-            p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(3900, work or self.cfg.get('work', 20000000)))  # v1.12.2 (#176): scales with the work budget
+            p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(3900, work or self.cfg.get('work', 40000000)))  # v1.12.2 (#176): scales with the work budget
         if not os.path.exists(outp):
             _err = engine_run.engine_error(p.returncode, None)
             if _err:
@@ -573,10 +573,10 @@ class Pipeline:
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.base)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 20000000), 1800)  # v1.12.2 (#170/#171)
+        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), 1800)  # v1.12.2 (#170/#171)
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
-            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(2400, self.cfg.get('work', 20000000))).returncode  # v1.12.2 (#176)
+            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(2400, self.cfg.get('work', 40000000))).returncode  # v1.12.2 (#176)
         if _rc != 0:
             self.log('TraceMaker variant %s exited with code %d (log: %s)' % (eng, _rc, log_path))  # v1.9.6 (#40)
         if not os.path.exists(outp):
@@ -893,11 +893,11 @@ class Pipeline:
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.current)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 20000000), 1800, open_only=False)  # v1.12.2 (#170/#171): --route-open-only does not apply to a --reroute call
+        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), 1800, open_only=False)  # v1.12.2 (#170/#171): --route-open-only does not apply to a --reroute call
         log_path = os.path.join(self.workdir, 'tm-rw-%d.log' % self._oseq)
         try:
             with open(log_path, 'w') as lf:
-                subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(1900, self.cfg.get('work', 20000000)))  # v1.12.2 (#176)
+                subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(1900, self.cfg.get('work', 40000000)))  # v1.12.2 (#176)
         except Exception as e:
             self._record('reroute_window', {'net': net, 'status': 'error', 'detail': str(e)[:200]})
             return {'status': 'error', 'net': net}

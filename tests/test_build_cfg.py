@@ -40,7 +40,7 @@ def test_engine_whitelist_dedupe_cap():
 
 def test_non_numeric_does_not_crash():
     cfg = run_job.build_cfg({'max_passes': 'lots', 'work': 'plenty'}, {}, '/tm')
-    assert cfg['max_passes'] == 4 and cfg['work'] == 20000000
+    assert cfg['max_passes'] == 4 and cfg['work'] == 40000000
 
 def test_unlisted_defaults_keys_forward():
     # #74: keys with no explicit mapping in build_cfg were silently

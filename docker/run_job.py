@@ -74,7 +74,7 @@ def build_cfg(rt, llm, tm_exe):
                 'api_key': llm.get('api_key', ''), 'tracemaker_path': tm_exe, 'kicad_cli': 'kicad-cli'})
     cfg['mode'] = rt.get('mode', cfg.get('mode', 'auto'))
     cfg['max_passes'] = _int_or(rt, 'max_passes', cfg.get('max_passes', 4))
-    cfg['work'] = _int_or(rt, 'work', cfg.get('work', 20000000))
+    cfg['work'] = _int_or(rt, 'work', cfg.get('work', 40000000))
     cfg['no_tracks_on'] = rt.get('no_tracks_on', cfg.get('no_tracks_on', 'In1.Cu'))
     cfg['strip_existing'] = bool(rt.get('strip_existing', cfg.get('strip_existing', True)))
     for _k, _d in (('finish_signal_cap', 8), ('finish_pour_cap', 4), ('long_finish_cap', 6), ('ilp_repair_cap', 0)):

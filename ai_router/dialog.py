@@ -471,7 +471,7 @@ class RouterDialog(wx.Dialog):
         self.adv_law_policy.SetStringSelection(cfg.get('layer_law_policy', 'auto'))
         self.adv_pass_advice.SetStringSelection(cfg.get('pass_advice', 'promote'))
         self.adv_max_tool_calls.SetValue(int(cfg.get('max_tool_calls', 48)))
-        self.adv_work.SetValue(int(cfg.get('work', 20000000)))
+        self.adv_work.SetValue(int(cfg.get('work', 40000000)))
         self.adv_timeout.SetValue(int(cfg.get('request_timeout_s', 600)))
         self._populate_layers()
 
@@ -715,7 +715,7 @@ class RouterDialog(wx.Dialog):
         self.adv_ilp_repair = spin(0, 0, 999, 'Joint ILP repair attempts per run (0 = off).')
         self.adv_max_tool_calls = spin(48, 1, 1000, 'LLM mode stops when this budget is spent — the run ends wherever it is. Sent to the backend too, where it governs backend LLM runs.')
         add2('ILP repair cap', self.adv_ilp_repair, 'LLM tool-call budget', self.adv_max_tool_calls)
-        self.adv_work = spin(20000000, 0, 2147483647, 'Engine work budget per pass (TraceMaker expansions).')
+        self.adv_work = spin(40000000, 0, 2147483647, 'Engine work budget per pass (TraceMaker expansions).')
         self.adv_timeout = spin(600, 10, 86400, 'HTTP request timeout (seconds) for local LLM calls.')
         add2('Engine work budget', self.adv_work, 'Request timeout (s)', self.adv_timeout)
         g.Add(wx.StaticText(win, label='Engine portfolio'), 0, wx.ALIGN_CENTER_VERTICAL)
