@@ -539,10 +539,11 @@ their own term (#158).
 
 ## In progress
 
-- Nothing in flight. v1.12.2 (Phase 2 engine adoption +
+- **P2.7a** is implemented on branch `p27a-perf` (#190),
+  awaiting merge (below). v1.12.2 (Phase 2 engine adoption +
   P2.1b) is released and recorded in Done above; production
   backends stay on 1.10.2 until the owner calls a deploy.
-  Next in sequence: **P2.7a** (below). Open owner items: the
+  Open owner items: the
   #164/#165/#166 design rulings; #172 (route-batch) stays
   open with its assessment.
 
@@ -554,6 +555,27 @@ final is gated by finalize and again by both callers; the portfolio
 winner is re-gated — ~2 gate cycles saved per run, ~4 on escalation);
 a persistent worker process or batched gate calls; profile one AUTO run
 end to end and attack the top fixed cost.
+
+**Implemented on branch `p27a-perf` (#190), awaiting merge.** The
+profile was worse than the estimate: a mapone AUTO run made 12 gate
+calls for 2 distinct board states — 85.1 s of gate wall in a 174.6 s
+run (base twice, portfolio winner 8x on identical bytes, final
+twice). `tool_gate` now caches verdicts keyed on the board's exact
+sha256 + a config fingerprint + the base-reference and lock-census
+state a verdict depends on; identical bytes under identical state
+are served (ledger records carry `cached: true`), any mutation
+misses. Same mapone run after: 2 DRC measurements, gate wall
+14.7 s, total 91.6 s (-47%), every verdict identical and the
+delivered board byte-identical. Nomad (both escalation variants):
+38 gate calls, 8 measurements, 30 served. Per-gate cost is ~90%
+kicad-cli DRC against ~0.7 s of worker startup, so the
+persistent-worker arm was measured and declined — the cache
+removes the redundant measurements outright. Self-test boards
+after: hbridge 0/0/0, mapone 0/0/0; Nomad 1/1/13 locally (older
+pinned engine; the one miss is a 3V3 pour connection — the
+fixture's documented AUTO wander class, cf. the v1.12.3
+acceptance run's 3/1/13 on the phase-2-end backend). Suites:
+pytest 107, standalone 47/47.
 
 ### Phase 2E — engine & measurement block
 Six features adapted from the WeaveEngine review (2026-11-24; ideas
