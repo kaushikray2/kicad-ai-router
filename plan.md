@@ -700,17 +700,47 @@ was dropped, the cache corrected on the branch, and the
 merge redone. No version bump; production backends stay
 on 1.10.2.
 
+
+### Off-plan -- v1.12.5 release: P2.7a gate-verdict cache + Add server picker fixes (2026-11-26)
+
+Patch release carrying P2.7a (#190, landed on main in
+352c125) and the external audit round 7 fixes to Add
+server (#209, #211, recorded above): #190 (tool_gate
+verdict cache keyed on the board bytes plus the config
+fingerprint and reference states -- repeated gates on
+unchanged boards are served from the cache and recorded
+as such in the ledger; merged-tree mapone AUTO: 12 gate
+calls, 2 DRC measurements, gate wall 14.8 s of a 98.0 s
+run, final 0/0/0), #207 (the cache key now fingerprints
+the beside-board .kicad_pro / .kicad_dru sidecars the
+DRC verdict depends on), #208 (byte-identical boards
+share the base's cache entry), #209 (server pick defers
+its field writes via wx.CallAfter and does not Skip for
+a custom entry -- on Windows the native combo overwrote
+the URL with the server NAME; duplicate server names
+also rejected), #211 (switching servers no longer leaks
+a custom server's token to presets or drops unsaved
+token edits). #212 (run_auto's orphaned caller Pipeline)
+stays open for the owner's ruling. VERSION and
+BACKEND_VERSION to 1.12.5 (code only; production
+backends stay on 1.10.2, no redeploy). pcm-repo
+regenerated: ai-router-1.12.5.zip (128005 bytes, sha256
+5c638c4292edca14a0115587587923bd161c8f086ae80a6b92e46f2d58b4b759),
+the 1.12.4 zip retired; the shipped zip registers
+exactly one AIRouterPlugin under KiCad
+pcbnew.LoadPlugins.
+
 ## In progress
 
-- Nothing in flight. v1.12.4 (external audit round 6
-  fixes #191-#198 + Add server #199) is released and
-  recorded in Done above; production backends stay on
-  1.10.2 until the owner calls a deploy.
-  **P2.7a** (#190) has landed on main with this merge,
-  with the round 7 cache corrections (#207, #208).
+- Nothing in flight. v1.12.5 (P2.7a #190 + round 7
+  fixes #207-#211) is released and recorded in Done
+  above; production backends stay on 1.10.2 until the
+  owner calls a deploy.
   Next in sequence: **Phase 2E** (below). Open owner
-  items: the #164/#165/#166 design rulings; #172
-  (route-batch) stays open with its assessment.
+  items: the #164/#165/#166 design rulings; #212
+  (run_auto's orphaned Pipeline) with its design
+  sketch; #172 (route-batch) stays open with its
+  assessment.
 
 ## Remaining (in sequence)
 
