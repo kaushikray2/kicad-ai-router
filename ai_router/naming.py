@@ -103,6 +103,27 @@ def sidecar_paths(board_path):
     return pro, dru
 
 
+def project_sidecar_path(board_path, suffix):
+    """Path of a project sidecar file ('.net', '.kicad_sch',
+    '.ai-router-markings.json', ...) for a board, resolved with
+    the same #182 stem logic as sidecar_paths: the board's own
+    stem when that file exists; else the project stem
+    (project_stem: generated suffixes stripped, single-.kicad_pro
+    fallback) when it differs; else the board's own stem -- so a
+    NEW sidecar for a generated result board lands at the project
+    stem (#204)."""
+    board_path = os.path.abspath(board_path)
+    d = os.path.dirname(board_path)
+    stem = os.path.splitext(os.path.basename(board_path))[0]
+    own = os.path.join(d, stem + suffix)
+    if os.path.exists(own):
+        return own
+    proj = project_stem(board_path)
+    if proj != stem:
+        return os.path.join(d, proj + suffix)
+    return own
+
+
 def result_filename(board_path, when=None):
     when = when or datetime.now()
     return '%s-%s.kicad_pcb' % (project_stem(board_path), when.strftime('%Y%m%d-%H%M%S'))

@@ -36,6 +36,11 @@ later step never loses data written by an earlier one.
 import json
 import os
 
+try:
+    from . import naming as _naming
+except ImportError:
+    import naming as _naming
+
 SCHEMA_VERSION = 1
 SIDECAR_SUFFIX = '.ai-router-markings.json'
 SECTIONS = ('impedance', 'differential', 'power', 'length_groups', 'hv_domains', 'quiet')
@@ -46,9 +51,10 @@ class MarkingsError(ValueError):
 
 
 def markings_path_for(board_path):
-    """Sidecar path for a board file path."""
-    root, _ext = os.path.splitext(os.path.abspath(board_path))
-    return root + SIDECAR_SUFFIX
+    """Sidecar path for a board file path -- #182 project-stem
+    resolution (#204): a generated result board (timestamped
+    name) finds the project's sidecar, not a namesake of its own."""
+    return _naming.project_sidecar_path(board_path, SIDECAR_SUFFIX)
 
 
 def _check_impedance_entry(entry, idx):

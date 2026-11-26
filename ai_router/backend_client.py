@@ -44,11 +44,11 @@ def _netlist_bytes(board_path):
     # else export from the sibling <stem>.kicad_sch with kicad-cli.
     # None when neither exists -- the backend then records power
     # markings unsized, exactly like a local run without a netlist.
-    stem = os.path.splitext(board_path)[0]
-    if os.path.exists(stem + '.net'):
-        with open(stem + '.net', 'rb') as fh:
+    net = naming.project_sidecar_path(board_path, '.net')
+    if os.path.exists(net):
+        with open(net, 'rb') as fh:
             return fh.read()
-    sch = stem + '.kicad_sch'
+    sch = naming.project_sidecar_path(board_path, '.kicad_sch')
     if os.path.exists(sch):
         import shutil, subprocess, tempfile
         exe = shutil.which('kicad-cli')

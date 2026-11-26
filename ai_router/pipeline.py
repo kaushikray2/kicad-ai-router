@@ -423,7 +423,7 @@ class Pipeline:
             # that does not ship them) -- fail LOUDLY. Silently
             # running unmarked would route the board as if it had
             # no markings at all.
-            _sc = os.path.splitext(self.board_path)[0] + '.ai-router-markings.json'
+            _sc = naming.project_sidecar_path(self.board_path, '.ai-router-markings.json')
             if os.path.exists(_sc):
                 raise RuntimeError('markings sidecar present (%s) but the engineered-nets '
                                    'modules failed to import (%s) -- refusing to run unmarked'
@@ -1406,10 +1406,10 @@ class Pipeline:
         p = self.cfg.get('power_netlist')
         if p and os.path.exists(p):
             return p
-        root = os.path.splitext(self.board_path)[0]
-        if os.path.exists(root + '.net'):
-            return root + '.net'
-        sch = root + '.kicad_sch'
+        net = naming.project_sidecar_path(self.board_path, '.net')
+        if os.path.exists(net):
+            return net
+        sch = naming.project_sidecar_path(self.board_path, '.kicad_sch')
         cli = shutil.which('kicad-cli')
         if os.path.exists(sch) and cli:
             out = os.path.join(self.workdir, 'power_netlist.net')

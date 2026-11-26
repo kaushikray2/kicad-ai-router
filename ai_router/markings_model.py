@@ -39,8 +39,10 @@ import copy, html, os
 
 try:
     from . import markings
+    from . import naming
 except ImportError:
     import markings
+    import naming
 
 SECTIONS = markings.SECTIONS
 SECTION_TITLES = {'impedance': 'Impedance', 'differential': 'Differential',
@@ -93,9 +95,10 @@ def evaluate_conditions(board_path, data):
     # exports from the sibling <stem>.kicad_sch; the stackup check
     # reads the board file's own (setup (stackup ...)) block, which
     # is exactly what the worker's cmd_stackup parses.
-    stem = os.path.splitext(board_path)[0] if board_path else ''
-    netlist = bool(stem) and os.path.exists(stem + '.net')
-    schematic = bool(stem) and os.path.exists(stem + '.kicad_sch')
+    netlist = bool(board_path) and os.path.exists(
+        naming.project_sidecar_path(board_path, '.net'))
+    schematic = bool(board_path) and os.path.exists(
+        naming.project_sidecar_path(board_path, '.kicad_sch'))
     stackup = False
     if board_path and os.path.exists(board_path):
         try:
