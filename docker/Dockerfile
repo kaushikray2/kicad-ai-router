@@ -30,6 +30,14 @@ COPY ai_router /opt/ai-router/ai_router
 COPY docker/server.py docker/run_job.py docker/config_page.html /opt/ai-router/
 COPY docker/selftest /opt/ai-router/selftest
 ENV AIR_DATA_DIR=/data AIR_PORT=8731
+# v1.12.2 (#170): the TraceMaker engine is installed at runtime from
+# a release tarball (TRACEMAKER_URL / the config page), never baked
+# into this image. The adopted engine generation is the fork tag
+# phase-2-end, commit 598c4e51c2938eaf784a433afc2451a432652399 --
+# the engine version STRING stays 0.12.1, so pin by tag/commit.
+# The tarball for this pin carries a PROVENANCE.txt in its root,
+# which the backend surfaces on /health next to the archive sha256.
+ENV TRACEMAKER_REF=phase-2-end TRACEMAKER_COMMIT=598c4e51c2938eaf784a433afc2451a432652399
 EXPOSE 8731
 # v1.11.5 (#126): do not run as root; /data is the only writable
 # tree the service needs (job dirs, config, tracemaker installs).

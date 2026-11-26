@@ -126,6 +126,14 @@ def _cfg_int(cfg, key, default):
         return default
 
 
+def _route_info(pipe):
+    # v1.12.2 (#170): the last engine pass's structured contract,
+    # carried into the run result (the backend writes it into the
+    # job status; the dialog result keeps it too).
+    lr = getattr(pipe, 'last_route', None) or {}
+    return {k: lr.get(k) for k in ('exit_code', 'stopped_by', 'route_open_only', 'open_at_start')}
+
+
 def run_llm(cfg, pipe, log):
     client = LLMClient(cfg['endpoint'], cfg['model'], cfg.get('api_key', ''), cfg.get('request_timeout_s', 600))
     messages = [{'role': 'system', 'content': PLAYBOOK},
@@ -165,7 +173,7 @@ def run_llm(cfg, pipe, log):
         if finished: break
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): report the gate of the DELIVERED file
-    return {'final_board': final, 'gate': gate}
+    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
 
 def default_first_nets(pipe):
     summ = pipe.tool_board_summary()
@@ -433,4 +441,4 @@ def _run_auto_once(cfg, pipe, log):
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))
-    return {'final_board': final, 'gate': gate}
+    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}

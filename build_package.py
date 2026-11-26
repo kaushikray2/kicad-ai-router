@@ -98,7 +98,7 @@ def main():
     pkg_src = os.path.join(HERE, 'ai_router')
     files = ['__init__.py', 'ai_router_plugin.py', 'dialog.py', 'config.py', 'llm_client.py',
              'orchestrator.py', 'pipeline.py', 'worker.py', 'backend_client.py', 'icon.png',
-             'naming.py', 'ui_model.py', 'board_facts.py']  # v1.12 (#167/#168): the dialog's new modules -- CI asserts every ai_router/*.py ships in the zip
+             'naming.py', 'ui_model.py', 'board_facts.py', 'engine_run.py']  # v1.12 (#167/#168) + v1.12.2 (#170): every ai_router/*.py ships in the zip (CI asserts it)
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('metadata.json', json.dumps(METADATA, indent=2))
         z.writestr('plugins/__init__.py', PCM_ENTRYPOINT)

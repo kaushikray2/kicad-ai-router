@@ -59,6 +59,13 @@ except Exception:
     except Exception:
         _CFG_DEFAULTS = {}
 
+# v1.12.2 (#170): the Phase 2 engine run contracts (pure helpers:
+# route flags, exit-code mapping, stopped_by, why_open lines).
+try:
+    from . import engine_run
+except Exception:
+    import engine_run
+
 def resolve_ban_names(raw, aliases):
     # v1.10.1 (#49): the ONE layer-law resolution point. raw config
     # names (canonical, board-specific, any case) -> canonical names
@@ -226,6 +233,12 @@ class Pipeline:
             shutil.copy(dru, os.path.join(self.workdir, 'input.kicad_dru'))
         self._gseq = 0   # v1.8.2 (#15): unique gate report names
         self._oseq = 0   # v1.8.2 (#14): unique step output names
+        if cfg.get('route_open_only') and cfg.get('strip_existing', True):
+            # v1.12.2 (#171): Finish-this-board routes only what is
+            # open and never touches existing copper -- stripping
+            # first would delete the copper the mode exists to keep.
+            cfg['strip_existing'] = False
+            self.log('route_open_only: strip_existing forced off (existing copper is kept)')
         if cfg.get('strip_existing', True):
             self.base = os.path.join(self.workdir, 'base.kicad_pcb')
             r = self._worker('strip', '--board', src_copy, '--out', self.base)
@@ -329,10 +342,16 @@ class Pipeline:
             cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(inp)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += ['--work', str(work or self.cfg.get('work', 20000000)), '--time', '3600']
+        cmdline += engine_run.route_flags(self.cfg, work or self.cfg.get('work', 20000000))  # v1.12.2 (#170/#171)
         with open(log_path, 'w') as lf:
             p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=3900)
         if not os.path.exists(outp):
+            _err = engine_run.engine_error(p.returncode, None)
+            if _err:
+                _tail = ''
+                try: _tail = open(log_path).read().strip().splitlines()[-1][:200]
+                except Exception: pass
+                raise PipelineError('%s: %s (see %s)' % (_err, _tail, log_path))
             raise PipelineError('TraceMaker produced no board (see %s)' % log_path)
         try:
             self._worker('refill', '--board', outp, '--out', outp)  # zone fills must track the new layout before this board is saved/used
@@ -348,6 +367,7 @@ class Pipeline:
         unrouted = []
         routed = (None, None)
         stuck = {'unrouted': [], 'by_reason': []}
+        rj = {}
         try:
             rj = json.load(open(os.path.join(self.workdir, 'route%d.json' % self.pass_no)))
             routed = (rj.get('routed'), rj.get('connections'))
@@ -383,6 +403,24 @@ class Pipeline:
         self.last_route = {'pass': self.pass_no, 'routed': routed, 'unrouted': unrouted, 'board': outp,
                            'stuck_unrouted': len(stuck['unrouted']), 'by_reason': stuck['by_reason'],
                            'route_stats': stuck.get('route'), 'cuts': stuck.get('cuts')} 
+        # v1.12.2 (#170): the structured contract -- the exit code,
+        # stopped_by and why_open come from the route JSON / process
+        # return code, not from log inference. rc 1/2 aborts the
+        # pass with the engine's message; rc 3 is a normal partial.
+        _err = engine_run.engine_error(p.returncode, rj)
+        if _err:
+            _tail = ''
+            try: _tail = text.strip().splitlines()[-1][:200]
+            except Exception: pass
+            raise PipelineError('%s: %s (see %s)' % (_err, _tail, log_path))
+        self.last_route['exit_code'] = rj.get('exit_code', p.returncode)
+        self.last_route['stopped_by'] = rj.get('stopped_by')
+        self.last_route['route_open_only'] = bool(rj.get('route_open_only'))
+        self.last_route['open_at_start'] = rj.get('open_at_start')
+        if rj.get('stopped_by'):
+            self.log('Pass %d: engine stopped: %s' % (self.pass_no, engine_run.stopped_by_text(rj.get('stopped_by'))))
+        for _line in engine_run.why_open_lines(rj):
+            self.log(_line)
         self._record('route', self.last_route)
         self.log('Pass %d: routed %s/%s connections; %d unrouted' % (self.pass_no, routed[0], routed[1], len(unrouted)))
         return self.last_route
@@ -469,7 +507,7 @@ class Pipeline:
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.base)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
+        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 20000000), 1800)  # v1.12.2 (#170/#171)
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
             _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=2400).returncode
@@ -765,7 +803,7 @@ class Pipeline:
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.current)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
+        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 20000000), 1800, open_only=False)  # v1.12.2 (#170/#171): --route-open-only does not apply to a --reroute call
         log_path = os.path.join(self.workdir, 'tm-rw-%d.log' % self._oseq)
         try:
             with open(log_path, 'w') as lf:
