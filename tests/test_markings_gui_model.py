@@ -266,3 +266,18 @@ def test_power_load_modes_roundtrip():
     m = mm.MarkingsEditorModel({}, copy.deepcopy(INDEX))
     m.add_entry('power', mm.power_entry(mm.power_form(p)))
     assert m.entries('power')[0]['loads']['U1']['modes'] == ['TX', 'RX']
+
+
+def test_pending_edits_state_machine():
+    # #205: the editor dialog snapshots the shown form's dict;
+    # edits are pending until an Apply re-snapshots.
+    p = mm.PendingEdits()
+    assert not p.pending({'a': 1})            # nothing shown yet
+    p.shown({'a': 1})
+    assert not p.pending({'a': 1})            # unchanged
+    assert p.pending({'a': 2})                # edited, un-applied
+    p.shown({'a': 2})                         # applied -> re-snapshot
+    assert not p.pending({'a': 2})
+    assert p.pending({'a': 3})
+    p.cleared()                               # form gone / discarded
+    assert not p.pending({'a': 3})
