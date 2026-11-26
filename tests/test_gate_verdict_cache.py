@@ -123,9 +123,41 @@ def test_state_change_forces_fresh_measure():
     pipe.tool_gate(step)
     assert calls['drc'] == 5, calls
 
+
+def test_sidecar_change_forces_fresh_measure():
+    # #207: the DRC verdict is read against the sibling .kicad_pro
+    # (netclasses) and .kicad_dru (custom rules) that _sidecars
+    # places beside the board -- their bytes belong in the key.
+    # The stubbed measurement plays kicad-cli: it derives its
+    # verdict from the siblings beside the board it is handed.
+    pipe, calls = _bare_pipe({'no_tracks_on': 'In1.Cu'})
+    def measure(board):
+        calls['drc'] += 1
+        stem = os.path.splitext(board)[0]
+        pro = open(stem + '.kicad_pro').read() if os.path.exists(stem + '.kicad_pro') else ''
+        dru = open(stem + '.kicad_dru').read() if os.path.exists(stem + '.kicad_dru') else ''
+        total = 5 + (4 if 'WIDE' in pro else 0) + (2 if 'STRICT' in dru else 0)
+        return (total, 2, {'starved_thermal': 3}, 0, [])
+    pipe._drc_measure = measure
+    pro = os.path.join(pipe.workdir, 'input.kicad_pro')
+    open(pro, 'w').write('netclass A')
+    g1 = pipe.tool_gate()
+    assert g1['violations_total'] == 5 and calls['drc'] == 1, (g1, calls)
+    g2 = pipe.tool_gate()
+    assert g2.get('cached') is True and calls['drc'] == 1, (g2, calls)  # unchanged sidecars: served
+    open(pro, 'w').write('netclass WIDE')  # ONLY the .kicad_pro changes; board bytes identical
+    g3 = pipe.tool_gate()
+    assert calls['drc'] == 2 and not g3.get('cached'), (calls, g3.get('cached'))
+    assert g3['violations_total'] == 9, g3
+    open(os.path.join(pipe.workdir, 'input.kicad_dru'), 'w').write('STRICT rules')
+    g4 = pipe.tool_gate()
+    assert calls['drc'] == 3 and not g4.get('cached'), (calls, g4.get('cached'))
+    assert g4['violations_total'] == 11, g4
+
 if __name__ == '__main__':
     test_repeat_gate_of_identical_bytes_measures_once()
     test_mutated_board_is_regated()
     test_same_bytes_other_path_served_with_its_own_board_field()
     test_state_change_forces_fresh_measure()
+    test_sidecar_change_forces_fresh_measure()
     print('gate verdict cache OK')

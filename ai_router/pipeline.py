@@ -856,6 +856,21 @@ class Pipeline:
         # (_locks_protected True -> False), so the flag is in the
         # key too: a verdict measured against the protected base is
         # never served for the delivered board, or vice versa.
+        # Round 7 (#207): the verdict is read by kicad-cli against
+        # the sibling .kicad_pro (netclasses) and .kicad_dru
+        # (custom rules) -- _sidecars() has just placed the run's
+        # copies beside this board (tool_gate calls it before
+        # keying), so fingerprint the files the DRC will actually
+        # read. A sibling change under identical board bytes must
+        # never be served the pre-change verdict.
+        _sidefp = []
+        _stem = os.path.splitext(board)[0]
+        for _ext in ('.kicad_pro', '.kicad_dru'):
+            try:
+                with open(_stem + _ext, 'rb') as _f:
+                    _sidefp.append(hashlib.sha256(_f.read()).hexdigest())
+            except Exception:
+                _sidefp.append(None)
         try:
             _cfgfp = hashlib.sha256(json.dumps(self.cfg, sort_keys=True, default=str).encode()).hexdigest()
         except Exception:
@@ -864,7 +879,7 @@ class Pipeline:
             _refs = 'self'
         else:
             _refs = (getattr(self, '_base_starved', None), getattr(self, '_base_banned', None))
-        return (sha, _cfgfp, _refs, bool(getattr(self, '_locks_protected', False)))
+        return (sha, _cfgfp, _refs, bool(getattr(self, '_locks_protected', False)), tuple(_sidefp))
 
     def tool_gate(self, board=None):
         board = board or self.current
