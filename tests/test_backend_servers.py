@@ -175,6 +175,24 @@ def test_on_server_pick_defers_the_field_writes():
     assert 'evt.Skip()' in body
 
 
+def test_pick_folds_the_outgoing_token_and_remove_btn_is_guarded():
+    # #211: (a)+(b) a pick folds the token field into the entry
+    # the fields represented until now (sync_server_token ran
+    # only in collect_cfg, so an unsaved edit was dropped, and a
+    # custom token lingered into a preset pick); preset picks
+    # restore the non-custom token via a deferred apply. (c)
+    # _refresh_remove_btn carries the _running guard its sibling
+    # refresh helpers carry.
+    src = open(os.path.join(os.path.dirname(__file__), '..', 'ai_router', 'dialog.py')).read()
+    pick = src.split('def _on_server_pick(self, evt):')[1].split('\n    def ')[0]
+    assert 'sync_server_token' in pick, pick
+    assert 'wx.CallAfter(self._apply_preset_pick)' in pick, pick
+    assert 'def _apply_preset_pick(self):' in src
+    assert '_preset_token' in src and '_sel_entry' in src
+    rrb = src.split('def _refresh_remove_btn(self):')[1].split('\n    def ')[0]
+    assert 'not self._running' in rrb, rrb
+
+
 if __name__ == '__main__':
     fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for fn in fns:

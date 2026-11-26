@@ -133,6 +133,8 @@ class RouterDialog(wx.Dialog):
         self.cfg = cfgmod.load()
         self.custom_servers = ui_model.sanitize_servers(self.cfg.get('backend_servers'))
         self._combo_entries = []
+        self._sel_entry = None    # #211: the custom entry the URL/token fields currently represent
+        self._preset_token = ''   # #211: the token of a non-custom selection (never a custom server's)
         self.cancel_event = threading.Event()
         self.worker_thread = None
         self.result = None
@@ -526,6 +528,8 @@ class RouterDialog(wx.Dialog):
         self._on_where()
         self.backend_url_ctrl.SetValue(cfg.get('backend_url', 'http://127.0.0.1:8731'))
         self.backend_tok_ctrl.SetValue(cfg.get('backend_token', ''))
+        self._sel_entry = ui_model.find_server(self.custom_servers, cfg.get('backend_url', ''))  # #211
+        self._preset_token = cfg.get('backend_token', '') if self._sel_entry is None else ''
         self._refresh_remove_btn()
         self.adv_finish_signal.SetValue(int(cfg.get('finish_signal_cap', 8)))
         self.adv_finish_pour.SetValue(int(cfg.get('finish_pour_cap', 4)))
@@ -667,7 +671,7 @@ class RouterDialog(wx.Dialog):
         self.backend_url_ctrl = wx.ComboBox(panel)
         self._refresh_server_combo()
         self.backend_url_ctrl.Bind(wx.EVT_COMBOBOX, self._on_server_pick)
-        self.backend_url_ctrl.Bind(wx.EVT_TEXT, lambda e: self._refresh_remove_btn())
+        self.backend_url_ctrl.Bind(wx.EVT_TEXT, self._on_url_text)
         self.test_btn = wx.Button(panel, label='Test connection')
         self.test_btn.Bind(wx.EVT_BUTTON, self.on_test)
         brow.Add(self.backend_url_ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
@@ -756,14 +760,33 @@ class RouterDialog(wx.Dialog):
         # selection is by URL, however the URL got into the field.
         return ui_model.find_server(self.custom_servers, self.backend_url_ctrl.GetValue())
 
+    def _on_url_text(self, _evt=None):
+        # #211: keep _sel_entry honest as the URL field changes --
+        # typing a custom server's URL makes that entry the one
+        # the fields represent; anything else represents none.
+        self._sel_entry = ui_model.find_server(self.custom_servers, self.backend_url_ctrl.GetValue().strip())
+        self._refresh_remove_btn()
+
     def _refresh_remove_btn(self):
         btn = getattr(self, 'remove_server_btn', None)
         if btn is not None:
-            btn.Enable(self.run_backend_rb.GetValue() and self._selected_custom_server() is not None)
+            btn.Enable(not self._running and self.run_backend_rb.GetValue() and self._selected_custom_server() is not None)
 
     def _on_server_pick(self, evt):
         idx = evt.GetSelection()
         entry = self._combo_entries[idx] if 0 <= idx < len(self._combo_entries) else None
+        # #211: fold the token field back into the entry the fields
+        # represented until now BEFORE the pick overwrites it --
+        # sync_server_token otherwise runs only in collect_cfg, so
+        # an unsaved token edit was silently dropped here. When a
+        # custom pick leaves a non-custom selection behind, stash
+        # its token so a later preset pick restores it instead of
+        # inheriting the custom server's token.
+        if self._sel_entry is not None:
+            self.custom_servers = ui_model.sync_server_token(self.custom_servers, self._sel_entry['url'],
+                                                             self.backend_tok_ctrl.GetValue())
+        elif entry is not None:
+            self._preset_token = self.backend_tok_ctrl.GetValue()
         if entry is not None:
             # #209: on wxMSW the native combo copies the selected
             # label (here the server NAME) into the text field
@@ -773,9 +796,9 @@ class RouterDialog(wx.Dialog):
             wx.CallAfter(self._apply_server_pick, entry)
         else:
             # Preset pick: the label IS the URL, so the native
-            # copy on Skip is the desired value.
-            self._refresh_remove_btn()
-            self._on_settings_changed()
+            # copy on Skip is the desired value; the token restore
+            # rides the same deferral (#211).
+            wx.CallAfter(self._apply_preset_pick)
             evt.Skip()
 
     def _apply_server_pick(self, entry):
@@ -785,6 +808,17 @@ class RouterDialog(wx.Dialog):
             return
         self.backend_url_ctrl.SetValue(entry['url'])
         self.backend_tok_ctrl.SetValue(entry.get('token', ''))
+        self._sel_entry = entry
+        self._refresh_remove_btn()
+        self._on_settings_changed()
+
+    def _apply_preset_pick(self):
+        # Deferred half of a preset _on_server_pick (#211): the
+        # token field shows the non-custom selection's own token,
+        # never the custom server's token that may have sat in
+        # the field from the previous selection.
+        self.backend_tok_ctrl.SetValue(self._preset_token)
+        self._sel_entry = None
         self._refresh_remove_btn()
         self._on_settings_changed()
 
@@ -792,10 +826,19 @@ class RouterDialog(wx.Dialog):
         dlg = AddServerDialog(self, BACKEND_PRESETS, self.custom_servers)
         try:
             if dlg.ShowModal() == wx.ID_OK and dlg.entry is not None:
+                # #211: same fold-in as a pick -- an unsaved token
+                # edit belongs to the entry being left; a
+                # non-custom token is stashed, not carried over.
+                if self._sel_entry is not None:
+                    self.custom_servers = ui_model.sync_server_token(self.custom_servers, self._sel_entry['url'],
+                                                                     self.backend_tok_ctrl.GetValue())
+                else:
+                    self._preset_token = self.backend_tok_ctrl.GetValue()
                 self.custom_servers = ui_model.add_server(self.custom_servers, dlg.entry)
                 self._refresh_server_combo()
                 self.backend_url_ctrl.SetValue(dlg.entry['url'])
                 self.backend_tok_ctrl.SetValue(dlg.entry.get('token', ''))
+                self._sel_entry = ui_model.find_server(self.custom_servers, dlg.entry['url'])
                 self._refresh_remove_btn()
                 self.collect_cfg()  # persist now, the on_page precedent
                 self.test_label.SetLabel('Added backend server %s.' % dlg.entry['name'])
@@ -812,8 +855,11 @@ class RouterDialog(wx.Dialog):
         self.custom_servers = ui_model.remove_server(self.custom_servers, entry['url'])
         self._refresh_server_combo()
         self.backend_url_ctrl.SetValue(BACKEND_PRESETS[0])
-        if self.backend_tok_ctrl.GetValue() == entry.get('token', ''):
-            self.backend_tok_ctrl.SetValue('')
+        # #211: the selection falls back to a preset -- the field
+        # takes the stashed non-custom token, never the removed
+        # server's (an unsaved edit of it must not leak either).
+        self.backend_tok_ctrl.SetValue(self._preset_token)
+        self._sel_entry = None
         self._refresh_remove_btn()
         self.collect_cfg()  # persist now, the on_page precedent
 
