@@ -1,3 +1,22 @@
+# Copyright (C) 2026 SiliconBrane Inc.
+#
+# This file is part of KiCad AI Router.
+#
+# KiCad AI Router is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# KiCad AI Router is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with KiCad AI Router. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Issue #50: cmd_lock_window must record EVERY item's lock state and
 cmd_restore_locks must reapply them -- the delivered board must not
 keep the window pass's locks. Regression test for the v1.10.1 first
@@ -8,7 +27,11 @@ m_Uuid.AsString().
 Run: python3 tests/test_lock_roundtrip.py  (needs pcbnew)"""
 import importlib.machinery, importlib.util, json, os, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ai_router'))
-import pcbnew
+try:
+    import pcbnew
+except ImportError:
+    import pytest
+    pcbnew = pytest.importorskip('pcbnew')  # v1.11.5 (#122): report a skip, not a collection error, outside KiCad
 ld = importlib.machinery.SourceFileLoader('w', os.path.join(os.path.dirname(__file__), '..', 'ai_router', 'worker.py'))
 sp = importlib.util.spec_from_loader('w', ld); w = importlib.util.module_from_spec(sp); sp.loader.exec_module(w)
 

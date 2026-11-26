@@ -7,6 +7,10 @@
       "email": "ray@siliconbrane.com"
     }
   },
-  "url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo",
-  "kicad_version": "10.0"
+  "packages": {
+    "url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/packages.json",
+    "sha256": "77d80e179a4efb43df364f57ef12209e690716e8d4dafcd9036485c356bfc84b",
+    "update_timestamp": 1795719873,
+    "update_time_utc": "2026-11-26 19:04:33"
+  }
 }

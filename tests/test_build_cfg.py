@@ -1,3 +1,22 @@
+# Copyright (C) 2026 SiliconBrane Inc.
+#
+# This file is part of KiCad AI Router.
+#
+# KiCad AI Router is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# KiCad AI Router is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with KiCad AI Router. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """N1/#43 + N14/#56: backend job config is built from the plugin
 DEFAULTS (single source), with defensive parsing and the engine
 whitelist. Pure python."""
@@ -21,4 +40,54 @@ def test_engine_whitelist_dedupe_cap():
 
 def test_non_numeric_does_not_crash():
     cfg = run_job.build_cfg({'max_passes': 'lots', 'work': 'plenty'}, {}, '/tm')
-    assert cfg['max_passes'] == 4 and cfg['work'] == 20000000
+    assert cfg['max_passes'] == 4 and cfg['work'] == 40000000
+
+def test_unlisted_defaults_keys_forward():
+    # #74: keys with no explicit mapping in build_cfg were silently
+    # dropped (cfg already held every DEFAULTS key, so main()'s
+    # 'not in cfg' forwarding loop could never fire).
+    rt = {'reroute_window_cap': 4, 'reroute_accept': 'faults',
+          'reroute_margin': 9.0, 'pass_advice': 'priority',
+          'advice_regions': True, 'max_tool_calls': 99}
+    cfg = run_job.build_cfg(rt, {}, '/tm')
+    assert cfg['reroute_window_cap'] == 4, cfg['reroute_window_cap']
+    assert cfg['reroute_accept'] == 'faults', cfg['reroute_accept']
+    assert cfg['reroute_margin'] == 9.0, cfg['reroute_margin']
+    assert cfg['pass_advice'] == 'priority', cfg['pass_advice']
+    assert cfg['advice_regions'] is True, cfg['advice_regions']
+    assert cfg['max_tool_calls'] == 99, cfg['max_tool_calls']
+
+def test_server_owned_keys_not_overridable():
+    cfg = run_job.build_cfg({'endpoint': 'http://evil', 'api_key': 'x'},
+                            {'endpoint': 'http://llm', 'api_key': 'k'}, '/tm')
+    assert cfg['endpoint'] == 'http://llm' and cfg['api_key'] == 'k'
+
+
+def test_phase2_actions_forward_and_default_off():
+    # v1.12.2 (#171): the two new run actions ride the same contract
+    # as strip_existing -- an explicit bool mapping in build_cfg, so
+    # the dialog's overrides reach the job and the defaults are off.
+    cfg = run_job.build_cfg({'deterministic': True, 'route_open_only': True}, {}, '/tm')
+    assert cfg['deterministic'] is True and cfg['route_open_only'] is True
+    cfg = run_job.build_cfg({}, {}, '/tm')
+    assert cfg['deterministic'] is False and cfg['route_open_only'] is False
+    cfg = run_job.build_cfg({'deterministic': 'yes'}, {}, '/tm')
+    assert cfg['deterministic'] is True     # bool() coercion, like strip_existing
+
+
+def test_llm_mode_forces_deterministic_off():
+    # #185: a saved mode=llm + deterministic=True pair (the dialog
+    # leak, or the config page before its guard) must never reach
+    # a run -- Reproducible is an Auto-mode property.
+    cfg = run_job.build_cfg({'mode': 'llm', 'deterministic': True}, {}, '/tm')
+    assert cfg['deterministic'] is False, cfg['deterministic']
+    cfg = run_job.build_cfg({'mode': 'auto', 'deterministic': True}, {}, '/tm')
+    assert cfg['deterministic'] is True
+    cfg = run_job.build_cfg({'mode': 'llm'}, {}, '/tm')
+    assert cfg['deterministic'] is False
+
+
+def test_phase2_actions_in_server_config_whitelist():
+    server = open(os.path.join(os.path.dirname(__file__), '..', 'docker', 'server.py')).read()
+    line = [l for l in server.splitlines() if l.strip().startswith('for k in (')][0]
+    assert "'deterministic'" in line and "'route_open_only'" in line

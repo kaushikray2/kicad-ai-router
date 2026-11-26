@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 SiliconBrane Inc.
+#
+# This file is part of KiCad AI Router.
+#
+# KiCad AI Router is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# KiCad AI Router is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with KiCad AI Router. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """AI Router backend service: job API + config web page + TraceMaker manager.
 Stdlib only. Data dir (env AIR_DATA_DIR, default /data):
   config/config.json  tracemaker/<ver>/...  runs/<jobid>/  selftest/baselines.json
@@ -8,13 +27,24 @@ import tarfile, threading, time, urllib.request, uuid, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-BACKEND_VERSION = '1.10.2'
+BACKEND_VERSION = '1.12.3'
 SCHEMA_VERSION = 1
 DATA = os.environ.get('AIR_DATA_DIR', '/data')
 PORT = int(os.environ.get('AIR_PORT', '8731'))
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_BODY = 200 * 1024 * 1024  # stated cap: whole-board uploads, LAN v1
 _lock = threading.Lock()
+
+_KC_VERSION = None
+def _kicad_cli_version():
+    # v1.11.5 (#126, also L12): /health used to shell out to
+    # kicad-cli --version on EVERY request. Probe once, cache for
+    # the process lifetime (warmed at startup in main()).
+    global _KC_VERSION
+    if _KC_VERSION is None:
+        try: _KC_VERSION = subprocess.run(['kicad-cli', '--version'], capture_output=True, text=True, timeout=30).stdout.strip()
+        except Exception: _KC_VERSION = ''
+    return _KC_VERSION
 
 def _atomic_write(path, data_bytes):
     tmp = path + '.tmp-%d' % os.getpid()
@@ -28,7 +58,7 @@ def default_config():
             'auth_token': secrets.token_hex(24),
             'allowed_hosts': [],
             'llm': {'endpoint': 'http://127.0.0.1:8080/v1', 'model': 'local-model', 'api_key': ''},
-            'routing': {'mode': 'auto', 'max_passes': 4, 'work': 20000000,
+            'routing': {'mode': 'auto', 'max_passes': 4, 'work': 40000000,
                         'no_tracks_on': 'In1.Cu', 'strip_existing': True},
             'max_concurrent_jobs': 1,
             'selftest_tolerance': {'unconnected': 2, 'split_nets': 0},
@@ -50,6 +80,17 @@ def load_config():
             if k not in cfg: cfg[k] = v
         cfg['schema_version'] = SCHEMA_VERSION
         save_config(cfg)
+    # (#196): #180 recalibrated the default work budget 20M ->
+    # 40M in default_config, but a config persisted by a pre-#180
+    # server carries the old default inside its routing dict and
+    # the schema migration above only fills MISSING top-level
+    # keys -- upgraded backends kept starving Nomad-class boards.
+    # Migrate the exact old default value only; any other
+    # operator-set value is untouched.
+    _routing = cfg.get('routing')
+    if isinstance(_routing, dict) and _routing.get('work') == 20000000:
+        _routing['work'] = 40000000
+        save_config(cfg)
     return cfg
 
 def save_config(cfg):
@@ -65,6 +106,62 @@ def local_ips():
 
 # ------------------------------------------------------------- tracemaker
 def tm_root(): return os.path.join(DATA, 'tracemaker')
+
+def tm_selected_sha256(cfg):
+    # v1.12.2 (#170): the installed engine archive's sha256 for the
+    # selected version -- the version STRING stays 0.12.1 across
+    # engine generations, so the hash (and PROVENANCE.txt below)
+    # is what identifies the actual engine build.
+    sel = cfg.get('tracemaker', {}).get('selected_version', '')
+    return (cfg.get('tracemaker', {}).get('sha256', {}) or {}).get(sel, '')
+
+def tm_pinned_sha():
+    # v1.12.2 (#173): the Dockerfile-pinned engine archive sha256.
+    # The adopted build still reports the "0.12.1" version string,
+    # so the pin is the ARCHIVE HASH: the one build the image
+    # trusts by construction, installable in-band even when a
+    # different build of the same version is already recorded.
+    return os.environ.get('TRACEMAKER_PINNED_SHA256', '').strip().lower()
+
+def tm_pinned_install_missing(cfg):
+    # True when a pinned build is configured but no installed
+    # version's recorded archive sha matches it -- the bootstrap
+    # must (re)install in that state, not only on an empty volume:
+    # an existing volume can hold a DIFFERENT build that merely
+    # reports the same version string.
+    pin = tm_pinned_sha()
+    if not pin: return False
+    known = (cfg.get('tracemaker') or {}).get('sha256') or {}
+    # (#192): over the hashes of ACTUALLY INSTALLED versions --
+    # the recorded map alone reads a deleted install dir (with
+    # another version still present) as 'installed' forever.
+    return pin not in {known.get(v) for v in tm_versions()}
+
+def tm_bootstrap_url(cfg):
+    # (#192): when the PINNED install is missing, the deployment's
+    # TRACEMAKER_URL is the release's intent and wins over the URL
+    # the previous release stored -- the stored-first order
+    # re-downloaded the old engine on every restart of an upgraded
+    # volume (its recorded sha still matched, so TOFU passed) and
+    # the pinned build was never installed. With no pin missing,
+    # the stored URL (an operator's config-page choice) stays
+    # authoritative.
+    if tm_pinned_install_missing(cfg):
+        return os.environ.get('TRACEMAKER_URL', '') or cfg.get('tracemaker', {}).get('url', '')
+    return cfg.get('tracemaker', {}).get('url', '') or os.environ.get('TRACEMAKER_URL', '')
+
+def tm_provenance_for(version):
+    if not version: return ''
+    try:
+        with open(os.path.join(DATA, 'tracemaker', version, 'PROVENANCE.txt')) as f:
+            return f.read().strip()[:400]
+    except Exception:
+        return ''
+
+def tm_provenance(cfg):
+    # v1.12.2 (#170): the engine tree's PROVENANCE.txt (repo / tag /
+    # commit lines), when the installed archive carried one.
+    return tm_provenance_for(cfg.get('tracemaker', {}).get('selected_version', ''))
 
 def tm_versions():
     out = []
@@ -159,17 +256,25 @@ def tm_update(url):
         # refused here, untouched.
         ver_hint = tm_archive_version(tmp)
         if not ver_hint: raise RuntimeError('archive layout names no TraceMaker version -- refused (TOFU: the version must be readable from the layout, without executing the archive)')  # v1.10.1 (#44)
+        # v1.12.2 (#173): the Dockerfile-pinned archive is trusted by
+        # construction -- a pinned build that shares a version string
+        # with the recorded build REPLACES it (the recorded sha is
+        # migrated below); every other mismatch stays refused.
+        _pinned = bool(tm_pinned_sha()) and sha == tm_pinned_sha()
         known0 = (load_config().get('tracemaker') or {}).get('sha256') or {}
-        if ver_hint and ver_hint in known0 and known0[ver_hint] != sha:
+        if ver_hint and ver_hint in known0 and known0[ver_hint] != sha and not _pinned:
             raise RuntimeError('TOFU mismatch for %s: recorded %s, downloaded %s -- refused before install' % (ver_hint, known0[ver_hint][:12], sha[:12]))
         version = tm_install_from_archive(tmp, sha, ver_hint)
         with _lock:
             cfg = load_config()
             known = cfg.setdefault('tracemaker', {}).setdefault('sha256', {})
-            if version in known and known[version] != sha:
+            if version in known and known[version] != sha and not _pinned:
                 raise RuntimeError('TOFU mismatch for %s: recorded %s, downloaded %s' % (version, known[version][:12], sha[:12]))
             known[version] = sha
-            if not cfg['tracemaker'].get('selected_version'): cfg['tracemaker']['selected_version'] = version
+            # (#192): a pinned install is the image's chosen engine
+            # -- select it even when an older version is currently
+            # selected, or the server keeps running the old tree.
+            if _pinned or not cfg['tracemaker'].get('selected_version'): cfg['tracemaker']['selected_version'] = version
             cfg['tracemaker']['url'] = url
             save_config(cfg)
         return {'version': version, 'sha256': sha}
@@ -289,7 +394,7 @@ def selftest_status():
         row = {'board': b, 'baseline': base.get(b), 'last': None, 'verdict': 'NO BASELINE' if b not in base else 'NOT RUN'}
         if b in last:
             g = (last[b].get('gate') or {})
-            cur = {'unconnected_total': g.get('unconnected_total'), 'split_nets': len(g.get('split_nets') or []), 'banned_layer_tracks': g.get('banned_layer_tracks'), 'copper_violations': g.get('copper_violations')}  # v1.9 (M11): copper joins the recorded baseline
+            cur = {'unconnected_total': g.get('unconnected_total'), 'split_nets': len(g.get('split_nets') or []), 'banned_layer_tracks': g.get('banned_layer_tracks'), 'banned_layer_tracks_delta': g.get('banned_layer_tracks_delta'), 'copper_violations': g.get('copper_violations')}  # v1.9 (M11): copper joins the recorded baseline; (#196): the #175 delta joins it
             row['last'] = cur
             try:  # v1.10.1 (#43): flag self-test jobs whose recorded cfg_effective lacks the shipped defaults (pre-v1.10.1 backends ran self-tests without the engine portfolio)
                 _sj = json.load(open(os.path.join(DATA, 'runs', last[b]['id'], 'status.json')))
@@ -325,7 +430,7 @@ def selftest_status():
                                             and cur['unconnected_total'] <= base[b]['unconnected_total'] + tu
                                             and cur['split_nets'] <= base[b]['split_nets'] + ts
                                             and copper_ok
-                                            and not (cur['banned_layer_tracks'] or 0)) else 'DRIFT'
+                                            and not ((cur['banned_layer_tracks_delta'] if cur['banned_layer_tracks_delta'] is not None else cur['banned_layer_tracks']) or 0)) else 'DRIFT'  # (#196): #175 semantics -- pre-existing banned-layer tracks on the input are not drift; records written before the delta existed fall back to the raw count
         out.append(row)
     return out
 
@@ -383,12 +488,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == '/health':
                 if not self._guard(need_auth=False): return
-                kc = subprocess.run(['kicad-cli', '--version'], capture_output=True, text=True, timeout=30).stdout.strip()
+                kc = _kicad_cli_version()
                 cfg = self._cfg()
                 self._send(200, {'ok': True, 'backend_version': BACKEND_VERSION, 'kicad_cli': kc,
                                  'schema_version': SCHEMA_VERSION,
                                  'tracemaker_versions': tm_versions(),
                                  'tracemaker_selected': cfg.get('tracemaker', {}).get('selected_version', ''),
+                                 'tracemaker_selected_sha256': tm_selected_sha256(cfg),
+                                 'tracemaker_provenance': tm_provenance(cfg),
                                  'queue_depth': _job_queue.qsize(),
                                  'jobs_running': sum(1 for r in _jobs_snapshot() if r.get('status') == 'running')})
                 return
@@ -407,7 +514,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/tracemaker':
                 cfg = self._cfg(); tm = cfg.get('tracemaker', {})
                 self._send(200, {'installed': [{'version': v, 'sha256': (tm.get('sha256') or {}).get(v, ''),
+                                                'provenance': tm_provenance_for(v),
                                                 'selected': v == tm.get('selected_version')} for v in tm_versions()],
+                                 'pinned_sha256': tm_pinned_sha(),
                                  'url': tm.get('url', '')}); return
             if path == '/api/runs':
                 rows = sorted(_jobs_snapshot(), key=lambda r: r.get('created', ''), reverse=True)
@@ -469,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
                 if llm.get('api_key'): cfg['llm']['api_key'] = llm['api_key']
                 if llm.get('clear_api_key'): cfg['llm']['api_key'] = ''
                 rt = upd.get('routing') or {}
-                for k in ('mode', 'max_passes', 'work', 'no_tracks_on', 'strip_existing', 'engine_portfolio', 'layer_law_policy', 'reroute_window_cap', 'reroute_accept', 'reroute_margin', 'pass_advice', 'advice_regions', 'first_nets_policy', 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap', 'ilp_repair_cap', 'attempt_select'):  # v1.9.6 (#40): Phase 1 keys were silently dropped
+                for k in ('mode', 'max_passes', 'work', 'no_tracks_on', 'layer_cost', 'strip_existing', 'engine_portfolio', 'layer_law_policy', 'reroute_window_cap', 'reroute_accept', 'reroute_margin', 'pass_advice', 'advice_regions', 'first_nets_policy', 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap', 'ilp_repair_cap', 'attempt_select', 'deterministic', 'route_open_only'):  # v1.9.6 (#40): Phase 1 keys were silently dropped; v1.12.2 (#171): the Phase 2 run actions
                     if k in rt: cfg['routing'][k] = rt[k]
                 if 'allowed_hosts' in upd: cfg['allowed_hosts'] = upd['allowed_hosts']
                 if 'retention' in upd: cfg['retention'] = upd['retention']
@@ -527,9 +636,14 @@ def main():
     os.makedirs(runs_root(), exist_ok=True)
     os.makedirs(os.path.join(DATA, 'selftest'), exist_ok=True)
     cfg = load_config()
+    _kicad_cli_version()  # v1.11.5 (#126): warm the /health cache at startup
     _load_existing_jobs()
-    if not tm_versions():
-        url = cfg.get('tracemaker', {}).get('url') or os.environ.get('TRACEMAKER_URL', '')
+    if not tm_versions() or tm_pinned_install_missing(cfg):
+        # v1.12.2 (#173): the second disjunct is the in-band upgrade
+        # of an existing volume -- the installed tree can hold a
+        # different build reporting the same version string as the
+        # pin, which the empty-volume test alone would keep forever.
+        url = tm_bootstrap_url(cfg)
         if url:
             try:
                 r = tm_update(url); print('TraceMaker bootstrap: installed %s' % r['version'], flush=True)

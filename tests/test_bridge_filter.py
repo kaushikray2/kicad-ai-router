@@ -1,3 +1,22 @@
+# Copyright (C) 2026 SiliconBrane Inc.
+#
+# This file is part of KiCad AI Router.
+#
+# KiCad AI Router is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# KiCad AI Router is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with KiCad AI Router. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """N5/#47: a floating SMD pad over its own net's inner plane must NOT
 be rejected by _bridge_island's 8 mm pre-filter (the old code measured
 distance to the plane's outer ring only; the pad sits 18 mm from it).
@@ -24,6 +43,7 @@ def test_pad_over_own_plane_not_filtered():
     b.Add(z)
     fp = pcbnew.FOOTPRINT(b); fp.SetPosition(pcbnew.VECTOR2I(nm(20), nm(20)))
     pad = pcbnew.PAD(fp); pad.SetShape(pcbnew.PAD_SHAPE_RECT)
+    pad.SetAttribute(pcbnew.PAD_ATTRIB_SMD); pad.SetDrillSize(pcbnew.VECTOR2I(0, 0))  # truly SMD: a default PAD carries a 0.762 PTH drill, which the corrected hole_to_hole check (#75) rightly rejects a via on top of
     pad.SetSize(pcbnew.VECTOR2I(nm(1.6), nm(1.6)))
     pad.SetPosition(pcbnew.VECTOR2I(nm(20), nm(20)))
     _ls = pcbnew.LSET(); _ls.AddLayer(pcbnew.F_Cu); pad.SetLayerSet(_ls); pad.SetNetCode(code)
@@ -33,6 +53,7 @@ def test_pad_over_own_plane_not_filtered():
     # bridging pad 1 into the plane must grow pad 1's pad set to 2.
     fp2 = pcbnew.FOOTPRINT(b); fp2.SetPosition(pcbnew.VECTOR2I(nm(30), nm(30)))
     pad2 = pcbnew.PAD(fp2); pad2.SetShape(pcbnew.PAD_SHAPE_RECT)
+    pad2.SetAttribute(pcbnew.PAD_ATTRIB_SMD); pad2.SetDrillSize(pcbnew.VECTOR2I(0, 0))
     pad2.SetSize(pcbnew.VECTOR2I(nm(1.6), nm(1.6)))
     pad2.SetPosition(pcbnew.VECTOR2I(nm(30), nm(30)))
     pad2.SetLayerSet(_ls); pad2.SetNetCode(code)

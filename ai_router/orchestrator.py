@@ -1,3 +1,22 @@
+# Copyright (C) 2026 SiliconBrane Inc.
+#
+# This file is part of KiCad AI Router.
+#
+# KiCad AI Router is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# KiCad AI Router is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with KiCad AI Router. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Orchestrator: drives the deterministic pipeline tools, either with an
 LLM (OpenAI-compatible endpoint) making the strategy decisions, or with a
 deterministic AUTO policy that encodes the same playbook as rules.
@@ -10,13 +29,16 @@ try:
 except ImportError:
     from llm_client import LLMClient, LLMError
 try:
-    from .pipeline import Pipeline, fault_count
+    from .pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta
 except ImportError:
-    from pipeline import Pipeline, fault_count
+    from pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta
 try:
-    from config import DEFAULTS as _CFG_DEFAULTS
+    from .config import DEFAULTS as _CFG_DEFAULTS
 except Exception:
-    _CFG_DEFAULTS = {}
+    try:
+        from config import DEFAULTS as _CFG_DEFAULTS
+    except Exception:
+        _CFG_DEFAULTS = {}
 
 PLAYBOOK = """You are the strategy layer of a PCB routing pipeline. Read the
 board's actual stackup from board_summary (copper_layers, pour_nets): on the
@@ -64,6 +86,8 @@ tool errors, read the error and adapt; do not retry it verbatim."""
 TOOLS = [
     {'type': 'function', 'function': {'name': 'board_summary', 'description': 'Board orientation: nets, pad counts, split nets (pads in >1 component), track/via counts.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'scorecard', 'description': 'Physics scorecard: worst decoupling caps by distance to nearest same-net pad.', 'parameters': {'type': 'object', 'properties': {}}}},
+    {'type': 'function', 'function': {'name': 'skeleton', 'description': 'Pour skeletons (#63): per-pour pad components, severed spanning-tree edges, and the reserved-corridor intrusion census of the current board.', 'parameters': {'type': 'object', 'properties': {}}}},
+    {'type': 'function', 'function': {'name': 'fix_violations', 'description': 'Repair router-added copper faults on connected nets (#155): diff DRC faults against the base board, rip the offending net within 3 mm, re-close exactly. Gate-verified; reverts if faults do not strictly drop.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'route', 'description': 'One TraceMaker pass. From the clean base unless from_current is true.', 'parameters': {'type': 'object', 'properties': {'first_nets': {'type': 'array', 'items': {'type': 'string'}}, 'work': {'type': 'integer'}, 'from_current': {'type': 'boolean'}}}}},
     {'type': 'function', 'function': {'name': 'gate', 'description': 'KiCad DRC gate with zone refill: unconnected decomposed into pour vs signal, violation classes, split nets.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'finish_leg', 'description': 'Scripted in-place finisher for one net: grid A*, single-net displacement if blocked, re-bridge of the displaced net.', 'parameters': {'type': 'object', 'properties': {'net': {'type': 'string'}}, 'required': ['net']}}},
@@ -78,6 +102,8 @@ TOOLS = [
 def _dispatch(pipe, name, args):
     if name == 'board_summary': return pipe.tool_board_summary()
     if name == 'scorecard': return pipe.tool_scorecard()
+    if name == 'skeleton': return pipe.tool_skeleton()
+    if name == 'fix_violations': return pipe.tool_fix_violations()
     if name == 'route': return pipe.tool_route(args.get('first_nets') or [], args.get('work'), bool(args.get('from_current')))
     if name == 'gate': return pipe.tool_gate()
     if name == 'finish_leg': return pipe.tool_finish_leg(args.get('net', ''))
@@ -102,6 +128,14 @@ def _cfg_int(cfg, key, default):
         return int(cfg.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def _route_info(pipe):
+    # v1.12.2 (#170): the last engine pass's structured contract,
+    # carried into the run result (the backend writes it into the
+    # job status; the dialog result keeps it too).
+    lr = getattr(pipe, 'last_route', None) or {}
+    return {k: lr.get(k) for k in ('exit_code', 'stopped_by', 'route_open_only', 'open_at_start')}
 
 
 def run_llm(cfg, pipe, log):
@@ -143,7 +177,7 @@ def run_llm(cfg, pipe, log):
         if finished: break
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): report the gate of the DELIVERED file
-    return {'final_board': final, 'gate': gate}
+    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
 
 def default_first_nets(pipe):
     summ = pipe.tool_board_summary()
@@ -171,7 +205,30 @@ def _unc_key(g):
     return 10 ** 9 if u is None else u
 
 def _final_key(g):
-    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g))
+    # v1.11.4 (#115): the same layer-cost tail as _accept_key,
+    # appended last -- this key's (unconnected, splits, faults)
+    # order is deliberate (#37) and unchanged; the tail only breaks
+    # full ties, so between two passes equal on the gate the cheaper
+    # one now wins instead of whichever came first.
+    # Merged key (P2.1b merge, 2026-11-26): the starved-thermal
+    # delta tier (#116) and the skeleton-intrusion tier (#63/#158)
+    # both price after real faults and before the cost tail --
+    # starved is a connectivity-quality signal, intrusions a
+    # policy census, so starved ranks first of the two.
+    _intr = int(g.get('skeleton_intrusions') or 0)
+    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), starved_delta(g), _intr, cost_tail(g))
+
+def _b_needs_escalation(gate):
+    # v1.12.2 (#179): B is kept only when it left NOTHING split.
+    # The original condition looked at split SIGNAL nets alone, so
+    # a B run whose only splits were POUR nets (the v1.12.2 Stage C
+    # sample-2 shape: split_pour [GND], split_signal []) never
+    # escalated -- yet a pour split is exactly what Variant A's
+    # different layer law can change. A is still kept only when
+    # the final key prefers it, so this can only add the A run,
+    # never force its result.
+    g = gate or {}
+    return bool((g.get('split_signal_nets') or []) or (g.get('split_pour_nets') or []))
 
 def _run_engineered_stages(pipe, log):
     """The engineered-nets treatment stages (#67 Step 2 and the
@@ -211,6 +268,16 @@ def run_auto(cfg, pipe, log):
     # escalating on 21 of 54 boards. An explicit non-default law or
     # layer_law_policy='off' disables it.
     _law_raw = [x.strip() for x in str(cfg.get('no_tracks_on') or 'In1.Cu').split(',') if x.strip()]  # v1.9 (M4): set compare -- the old string equality misread 'In1.Cu ' / spacing variants as a non-default law and skipped the policy
+    # v1.11 (#73): an explicit layer_cost disables the policy, the
+    # same precedent as an explicit non-default no_tracks_on -- the
+    # user has priced the layers themselves, so the run must not
+    # silently re-ban one of them as a 'variant'. An invalid spec is
+    # treated as off by the pipeline, so it does not disable
+    # anything here either.
+    _cost_pairs, _cost_err = parse_layer_cost(cfg.get('layer_cost', ''))
+    if _cost_pairs:
+        log('Layer-law policy: explicit layer_cost (%s) -- auto escalation disabled' % cfg.get('layer_cost'))
+        return _run_auto_once(cfg, pipe, log)
     _law = set(_law_raw); _summ0 = None
     if cfg.get('layer_law_policy', 'auto') == 'auto':
         # v1.10.1 (#49): resolve the law against the board's own layer
@@ -224,16 +291,22 @@ def run_auto(cfg, pipe, log):
         layers = summ.get('copper_layers') or []
         pour_layers = summ.get('pour_layers') or {}
         if len(layers) >= 4 and any('In2.Cu' in (ls or []) for ls in pour_layers.values()):
-            orig = cfg.get('no_tracks_on')
-            cfg['no_tracks_on'] = 'In1.Cu,In2.Cu'
+            # v1.12.3 (#191): Variant B runs on its OWN Pipeline,
+            # built from an explicit cfg copy -- the construction
+            # Variant A below already used. The old code switched B
+            # on by mutating the caller's cfg and reusing the pipe
+            # the caller had already constructed; since #189 the
+            # Pipeline works on a construction-time copy of cfg, so
+            # the mutation never reached it and 'Variant B' ran
+            # Variant A's law while the log claimed In2 was banned.
+            import time as _time; _time.sleep(1.1)  # pipe_b needs a distinct workdir stamp
+            cfg_b = dict(cfg); cfg_b['no_tracks_on'] = 'In1.Cu,In2.Cu'
             log('Layer-law policy: Variant B (In2 banned) first on this %d-layer pour board' % len(layers))
-            res_b = _run_auto_once(cfg, pipe, log)
-            if orig is None: cfg.pop('no_tracks_on', None)
-            else: cfg['no_tracks_on'] = orig
-            if not (res_b['gate'].get('split_signal_nets') or []):
-                log('Layer-law policy: B left no split signal nets -- keeping B')
+            res_b = _run_auto_once(cfg_b, Pipeline(cfg_b, pipe.board_path, log), log)
+            if not _b_needs_escalation(res_b['gate']):
+                log('Layer-law policy: B left no split nets -- keeping B')
                 return res_b
-            log('Layer-law policy: B left split signal nets %s -- escalating to Variant A' % res_b['gate'].get('split_signal_nets'))
+            log('Layer-law policy: B left split nets (signal %s, pour %s) -- escalating to Variant A' % (res_b['gate'].get('split_signal_nets'), res_b['gate'].get('split_pour_nets')))
             import time as _time; _time.sleep(1.1)  # pipe2 needs a distinct workdir stamp
             cfg2 = dict(cfg); cfg2['no_tracks_on'] = 'In1.Cu'
             res_a = _run_auto_once(cfg2, Pipeline(cfg2, pipe.board_path, log), log)
@@ -267,7 +340,8 @@ def _run_auto_once(cfg, pipe, log):
     best = None
     prev_sig = None
     base_gate = pipe.tool_gate(pipe.base)  # v1.9.6 (#37): the portfolio skip guard needs the base fault count
-    engines = [e.strip() for e in str(cfg.get('engine_portfolio', _CFG_DEFAULTS.get('engine_portfolio', ''))).split(',') if e.strip()]
+    # v1.11.5 (#123): the literal fallback matches config.py ('tm_relax', was '')
+    engines = [e.strip() for e in str(cfg.get('engine_portfolio', _CFG_DEFAULTS.get('engine_portfolio', 'tm_relax'))).split(',') if e.strip()]
     if engines:
         try:
             pg = pipe.tool_portfolio(engines)
@@ -277,7 +351,7 @@ def _run_auto_once(cfg, pipe, log):
         if pg is not None:
             if (pipe.last_gate or {}).get('board') != pipe.current:
                 pg = pipe.tool_gate(pipe.current)  # last_gate may hold a losing candidate's gate
-            best = ((_unc_key(pg), len(pg.get('split_nets') or []), fault_count(pg)), pipe.current)
+            best = (_final_key(pg), pipe.current)  # v1.11.4 (#115): was an inline copy of this key's shape
             gate = pg
             # v1.9.6 (#37): skip passes ONLY for a winner that is fully
             # connected (any net kind -- split_nets excludes GND, so
@@ -296,7 +370,7 @@ def _run_auto_once(cfg, pipe, log):
             break
         gate = pipe.tool_gate()
         failing = list(gate.get('split_nets') or [])
-        key = (_unc_key(gate), len(failing), fault_count(gate))
+        key = _final_key(gate)  # v1.11.4 (#115): len(failing) IS len(gate's split_nets); one key definition, no inline copies
         if best is None or key < best[0]: best = (key, pipe.current)
         if not failing:
             log('All signal nets connected after pass %d' % pno)
@@ -417,12 +491,20 @@ def _run_auto_once(cfg, pipe, log):
                 except Exception as e: log('reroute_window %s failed: %s' % (net, e))
             gate = pipe.tool_gate()
     _run_engineered_stages(pipe, log)
+    # v1.12 (#155, P2.1b): repair router-added copper faults on
+    # already-connected nets -- after reroute_window, so it also
+    # cleans up the trades that stage accepted. Gate-verified
+    # inside the tool; a no-op when the base diff finds nothing.
+    if cfg.get('fix_violations', True):
+        try: pipe.tool_fix_violations()
+        except Exception as e: log('fix_violations failed: %s' % e)
+        gate = pipe.tool_gate()
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))
-    result = {'final_board': final, 'gate': gate}
+    result = {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
     try:
-        rep = pipe.engineered_report(final)  # #67 Step 1 (branch-only)
+        rep = pipe.engineered_report(final)  # #67 Step 1
         if rep is not None:
             result['engineered_nets'] = rep
     except Exception as e:

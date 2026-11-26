@@ -11,6 +11,34 @@ gated separately. Phase 2E (below) adds the WeaveEngine-derived
 feature block, plus #63
 riding as P2.1b's first step.
 
+## Parallel lane — engineered nets (branch `engineered-nets`)
+
+Created 2026-11-24 (owner's go) off main at c9e1223. The
+engineered-nets block — P2.8, P2.9, P2.10, P2.11, P2.12 — plus
+the placement audit preprocess (#42) is implemented on this
+branch while main continues the finisher programme below. The
+lanes run concurrently; neither waits for the other. Lane rules:
+
+- The branch never reaches the production backends, their
+  ledgers, or the self-test baselines; its runs use scratch
+  backends with their own data dirs, and its A/Bs use the items'
+  own fixtures — never the 49 held-out boards.
+- **Merge gate:** the branch merges to main only after the final
+  exam has run, or at a deliberate re-scope checkpoint that
+  redefines the exam. Merging early voids the reason the branch
+  exists.
+- Rebase onto main after each finisher release; feature code
+  stays additive (new modules, stages, report sections). A
+  shared-code change a feature needs is proposed to main first
+  as its own small item.
+- One item in flight at a time, in this order: the persistence
+  decision (P2.9 Step 0 — the owner's ruling; it blocks all
+  marking), then P2.8 Step 1 (which builds the shared framework:
+  marking, the stackup reader, the report), the P2.9
+  schematic-extraction spike, then #42's materialisation layer
+  (designed once for its three consumers: itself, P2.11, P2.12),
+  then the remaining items and steps.
+
 ## Done
 
 ### Step 0 — v1.9.6 hotfix (3–5 h) — shipped 2026-11-23
@@ -64,15 +92,370 @@ mapone clean on both backends; the Nomad self-test at 0 unconnected /
 baseline now that the portfolio actually runs on backend jobs. The
 zorinbox backend container moved to a 16-CPU host the same day.
 
-## In progress
+### Off-plan — layer-cost plumbing, v1.11.0 (2026-11-24)
 
-- **P2.1b** (below) is next up, with #63 as its first step. Phase 2E
-  (below) follows P2.7a; the fair engine A/B sits inside it, per the
-  owner's sequencing.
+Issue #73: graded layer pricing joins the binary ban/free layer
+law. `layer_cost` (engine syntax, e.g. `In1.Cu=10,In2.Cu=10`) is
+plumbed to every TraceMaker invocation and priced per cell in
+the worker grids; a priced layer leaves the effective ban set,
+an explicit spec disables layer-law auto escalation, and every
+run records its effective layer policy in the ledger. Born of
+the NAS three-way comparison, whose columns ran under unmatched
+layer rules. The rerun of that column at In1.Cu=10,In2.Cu=10 on
+this build is the feature's designated first benchmark — held
+for the owner's separate authorization after the bug-review
+pass.
 
-## Remaining (in sequence)
+### Off-plan -- layer-cost review fixes, v1.11.2 (2026-11-25)
 
-### P2.1b — tool_fix_violations (12–20 h)
+A second external review cross-checked the v1.11.0 layer-cost
+shipment claim by claim; verified against f8c2502 and fixed as
+#101-#108 (gate double-summary, stitch layer-cost forwarding --
+the v1.11.0 'vias only' rationale was wrong and is corrected on
+#73, own-plane extra_layers pricing inversion, empty-ban-set
+handling across pipeline and worker, worker CLI factor guards,
+config-page layer_cost field, planner keepback parity with #75,
+dead run_job loop). One finding was verified by-design and
+dropped (run_auto's pre-resolution auto-escalation disable).
+#109 (opt-in freerouting/krt candidates ignore layer_cost and
+pay no gate penalty for priced-layer tracks) is filed and awaits
+a design ruling. The NAS rerun remains held for the owner's
+separate authorization.
+
+### Off-plan -- portfolio layer_cost exclusion, v1.11.3 (2026-11-25)
+
+#109 ruled (option 1) and fixed: while a valid layer_cost spec is
+in force, tool_portfolio excludes freerouting and krt -- they
+cannot honour the price, and priced layers carry no gate penalty
+for them -- with each exclusion logged and recorded in the
+portfolio ledger entry. Candidate sets are unchanged when
+layer_cost is off. With this, every bug from the two external
+reviews (#74-#109) is fixed; #80 closed the range on the
+engineered-nets branch as net-selective Grid enforcement (it
+carries no version of its own until the branch merges).
+
+### Off-plan -- layer cost reaches the decision sites, v1.11.4 (2026-11-25)
+
+#114 and #115 fixed: the v1.11.0 layer-cost feature priced every
+search but no keep/discard decision consulted the price.
+_accept_key and the orchestrator's _final_key now carry
+cost-weighted wirelength as a lexicographic tail (tie-break only;
+constant when uncosted, so uncosted runs are unchanged), the
+worker gate census reports per-layer track length, and every gate
+ledger record carries track_length_by_layer +
+cost_weighted_wirelength_mm (null when uncosted) -- a layer-cost
+run is now measurable from its own ledger. Basis: layer-cost
+research report candidates 1-2 (2026-11-25).
+
+### Third external review -- all main findings fixed, v1.11.5 (2026-11-25)
+
+R1-R11 (#116-#126) fixed and closed with fail-before/pass-after
+regression tests: CI workflow + pcbnew collection guards (#122),
+strip keeps locked items and free vias with a gate invariance
+census (#119), starved_thermal keyed as a base-relative delta
+(#116), fractional layer-cost factors (#121), planner hole band
+at the via pad radius (#117), curved Edge.Cuts tessellated in
+planner and checker (#118), relative-first config imports with
+reconciled fallbacks (#123), failed lock restore = failed attempt
+(#124), _run_group Windows kill fallback (#125) plus the
+subprocess NameError it exposed (#153, KRT/Freerouting legs
+silently dead since v1.10.1), PCM v2 repository.json + rebuilt
+1.11.5 package (#120), and release hygiene: backfilled tags
+v1.10.0-v1.11.4, KRT binary hash pin, non-root container +
+HEALTHCHECK, cached /health version (#126). On the
+engineered-nets branch, the three merge blockers are fixed:
+#132 (audit report-only by default), #133 (treatment key),
+#150 (PCM glob + markings sidecar round-trip). Follow-ups:
+the NAS layer-cost factor sweep (1.25/1.5/2/3) -- owner ruled
+config (a) 2026-11-25 (In1.Cu = f, In2.Cu = 1 on the NAS board),
+protocol pre-declared on #121; the sweep completed 2026-11-25
+on the scratch backend (ML350:8733) on v1.11.6 -- completion
+insensitive to the factor (16 unconnected at every f), In1 usage
+falling monotonically to zero at f = 3 (a soft ban at the top of
+the range); record: agent-runs/weaveengine-review/nas-compare/
+RESULTS-NAS-LAYERCOST-R4SWEEP-2026-11-25.md, comments on #73/#121; #138's merge-time
+remainder.
+
+### Open-bug sweep (2026-11-25)
+
+Every open issue inventoried and classified (report:
+agent-runs/audit-verify/REPORT-SWEEP-2026-11-25.md). Main side:
+the gate now REPORTS a via-on-pad census (#72 item 1 --
+centre-in-pad split same-net vs foreign-net, plus
+annulus-overlap; reported only, never in the accept key -- the
+bounded policy work in #72 items 2-3 stays programme work);
+the LLM config read is guarded against a non-numeric
+max_tool_calls (#138 main-side item); #149's factual items
+landed (D4/D5 README-vs-code corrections, D10 CHANGELOG
+structure) and the README features/results sections now carry
+the owner's supplied wording (D7/D8). Branch side: the
+round-4 branch bugs #127/#128/#129/#130/#134-#138/#140/#142-
+#148/#151/#152 fixed on engineered-nets (see the sweep
+report); #144's proven validity-flag part landed, its
+field-model stage remains open. Feature tickets verified
+implemented were closed as such: #67-#71 + #42 (branch,
+first-draft standard) and #73 (main). Addendum the same day:
+#154 -- the PCM repository add failed in KiCad 10 because
+repository.json's field shape diverged from the official
+repository (extra schema_version/url/kicad_version fields, no
+packages.update_time_utc); the generator and the served file
+are aligned (owner re-add confirmation outstanding).
+
+### Off-plan -- PCM discovery fix and repo tidy, v1.11.6 (2026-11-25)
+
+#156: the PCM zip nested the plugin at plugins/ai_router/ with
+no plugins/__init__.py, and KiCad's loader skips package
+directories without one ('Skip subdir') -- PCM installs were
+never discovered (owner hit this on Windows: package installed,
+no toolbar button after a full restart, manual import OK).
+build_package.py now writes a PCM entry point at
+plugins/__init__.py importing the bundled ai_router package;
+proven with KiCad's own pcbnew LoadPlugins on the extracted
+install layout (1.11.5 layout skipped, 1.11.6 registers),
+regression test tests/test_pcm_entrypoint.py. #157: the legacy
+pcm/ folder and superseded pcm-repo/ zips (1.7.0-1.11.5) are
+retired from the tree -- archived with a sha256 manifest
+first; build_package.py builds the canonical zip into
+pcm-repo/ (pcm/ remains, gitignored, as build output).
+README carries the verified Windows install notes (Documents
+3rdparty location, full-restart requirement, console
+diagnostic, config path, the 1.11.5 scripting/plugins
+workaround).
+
+### Off-plan -- dialog redesign + result naming, v1.12.0 (2026-11-25)
+
+#167: result boards are named <project>-<YYYYMMDD>-<HHMMSS>
+(project = the sibling .kicad_pro stem, board stem as fallback;
+generated suffixes stripped so names never compound -- the
+routed-6040g-backend-backend failure; collisions take -2, -3,
+never overwrite). Client-side in both modes: at the backend
+download point, and as a post-run copy beside the source board
+for local runs (the timestamped workdir stays as audit trail).
+Server-side names unchanged.
+
+#168: the plugin dialog is built from the open board instead of
+free text. Per-layer ban checkboxes + cost preset dropdowns are
+generated from the board's stackup (a layer name cannot be
+mistyped; a cost spec cannot be malformed; pricing un-checks the
+ban, the pipeline's own rule made structural). Smart defaults
+at open: Auto mode and an Automatic layer law banning only
+detected GND-plane layers; when the saved config differs on
+mode/law, a one-line notice offers [Use recommended] instead of
+silently inheriting a stale experiment (the mechanism behind
+the owner's 59-unconnected Nomad run). A status lamp band
+(colour + word + detail) reports IDLE (green) / RUNNING (red) /
+DONE (green, with the final gate in the detail line -- green
+never implies a clean board) / FAILED (orange-red) / CANCELLED
+(grey), driven by the existing backend poll and local worker
+lifecycle. Layer-law Automatic/Custom radio surfaces the
+auto-escalation rule; backend URL gets presets, live validation
+and a Test-connection button on the existing health() call;
+the hidden config keys (finisher caps, engine portfolio,
+pass_advice, layer_law_policy, and the LLM tool-call budget)
+live in an Advanced collapsible, and max_tool_calls now rides
+in the backend overrides so the dialog value governs backend
+LLM runs (run_job.build_cfg already forwarded it). Existing
+config.json files map losslessly (config keys and the strings
+the pipeline consumes are unchanged). GUI smoke under xvfb on
+the Nomad fixture asserts the recommended open state and the
+stale-config notice path (21 checks, screenshots in
+agent-runs/dialog-smoke/). Code only -- production backends
+stay on 1.10.2, no redeploy.
+
+### Off-plan -- SiliconBrane copyright headers (2026-11-25)
+
+Template A of the SiliconBrane Copyright Header Standard
+applied to every SiliconBrane-authored source file that lacked
+one: the ai_router package, docker/server + run_job, the tests,
+the bench/dataset scripts and the backend config page (HTML
+comment form), each carrying its git creation year (2026 for
+every file -- the repo history starts 2026-11-22). Pure comment
+insertions (diff deletions: 0), no behaviour change, no version
+bump; the shipped v1.12.0 PCM zip is unchanged -- the headers
+ride the next release.
+
+### Off-plan -- dialog display-fit fix, v1.12.1 (2026-11-25)
+
+#169: the v1.12.0 dialog opened at a fixed 800x740 while its
+content's natural size is ~950 px tall, so on 768-line displays
+the bottom of the dialog (layers group tail, Advanced, status
+lamp, Run/Cancel/Open buttons) was clipped with no way to reach
+it. The settings stack now lives in a scrolled panel; the lamp
+band, the action buttons and the log stay pinned outside the
+scroll area; the opening size is the natural size capped at the
+display's usable client area (95% x 93%, ui_model.capped_open_
+size, unit-tested), and the dialog is explicitly resizable.
+Layout/sizing only -- no control or behaviour changes. GUI
+smoke at 1366x768 and 1024x768 under xvfb asserts the cap, the
+pinned lamp/buttons and scroll reachability (screenshots in
+agent-runs/dialog-smoke/). Code only -- production backends
+stay on 1.10.2, no redeploy.
+
+### Off-plan -- Phase 2 engine adoption + audit fix pass (branch `phase2-adoption-v1.12.2`, 2026-11-25/26)
+
+#170/#171: the phase-2-end TraceMaker engine (598c4e5) is adopted
+on this branch -- engine pin + provenance in the backend health,
+engine_run contract plumbing, Reproducible run and Finish this
+board dialog actions. Stage C self-test stopped the release:
+Nomad finished 1 unconnected in both samples against the 0/0/14
+baseline. The external audit of the branch was verified claim by
+claim (agent-runs/audit-verify/REPORT-AUDIT-V1122-2026-11-26.md);
+every proven claim is fixed on the branch and closed: #173
+(pinned-build in-band upgrade path), #174 (route_open_only copper
+protection), #175 (banned-layer delta key), #176 (deterministic
+hygiene), #177 (portfolio route record), #178 (config page
+controls + provenance), #179 (pour-split escalation), #180 (work
+default recalibrated 20M -> 40M on the job-0d50e2a7 measurement).
+Branch suites: pytest 87, standalone 40/40. NOT pushed and NOT
+released. The owner's sequence then ran: Nomad through the
+fixed pipeline on scratch :8734 met acceptance (0/0/14 at the
+shipped 40M default; hbridge/mapone 0/0/0), and the rerun
+engine A/B met the pre-declared decision rule on both clauses
+(13/15 boards tie exactly, f91w improves 14-15 -> 9 open,
+aggregate 17 vs ~22.5 open; full table on #170). The adoption
+ruling is the owner's. #172 (route-batch) stays open with its
+assessment.
+
+**Ruled, merged and released (2026-11-26):** the owner adopted
+the engine and ruled the merge of everything except the
+engineered-nets line; the branch merged to main as 021a365 and
+shipped in v1.12.2 (release entry below). The local branch is
+deleted; #170/#171 are closed with the release evidence.
+
+### Off-plan -- v1.12.2 audit fix pass, main-area fixes (2026-11-26)
+
+The main-area proven claims of the adoption-branch audit
+(agent-runs/audit-verify/REPORT-AUDIT-V1122-2026-11-26.md),
+fixed and closed on main, no version bump (the #110-#113
+residuals precedent): #181 (zone census skips rule areas --
+the fixture measures 19 total / 13 rule areas / 6 pours on a
+zone-by-zone enumeration; the audit report 11/8 arithmetic was
+corrected on the issue), #182 (sidecar resolution single-
+sourced in naming.sidecar_paths), #183 (dialog stale-settings
+notice basis-consistent and refreshed on change). The audit
+pytest exit-1 mechanism (an unguarded module-level pcbnew
+import in tests/test_pcm_entrypoint.py) was DISPROVEN by AST
+scan: the line-45 import is inside the harness string literal,
+the loader half already guards, and no test file has an
+unguarded module-level pcbnew import -- no code change. The
+branch-area fixes (#173-#180) are recorded on
+phase2-adoption-v1.12.2.
+
+### Off-plan -- external audit round 6 fix pass (2026-11-26)
+
+Eight claims from a sixth external audit (of v1.12.3, main
+328e62f) were verified claim by claim; all eight proved REAL
+(C5 and C8 per sub-part) and each is fixed on main in its own
+commit chain with a fail-before/pass-after regression test, no
+version bump: #191 (CRITICAL regression from #189: Pipeline
+copies cfg, but run_auto switched Variant B by mutating the
+caller's dict, so the B attempt ran Variant A's layer law and
+escalation ran A twice -- proven on the shipped build from the
+v1.12.3 Nomad acceptance job itself: its B and A final keys
+are identical and its B ledger records no_tracks_on [In1.Cu]
+only; run_auto now builds Variant B on its own Pipeline from
+an explicit cfg copy, like Variant A already did), #192
+(pinned engine bootstrap let the stored config URL beat
+TRACEMAKER_URL when the pinned install was missing,
+reinstalling the old engine every restart; env-first
+selection only when the pin is missing, plus the tm_update
+and tm_pinned_install_missing edges), #193 (failed engine
+runs could become the delivered board: tool_route assigned
+current/last_route before the engine_error check,
+_route_variant consulted engine_error only when output was
+missing, tool_reroute_window ignored rc and the route JSON;
+failure is now checked before any state mutation on all three
+paths), #194 (#185's llm+deterministic coercion now also
+lives in Pipeline.__init__, so direct/local callers cannot
+run --deterministic under LLM mode), #195 (fix_violations
+could delete free stitching vias on a successful repair --
+both rip loops now skip free vias per _via_is_free;
+_zone_layers_by_net gained #181's rule-area skip; rollback
+via keys come from the item add_via created, via _track_key),
+#196 (#180's 40M work value never reached existing installs:
+a persisted work of exactly 20000000 -- the pre-#180 default
+-- is migrated to 40000000 on both the server and client load
+paths, any other operator value untouched; run_job status
+records banned_layer_tracks_delta and selftest_status gates
+on it with a raw-count fallback), #197 (config page rendered
+engine provenance into innerHTML unescaped; it now goes
+through a prov() helper -- lines joined with ' | ', then the
+page's esc() -- and the neighbouring version fields through
+esc()), #198 (sidecar_paths never checked the board-stem
+.kicad_dru when a different project stem won;
+skeleton_intrusions counted vias layer-blind and treated
+arcs as chords -- vias now intrude only on layers they span,
+arcs are sampled start->mid->end under one item key).
+Suites at the batch tip: pytest 127 passed, standalone 55/55
+(baselines at 328e62f: 103, 46/46). Post-fix Nomad AUTO rerun
+(local pipeline, phase-2-end binary, one run, not re-rolled):
+Variant B's ledger records no_tracks_on [In1.Cu, In2.Cu], B
+was kept with no escalation, final gate 0 unconnected / 0
+split nets / 13 copper -- the v1.12.2 envelope restored; the
+v1.12.3 acceptance's 3/1/13 is explained by #191 (its only
+split was the 3V3 pour split Variant B exists to prevent),
+not by AUTO wander. Incompleteness note: #189, #185, #181,
+#180 and #173 were each incomplete in exactly the way this
+round found -- the same pattern as round 5's corrections of
+#176/#161. Whether this batch warrants a v1.12.4 patch
+release is the owner's call; v1.12.3 as shipped contains the
+#191 regression.
+
+### Off-plan -- external audit round 5 fix pass (2026-11-26)
+
+Six claims from a fifth external audit (of v1.12.2, main
+fe310fe) were verified claim by claim and all six proved REAL;
+each is fixed on main in its own commit chain with a
+fail-before/pass-after regression test, no version bump:
+#184 (deterministic tm_relax portfolio leg refused on 100% of
+Reproducible runs -- --relax budgets by rounds, not --work;
+route_flags now translates the budget into --round-work/
+--rounds under deterministic; proven against the shipped
+phase-2-end binary and in a full local pipeline run: leg route
+JSON deterministic: true, 89/89, no refusal), #185 (LLM mode
+could run with deterministic=True -- #176 disabled the dialog
+checkbox without clearing it; the dialog now clears it,
+build_cfg forces it off under llm, the config page guards it),
+#186 (pour-skeleton cache validated on counts only -- a
+count-preserving via move inside fix_violations served a stale
+skeleton; the shape now carries zone-net via positions), #187
+(fix_violations rollback lost via type/span/free and rounded
+geometry to 1 um; keys are now exact-nm with full via
+identity), #188 (_route_variant logged rc 3 as an error and
+dropped the engine's refusal message; it now mirrors
+tool_route), #189 (Pipeline.__init__ mutated the caller's cfg
+dict; it copies). One semantics note: the #174 test's assert
+on the caller's dict was updated to the #189 contract.
+
+### P2.1b -- tool_fix_violations -- done, merged to main 2026-11-26
+
+**Status (2026-11-26): MERGED to main** (merge 6ba630c) under
+the owner's ruling, on top of the review-fix round (#158-#163,
+closed). Merged-tree suites: pytest 95 passed, standalone
+45/45 (the two new test files' module-level sys.exit was
+guarded under __main__ at merge time so pytest collection
+survives pcbnew being present). #155 is closed with the merge
+evidence. What remains is measurement, not code: the
+dataset-v3 bench rerun (step 0's improvement half) and a live
+re-route-trade sample, both riding the Phase 2E harness (#62)
+once it exists. Design tickets #164/#165/#166 stay open,
+awaiting the owner's ruling; the merge shipped the branch's
+current behaviour.
+
+
+**Status (2026-11-25): implemented on branch
+`p21b-fix-violations` (tip 49ccc5c), NOT merged.** Step 0 (#63)
+is closed; the tool (#155) is implemented and left open for the
+owner's review. An external review of the branch was verified
+claim by claim the same day: H1/H2/H3, M5, M6a and a
+test-collection guard were proven real and fixed on the branch
+as #158-#163 (closed, fail-before/pass-after); M4/M6b/M6c are
+ticketed as design decisions #164/#165/#166, awaiting the
+owner's ruling. What remains is measurement, not code: the
+dataset-v3 bench rerun (step 0's improvement half) and a live
+re-route-trade sample, both on the Phase 2E harness (#62) once
+it exists. The merge awaits the owner's review.
+
 **Step 0 — #63, pour skeleton reservation pre-check.** Compute each pour's pad spanning tree (width =
 zone min-thickness + slack + clearance deltas, confined to the pour
 region) before routing/repair and reserve it: severing the skeleton is
@@ -83,6 +466,36 @@ cure for what still gets through. The same skeleton defines, for the
 diff below, which pour faults count as router-added. Exit for step 0:
 split-only failures drop measurably on the bench, no completion or
 copper regression.
+
+**Step 0 landed** (2026-11-25, branch `p21b-fix-violations`, commits
+c627667..b9abb40 + this entry; NOT merged — owner reviews the lane's
+landings first). Ruled shape (owner, 2026-11-25: "ok lets implement
+63 then first"): grid-stamped reservation — each pour's pad spanning
+tree (pads confined to the zone outline; inner layers take every pad
+of the net as a via connection point; landed vias join as nodes;
+width = zone min-thickness + 0.1 mm slack; corridor = width/2 +
+clearance) is stamped last into the finisher grids as a hard
+foreign-net keepout; engine passes stay unconstrained and the gate is
+the catch: the summary carries an intrusion census (foreign copper
+inside a reserved corridor) that `fault_count` counts as router-added
+faults. The reservation yields first, per the ticket: a finisher
+command that fails outright with it on re-runs once without it
+(`skeleton_yield` recorded), and the accept/final keys price
+intrusions after connectivity and real faults — the first cut shipped
+without the yield and regressed esp32_S2 2 → 5 unconnected on
+identical engine lineage (finish/heal `no_path`); with the yield the
+board is at exact baseline parity. Local A/B exit measurement
+(pristine 4cc04bb vs branch, identical runner/config, 3 self-tests +
+3 pour-bearing train boards): no completion or copper regression on
+any board — hbridge/mapone/imu identical, STM32-RF parity (+1.5%
+wire), Nomad parity ({1, GND, 14}; +0.7% wire), esp32_S2 parity. The
+exit's improvement half (split-only failures dropping on the
+population) is NOT demonstrated locally — the local sample holds two
+split-failure boards and both tie; it needs the dataset-v3 bench
+rerun (backend time), which is the remaining step-0 measurement.
+Config `pour_skeleton` (default on; off = pre-feature command lines).
+Tests: tests/test_pour_skeleton.py (29 checks, fails on base);
+branch suite 19/19 standalone + 40/40 pytest.
 
 Repair copper faults on already-connected nets: diff the board's DRC
 violations against the base board's; for each router-added fault, rip
@@ -95,6 +508,127 @@ bought −4 unconnected) and dense-board engine output. Also runs after
 can be cleaned locally. Exit: copper strictly down, unconnected
 unchanged, on the sample. Kill: rip-and-reclose re-opens more than it
 cleans.
+
+**Tool stage landed** (2026-11-25, branch `p21b-fix-violations`,
+commits 4475c73 + 806cb25 + this entry; #155 stays open for the
+owner's review). Pipeline `tool_fix_violations` diffs item-level
+DRC faults (JSON report) against the base board's — a fault is
+router-added when no base fault of the same type sits within
+0.5 mm — and works them in class order (shorts, crossings,
+clearance, hole rules, then the rest; cap 32). The worker rips
+only the offending net's copper within ±3 mm (plus vias the rip
+strands) and re-closes with the exact-checked bridge planner;
+per-fault rollback restores the ripped geometry when a re-close
+cannot hold the net's component count. Gate-verified: the output
+stands only if `fault_count` strictly drops, unconnected and
+splits do not grow, and the faults-first accept key does not
+regress — a fix that trades faults is reverted. Runs in AUTO
+after `reroute_window`; config `fix_violations` (default on).
+Local exit measurement (the step-0 A/B finals, tool driven on the
+delivered boards against their own stripped bases): Nomad — the
+one router-added fault (a dangling GND stub) fixed, copper
+14 → 13, unconnected 1 → 1, splits unchanged; esp32_S2 —
+`no_router_faults` (all 20 copper items pre-exist on its base;
+board untouched). Kill criterion not triggered. The re-route-
+trade sample (bitaxe-class) was not reproduced locally — no
+local run produced an accepted trade to clean; the planted
+fixtures cover the trade's mechanics (clearance graze and
+same-layer crossing ripped and re-closed exactly, connectivity
+preserved). Tests: tests/test_fix_violations.py (22 checks,
+fails on base); branch suite green (see the report).
+
+**Review-fix round** (2026-11-25, same branch; an external review
+of this lane's landing was verified claim-by-claim against the
+branch -- every proven defect fixed in its own chain, design-level
+items ticketed for the owner's ruling; the verdict table is on
+#155). Six fixes: #158 -- `fault_count` no longer counts
+`skeleton_intrusions` (the step-0 text above describes the
+original shape): the census is priced as its own term in the
+accept/final keys and in the reroute connectivity key, which also
+repairs the portfolio skip guard (it compared a winner's
+intrusions against the stripped base's structural zero), the
+tool's acceptance test (a fix removing a real fault while adding
+an intrusion was rejected; the unconnected term is None-is-worst
+now), and the reroute key (a real short could trade against
+intrusions). #159 -- the tool never rips user-locked copper, and
+rollback restores arcs as arcs (midpoint preserved) instead of
+straight chords. #160 -- the base diff matches faults greedily
+1-to-1 within 0.5 mm (the documented rule), replacing the grid
+snap that misattributed in both directions. #161 -- the skeleton
+cache validates on track/via counts and the board filename, so
+via edits no longer serve stale skeletons. #162 -- each fault in
+a `cmd_fix_violations` batch is judged against freshly refilled
+zone fill. #163 -- the two P2.1b test files follow the #122
+importorskip convention. Ticketed for ruling, not improvised:
+#164 (isolated plane vias counted as intrusions, and plane
+corridors stamping the global via block -- census semantics),
+#165 (per-fault gating instead of one 32-fault batch gate), #166
+(the yield fires only on total failure, so partial runs never
+retry skeleton-blocked faults unreserved). The merge checklist
+(conflicts in config/orchestrator/pipeline/worker against main
+v1.11.6, plus the parity list) is recorded on #155; the branch is
+still NOT merged.
+
+### Off-plan -- v1.12.2 release: Phase 2 engine adopted + P2.1b merged (2026-11-26)
+
+The owner ruled: merge everything to main except the
+engineered-nets line (untouched; its merge gate after the final
+exam stands). p21b-fix-violations merged as 6ba630c (CI
+success), then phase2-adoption-v1.12.2 as 021a365 (CI
+success). Merged-tree suites: pytest 95 passed, standalone
+45/45. VERSION and BACKEND_VERSION to 1.12.2 (code only;
+production backends stay on 1.10.2, no redeploy). pcm-repo
+regenerated: ai-router-1.12.2.zip (119646 bytes, sha256
+bf9f16fc46a4c09117c5d2628db77f080554b678e1ffcf12aeeeb9a49e565f80),
+the 1.12.1 zip retired; the shipped zip registers exactly one
+AIRouterPlugin under KiCad's own pcbnew.LoadPlugins. The
+adopted engine is TraceMaker phase-2-end (598c4e5), pinned by
+commit + provenance sha256 (the version string is still
+0.12.1 -- TraceMaker #40). Adoption evidence: the pre-declared
+A/B decision rule met on both clauses (13/15 boards tie
+exactly, f91w improves 14-15 -> 9 open, aggregate 17 vs ~22.5
+open; table on #170) and Nomad acceptance at 0/0/14 through
+the fixed pipeline at the recalibrated 40M default. #155,
+#170 and #171 are closed with this evidence; #172
+(route-batch) stays open with its assessment. The merged
+accept key is (fault_count, unconnected, splits,
+starved_delta, intrusions, cost_tail), with fault_count =
+FAULT_CLASSES + banned_delta (#175) and intrusions priced as
+their own term (#158).
+
+### Off-plan -- v1.12.3 release: external audit round 5 fixes (2026-11-26)
+
+Patch release carrying only the external audit round 5 fix
+pass (#184-#189, recorded above): #184 (deterministic
+tm_relax portfolio leg refused on every Reproducible run --
+route_flags now budgets --relax by rounds), #185 (LLM mode
+could run with deterministic=True), #186 (pour-skeleton
+cache served a stale skeleton on a count-preserving via
+move), #187 (fix_violations rollback lost via type/span/
+free and rounded geometry to 1 um), #188 (_route_variant
+dropped the engine's error message -- the reporting gap
+that hid #184), #189 (Pipeline.__init__ mutated the
+caller's cfg dict). The shipped v1.12.2 contained all six
+bugs; the fixes landed on main after that release and ship
+here. VERSION and BACKEND_VERSION to 1.12.3 (code only;
+production backends stay on 1.10.2, no redeploy). pcm-repo
+regenerated: ai-router-1.12.3.zip (120749 bytes, sha256
+46a473dc97326d9dd618f28ddb94f02374dad9af7a4d6cb3641089f71a4f66ff),
+the 1.12.2 zip retired; the shipped zip registers exactly
+one AIRouterPlugin under KiCad's own pcbnew.LoadPlugins.
+
+
+## In progress
+
+- Nothing in flight. v1.12.3 (external audit round 5
+  fixes #184-#189) is released and recorded in Done above;
+  production backends stay on 1.10.2 until the owner calls
+  a deploy.
+  Next in sequence: **P2.7a** (below). Open owner items: the
+  #164/#165/#166 design rulings; #172 (route-batch) stays
+  open with its assessment.
+
+## Remaining (in sequence)
 
 ### P2.7a — Performance quick wins (4–8 h)
 Remove verified double-gating (the base is gated twice per run; the
@@ -690,8 +1224,8 @@ routing-caused-DRC nothing-worse gate alongside CP_delta.
   (above).
 - **Issue #54 remainder:** commit the PCBWorld-Bench harness —
   discharged by Phase 2E item #62 (above).
-- **Placement audit preprocess** (issue #42): future feature, not in
-  Phase 2 scope.
+- **Placement audit preprocess** (issue #42): moved into the
+  engineered-nets branch lane (see Parallel lane, above).
 - **Engine adoption:** the plugin runs the pinned TraceMaker release.
   Trying newer engine builds is parked until the TraceMaker programme's
   own Phase 2 finishes.

@@ -1,3 +1,22 @@
+# Copyright (C) 2026 SiliconBrane Inc.
+#
+# This file is part of KiCad AI Router.
+#
+# KiCad AI Router is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# KiCad AI Router is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with KiCad AI Router. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """pcbnew worker for the AI Router plugin. Runs as a subprocess under the
 system python3 (which can import pcbnew on the host). Every subcommand
 prints exactly one JSON object on the last stdout line.
@@ -13,6 +32,19 @@ import pcbnew
 BANNED_LAYER_IDS = None
 NO_TRACKS_ON_RAW = None
 NO_TRACKS_ON_UNRESOLVED = []  # v1.9 (M4): --no-tracks-on names the canonical table could not resolve; Grid resolves them against the actual board or fails loud
+# v1.11 (#73): --layer-cost LAYER=FACTOR pairs; Grid prices travel
+# on a priced layer at its factor instead of excluding the layer.
+# A priced layer is NOT banned (the price wins over a ban).
+LAYER_COST_RAW = None
+LAYER_COST_BY_ID = {}
+LAYER_COST_UNRESOLVED = []  # (name, factor) pairs the canonical table could not resolve; Grid resolves them against the actual board or fails loud, same discipline as bans
+# v1.12 (#63): --skeleton turns on the pour-skeleton reservation:
+# Grid stamps each pour's pad-spanning-tree corridors as hard
+# obstacles for foreign nets, and the summary carries the intrusion
+# census the pipeline gate counts as router-added faults. Absent =
+# off, and every leg command line is then exactly what it was.
+SKELETON_ON = False
+SKELETON_SLACK_MM = 0.1  # skeleton width = zone min-thickness + slack
 # #80: net-selective domain enforcement -- the pipeline hands the
 # finisher/repair legs a JSON spec of HV-domain / quiet-net isolation
 # rects (domains.json); Grid.build stamps them for every routed net
@@ -31,6 +63,56 @@ def _layer_id_from_name(n):
         try: return getattr(pcbnew, 'In%d_Cu' % int(n[2:-3]))
         except Exception: return None
     return None
+
+def _parse_no_tracks_raw(spec):
+    # v1.11.2 (#104): split a --no-tracks-on value into (canonical
+    # layer ids, unresolved names). Empty tokens are skipped:
+    # ''.split(',') is [''], and an empty token would otherwise land
+    # in the unresolved list and make Grid.__init__ raise on a spec
+    # that simply means 'ban nothing' (a trailing comma, 'In1.Cu,',
+    # hit the same crash before this helper existed).
+    banned = set(); unresolved = []
+    for _x in spec.split(','):
+        _x = _x.strip()
+        if not _x: continue
+        _i = _layer_id_from_name(_x)
+        if _i is None: unresolved.append(_x)
+        else: banned.add(_i)
+    return banned, unresolved
+
+def _factor_or_none(tok):
+    # v1.11.5 (#121): the pipeline's _parse_factor shape check -- a
+    # number with up to two decimal places; float value or None.
+    if not tok or tok.count('.') > 1: return None
+    whole, dot, frac = tok.partition('.')
+    if not whole.isdigit(): return None
+    if dot and (not frac.isdigit() or len(frac) > 2): return None
+    return float(tok)
+
+def _parse_layer_cost_raw(spec):
+    # v1.11.2 (#105): split a --layer-cost value into (factor by
+    # canonical layer id, unresolved (name, factor) pairs), applying
+    # the guards the pipeline's parse_layer_cost enforces --
+    # non-empty name, factor a number with up to two decimal places
+    # (v1.11.5, #121 -- the pipeline's _parse_factor check, carried
+    # here because the worker loads standalone), 1..1000 inclusive. Before
+    # this, the worker accepted any integer int() would parse: 0
+    # (travel on a 'priced' layer becomes free), negatives (negative
+    # A* step costs) and >1000 all reached Grid._lfac when a spec
+    # arrived without passing through the pipeline first. A
+    # guarded-out token prices nothing, the worker's standing salvage
+    # rule for unparseable tokens.
+    by_id = {}; unresolved = []
+    for _tok in spec.split(','):
+        _nm, _eq, _fc = _tok.partition('=')
+        _nm = _nm.strip(); _fc = _fc.strip()
+        if not _nm: continue
+        _f = _factor_or_none(_fc)
+        if _f is None or not (1 <= _f <= 1000): continue
+        _i = _layer_id_from_name(_nm)
+        if _i is None: unresolved.append((_nm, _f))
+        else: by_id[_i] = _f
+    return by_id, unresolved
 
 def _resolve_banned_on_board(b, names):
     # v1.9 (M4): resolve non-canonical --no-tracks-on names against
@@ -62,6 +144,58 @@ def refill(b):
     f.Fill(b.Zones())
 
 # ---------------------------------------------------------------- summary
+def _via_on_pad_census(b, tracks):
+    """#72 item 1: via-on-pad census -- a REPORTED gate metric
+    only (never in the accept key).  The owner's framing
+    (2026-11-24): via-on-pad is a performance trade-off to
+    measure, not a blanket ban; the bounded policy (finisher
+    cleanup + engine placement policy) is programme work that
+    needs this census first.  Counts: vias whose centre lies
+    inside a pad's bounding box on a layer both span, split by
+    same-net vs foreign-net, plus vias whose barrel overlaps a
+    pad's box without the centre landing inside it."""
+    pads = []
+    for fp in b.GetFootprints():
+        for p in fp.Pads():
+            bb = p.GetBoundingBox()
+            pads.append({'net': p.GetNetname(),
+                         'x0': mm(bb.GetLeft()), 'y0': mm(bb.GetTop()),
+                         'x1': mm(bb.GetRight()), 'y1': mm(bb.GetBottom()),
+                         'layers': set(p.GetLayerSet().CuStack())})
+    stack = copper_stack(b)
+    out = {'centre_same_net': 0, 'centre_foreign_net': 0,
+           'annulus_overlap': 0}
+    for t in tracks:
+        if t.Type() != pcbnew.PCB_VIA_T:
+            continue
+        vx, vy = mm(t.GetPosition().x), mm(t.GetPosition().y)
+        vr = mm(t.GetWidth()) / 2.0
+        try:
+            lo = stack.index(t.TopLayer()); hi = stack.index(t.BottomLayer())
+        except ValueError:
+            continue
+        vlay = set(stack[min(lo, hi):max(lo, hi) + 1])
+        for pd in pads:
+            if not (vlay & pd['layers']):
+                continue
+            if pd['x0'] <= vx <= pd['x1'] and pd['y0'] <= vy <= pd['y1']:
+                key = ('centre_same_net' if pd['net'] == t.GetNetname()
+                       else 'centre_foreign_net')
+                out[key] += 1
+                continue
+            dx = max(pd['x0'] - vx, 0.0, vx - pd['x1'])
+            dy = max(pd['y0'] - vy, 0.0, vy - pd['y1'])
+            if (dx * dx + dy * dy) ** 0.5 < vr:
+                out['annulus_overlap'] += 1
+    return out
+
+
+def _is_rule_area(z):
+    # (#181): a rule area (keepout / rule zone) is not a copper pour;
+    # zone censuses skip it. Guarded: older bindings may lack the call.
+    try: return bool(z.GetIsRuleArea())
+    except Exception: return False
+
 def cmd_summary(board_path, fast=False):
     b = pcbnew.LoadBoard(board_path)
     refill(b)
@@ -90,7 +224,13 @@ def cmd_summary(board_path, fast=False):
                 seen.append(ids)
         result.append({'net': n, 'pads': len(pads), 'components': comp})
     tracks = list(b.GetTracks())
-    pour_nets = sorted({z.GetNetname() for z in b.Zones() if z.GetNetname()})
+    # v1.11.5 (#119): lock/free-via census -- the pipeline's gate compares the
+    # delivered board against the input board on these two counts (the R1
+    # invariance check: strip and the routing stages must never LOSE either).
+    locked_items = sum(1 for t in tracks if t.IsLocked())
+    _zl = _zone_layers_by_net(b)
+    free_vias = sum(1 for t in tracks if t.Type() == pcbnew.PCB_VIA_T and _via_is_free(t, _zl))
+    pour_nets = sorted({z.GetNetname() for z in b.Zones() if z.GetNetname() and not _is_rule_area(z)})  # (#181): rule areas are not pours
     ncu = b.GetCopperLayerCount()
     copper_layers = (['F.Cu'] + ['In%d.Cu' % i for i in range(1, ncu - 1)] + ['B.Cu']) if ncu > 1 else ['F.Cu']
     # v1.3.2 layer census: tracks per canonical layer. The gate turns
@@ -106,6 +246,7 @@ def cmd_summary(board_path, fast=False):
         layer_aliases[b.GetLayerName(_lid).strip().lower()] = copper_layers[_k]
         layer_aliases[copper_layers[_k].lower()] = copper_layers[_k]
     tracks_by_layer = {}
+    track_length_by_layer = {}  # v1.11.4 (#115): per-layer track LENGTH beside the counts -- the gate prices a layer from length; counts cannot
     tracks_by_layer_net = {}
     for t in tracks:
         if t.Type() == pcbnew.PCB_VIA_T: continue
@@ -113,6 +254,7 @@ def cmd_summary(board_path, fast=False):
         if _li is None: continue  # v1.9.6 (#40): off-stack layer (external-router boards) -- skip, do not KeyError
         _cn = copper_layers[_li]
         tracks_by_layer[_cn] = tracks_by_layer.get(_cn, 0) + 1
+        track_length_by_layer[_cn] = track_length_by_layer.get(_cn, 0.0) + mm(t.GetLength())
         _d = tracks_by_layer_net.setdefault(_cn, {})
         _nn = t.GetNetname()
         _d[_nn] = _d.get(_nn, 0) + 1
@@ -126,22 +268,34 @@ def cmd_summary(board_path, fast=False):
     for z in b.Zones():
         _zn = z.GetNetname()
         if not _zn: continue
+        if _is_rule_area(z): continue  # (#181): same skip as the pour_nets census above
         try: _zlays = list(z.GetLayerSet().CuStack())
         except Exception: _zlays = [z.GetLayer()]
         for _zl in _zlays:
             if _zl in _lidx:
                 pour_layers.setdefault(_zn, set()).add(copper_layers[_lidx[_zl]])
     pour_layers = {k: sorted(v) for k, v in pour_layers.items()}
+    via_on_pad = _via_on_pad_census(b, tracks)
+    # v1.12 (#63): the gate's skeleton census -- foreign copper in
+    # reserved corridors, counted by the pipeline as router-added
+    # faults. Only when the run turned the reservation on; the keys
+    # are absent otherwise and old consumers see the old summary.
+    if SKELETON_ON:
+        _sk_items, _sk_mm, _sk_per = skeleton_intrusions(b)
+    else:
+        _sk_items = _sk_mm = _sk_per = None
     if fast:
         # v1.9.6 (#40): gate calls discard the congestion features --
         # skip the O(N^2) MST crossings + RUDY computation entirely.
-        return {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers, 'layer_aliases': layer_aliases,
+        _res = {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers, 'layer_aliases': layer_aliases,
                 'crossings': None, 'rudy_peak': None, 'rudy_p95': None,
                 'tracks': len([t for t in tracks if t.Type() != pcbnew.PCB_VIA_T]),
                 'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
                 'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
-                'tracks_by_layer': tracks_by_layer, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
-                'footprints': len(list(b.GetFootprints()))}
+                'tracks_by_layer': tracks_by_layer, 'track_length_by_layer': {k: round(v, 1) for k, v in track_length_by_layer.items()}, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
+                'footprints': len(list(b.GetFootprints())), 'locked_items': locked_items, 'free_vias': free_vias, 'via_on_pad': via_on_pad}
+        if _sk_items is not None: _res['skeleton_intrusions'] = _sk_items; _res['skeleton_intrusion_mm'] = _sk_mm
+        return _res
     # v1.2.2 congestion features (for the strategy dataset): ratsnest
     # MST crossings between different nets + RUDY peak/p95 of net
     # bounding boxes on a 32x32 grid.
@@ -186,13 +340,188 @@ def cmd_summary(board_path, fast=False):
             j0 = max(0, int((y0 - gy0) / max(gy1 - gy0, 1e-6) * 31)); j1 = min(31, int((y1 - gy0) / max(gy1 - gy0, 1e-6) * 31))
             grid[j0:j1 + 1, i0:i1 + 1] += dens
         rudy_peak = round(float(grid.max()), 3); rudy_p95 = round(float(np.percentile(grid, 95)), 3)
-    return {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers, 'layer_aliases': layer_aliases,
+    _res = {'nets': result, 'pour_nets': pour_nets, 'copper_layers': copper_layers, 'layer_aliases': layer_aliases,
             'crossings': crossings, 'rudy_peak': rudy_peak, 'rudy_p95': rudy_p95,
             'tracks': len([t for t in tracks if t.Type() != pcbnew.PCB_VIA_T]),
             'vias': len([t for t in tracks if t.Type() == pcbnew.PCB_VIA_T]),
             'wirelength_mm': round(sum(mm(t.GetLength()) for t in tracks if t.Type() != pcbnew.PCB_VIA_T), 1),
-            'tracks_by_layer': tracks_by_layer, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
-            'footprints': len(list(b.GetFootprints()))}
+            'tracks_by_layer': tracks_by_layer, 'track_length_by_layer': {k: round(v, 1) for k, v in track_length_by_layer.items()}, 'tracks_by_layer_net': tracks_by_layer_net, 'pour_layers': pour_layers,
+            'footprints': len(list(b.GetFootprints())), 'locked_items': locked_items, 'free_vias': free_vias, 'via_on_pad': via_on_pad}
+    if _sk_items is not None: _res['skeleton_intrusions'] = _sk_items; _res['skeleton_intrusion_mm'] = _sk_mm
+    return _res
+
+# ---------------------------------------------------------------- fix_violations (#155)
+def _track_key(t):
+    # Geometry identity of one track/via item, for rollback matching.
+    # #187: exact integer nanometres throughout -- the old keys
+    # rounded through round(mm(...), 3), so rollback shifted
+    # off-grid endpoints by up to 0.5 um and was not bit-exact. A
+    # via's key also carries its FULL identity (type, layer span,
+    # free flag): the old via key held only position/F.Cu width/
+    # drill, so _restore_key rebuilt every ripped via as a default
+    # through via -- a blind/micro via gained copper on layers it
+    # never touched, and a free (stitching) via lost its free flag,
+    # tripping the #119 free-via invariance.
+    if t.Type() == pcbnew.PCB_VIA_T:
+        dr = t.GetDrill()
+        dr = dr.x if hasattr(dr, 'x') else dr
+        return ('via', t.GetNetCode(), t.GetPosition().x, t.GetPosition().y,
+                t.GetWidth(pcbnew.F_Cu), dr, t.GetViaType(), t.TopLayer(), t.BottomLayer(), bool(t.GetIsFree()))
+    if t.Type() == pcbnew.PCB_ARC_T:
+        # #159: the midpoint is part of an arc's geometry -- keying
+        # it as a plain segment made rollback recreate it as a
+        # straight chord.
+        return ('arc', t.GetNetCode(), t.GetLayer(), t.GetStart().x, t.GetStart().y, t.GetMid().x, t.GetMid().y, t.GetEnd().x, t.GetEnd().y, t.GetWidth())
+    return ('seg', t.GetNetCode(), t.GetLayer(), t.GetStart().x, t.GetStart().y, t.GetEnd().x, t.GetEnd().y, t.GetWidth())
+
+def _restore_key(b, key):
+    if key[0] == 'via':
+        _k, code, x, y, dia, drill, vtype, top, bottom, free = key
+        v = pcbnew.PCB_VIA(b); v.SetPosition(pcbnew.VECTOR2I(x, y))
+        v.SetWidth(dia); v.SetDrill(drill); v.SetNetCode(code)
+        v.SetViaType(vtype); v.SetLayerPair(top, bottom); v.SetIsFree(free); b.Add(v)
+    elif key[0] == 'arc':
+        _k, code, lay, x1, y1, xm, ym, x2, y2, wdt = key
+        t = pcbnew.PCB_ARC(b)
+        t.SetStart(pcbnew.VECTOR2I(x1, y1)); t.SetMid(pcbnew.VECTOR2I(xm, ym)); t.SetEnd(pcbnew.VECTOR2I(x2, y2))
+        t.SetWidth(wdt); t.SetLayer(lay); t.SetNetCode(code); b.Add(t)
+    else:
+        _k, code, lay, x1, y1, x2, y2, wdt = key
+        t = pcbnew.PCB_TRACK(b)
+        t.SetStart(pcbnew.VECTOR2I(x1, y1)); t.SetEnd(pcbnew.VECTOR2I(x2, y2))
+        t.SetWidth(wdt); t.SetLayer(lay); t.SetNetCode(code); b.Add(t)
+
+def _fix_one_violation(b, net, x, y, radius=3.0):
+    # P2.1b (#155): rip ONLY `net`'s copper within `radius` of the
+    # fault point (+-3 mm per plan.md) and re-close the net with the
+    # exact-checked bridge planner. True = the rip stood; False =
+    # rolled back, board unchanged for this fault. Guarantees on
+    # True: the net is no more split than before, and every drawn
+    # item passed _new_items_clean inside _bridge_plan. Whether the
+    # fault itself is gone is the pipeline gate's call.
+    # #162: refill first -- inside a cmd_fix_violations batch, an
+    # earlier fault's rip/repair changes what this net's fill
+    # should be, and the cached fill polygons do not move until a
+    # refill; judging this fault against the pre-batch fill counts
+    # clusters the fill no longer has (and misses the connection
+    # the fresh fill would have made), so valid pour fixes rolled
+    # back. Zone-less boards skip the cost.
+    if list(b.Zones()): refill(b)
+    conn = b.GetConnectivity(); conn.Build(b)
+    pads, clusters = _pad_clusters(b, conn, net)
+    if not pads: return False
+    before = len(clusters)
+    _zl = _zone_layers_by_net(b)  # (#195): the #119 free-via determination, shared with strip and the invariance census
+    rip = []
+    for t in list(b.GetTracks()):
+        if t.GetNetname() != net: continue
+        if t.IsLocked(): continue  # #159: user-locked copper is never ripped (the #100/#119 class)
+        if t.Type() == pcbnew.PCB_VIA_T:
+            if _via_is_free(t, _zl): continue  # (#195): free (stitching/thermal) vias are user copper (#119) -- never ripped, locked or not; #187 preserved them on rollback but a successful repair deleted them outright
+            if math.hypot(mm(t.GetPosition().x) - x, mm(t.GetPosition().y) - y) < radius + mm(t.GetWidth(pcbnew.F_Cu)) / 2: rip.append(t)
+        elif seg_pt(x, y, mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y)) < radius + mm(t.GetWidth()) / 2:
+            rip.append(t)
+    if not rip: return False
+    saved = [_track_key(t) for t in rip]
+    for t in rip: b.RemoveNative(t)
+    # Vias of the net inside the window that the rip left dangling
+    # are removed too -- a stranded via is a via_dangling fault the
+    # fix would otherwise trade for the one it came to repair.
+    conn = b.GetConnectivity(); conn.Build(b)
+    for t in list(b.GetTracks()):
+        if t.GetNetname() != net or t.Type() != pcbnew.PCB_VIA_T: continue
+        if math.hypot(mm(t.GetPosition().x) - x, mm(t.GetPosition().y) - y) >= radius + 1.0: continue
+        if t.IsLocked(): continue  # #159: a locked via stays even when stranded
+        if _via_is_free(t, _zl): continue  # (#195): a stranded free via is still user copper
+        if not [it for it in conn.GetConnectedItems(t) if it.Type() != pcbnew.PCB_PAD_T]:
+            saved.append(_track_key(t)); b.RemoveNative(t)
+    nets = b.GetNetsByName()
+    drawn = []
+    conn = b.GetConnectivity(); conn.Build(b)
+    now = len(_pad_clusters(b, conn, net)[1])
+    rounds = 0
+    while now > before and rounds < 4:
+        plan = _bridge_plan(b, net, before)
+        if not plan: break
+        segs, vias = plan
+        if not segs and not vias: break
+        tw = net_class_width(b, net, W_TRACK); vd, vdr = net_class_via(b, net)
+        for (li, x1, y1, x2, y2) in segs:
+            drawn.append(_track_key(add_seg(b, nets, net, li, x1, y1, x2, y2, tw)))  # (#195): key the item add_seg actually created -- the hand-built tuple desyncs silently if its defaults ever change, and rollback would leave drawn copper behind
+        for (vx, vy) in vias:
+            drawn.append(_track_key(add_via(b, nets, net, vx, vy, vd, vdr)))
+        conn = b.GetConnectivity(); conn.Build(b)
+        now = len(_pad_clusters(b, conn, net)[1])
+        rounds += 1
+    if now > before:
+        want = {}
+        for k in drawn: want[k] = want.get(k, 0) + 1
+        for t in list(b.GetTracks()):
+            k = _track_key(t)
+            if want.get(k): want[k] -= 1; b.RemoveNative(t)
+        for k in saved: _restore_key(b, k)
+        return False
+    return True
+
+def cmd_fix_violations(board_path, out_path, faults):
+    # faults: [{type, x, y, nets: [candidate offender nets, in
+    # order]}] -- the router-added faults from the pipeline's base
+    # diff (#155). Each fault is attempted per candidate net until
+    # one rip+reclose stands.
+    b = pcbnew.LoadBoard(board_path); refill(b)
+    fixed, failed = [], []
+    for f in faults:
+        ok = None
+        for net in (f.get('nets') or []):
+            if _fix_one_violation(b, net, float(f['x']), float(f['y'])):
+                ok = net; break
+        rec = {'type': f.get('type'), 'x': f.get('x'), 'y': f.get('y'), 'net': ok or (f.get('nets') or [None])[0]}
+        (fixed if ok else failed).append(rec)
+    if fixed:
+        refill(b); pcbnew.SaveBoard(out_path, b)
+    return {'status': 'ok' if fixed else 'none', 'fixed': fixed, 'failed': failed}
+
+# ---------------------------------------------------------------- skeleton
+def cmd_skeleton(board_path):
+    # #63 measurement surface: per (zone, layer) skeleton -- the pad
+    # components of its net on this board state, how many tree
+    # edges' corridors hold foreign copper (severed edges), and the
+    # census totals. The P2.1b pour fault definition reads two of
+    # these (base vs final): a pour fault is router-added when a
+    # net's pad components grow over the run; an intrusion is the
+    # cost signal that predicts it.
+    b = pcbnew.LoadBoard(board_path); refill(b)
+    conn = b.GetConnectivity(); conn.Build(b)
+    skels = pour_skeletons(b)
+    items, total_mm, per_net = skeleton_intrusions(b, skels)
+    comp_cache = {}
+    def _components(net):
+        if net in comp_cache: return comp_cache[net]
+        pads = []
+        for fp in b.GetFootprints():
+            for p in fp.Pads():
+                if p.GetNetname() == net: pads.append(p)
+        seen = []; comp = 0
+        for p in pads:
+            ids = set()
+            for it in conn.GetConnectedItems(p):
+                if it.Type() == pcbnew.PCB_PAD_T:
+                    ids.add((round(mm(it.GetPosition().x), 2), round(mm(it.GetPosition().y), 2)))
+            key = (round(mm(p.GetPosition().x), 2), round(mm(p.GetPosition().y), 2))
+            if not any(key in s for s in seen):
+                comp += 1; seen.append(ids)
+        comp_cache[net] = comp
+        return comp
+    rows = []
+    for sk in skels:
+        sev = 0
+        for (i, j, _d) in sk['edges']:
+            n, _m2, _p2 = skeleton_intrusions(b, [dict(sk, edges=[(i, j, _d)])])
+            if n: sev += 1
+        rows.append({'net': sk['net'], 'layer': b.GetLayerName(sk['layer']),
+                     'width_mm': sk['width'], 'pads': len(sk['pads']), 'edges': len(sk['edges']),
+                     'severed_edges': sev, 'components': _components(sk['net'])})
+    return {'skeletons': rows, 'intrusions': items, 'intrusion_mm': total_mm, 'intrusions_by_net': per_net}
 
 # ---------------------------------------------------------------- scorecard
 def cmd_scorecard(board_path):
@@ -277,6 +606,200 @@ def copper_stack(b):
     if n == 2: return [pcbnew.F_Cu, pcbnew.B_Cu]
     return [pcbnew.F_Cu] + [getattr(pcbnew, 'In%d_Cu' % k) for k in range(1, n - 1)] + [pcbnew.B_Cu]
 
+def _in_poly(px, py, pts):
+    inside = False
+    for i in range(len(pts)):
+        x1, y1 = pts[i]; x2, y2 = pts[(i + 1) % len(pts)]
+        if (y1 > py) != (y2 > py):
+            if px < x1 + (py - y1) * (x2 - x1) / (y2 - y1): inside = not inside
+    return inside
+
+def _mst_edges(pts):
+    # Prim spanning tree over (x, y) points; returns [(i, j, dist)].
+    n = len(pts)
+    if n < 2: return []
+    used = [0]; rest = list(range(1, n)); edges = []
+    while rest:
+        bd, ba, bi = None, None, None
+        for a in used:
+            ax, ay = pts[a]
+            for i in rest:
+                d = (ax - pts[i][0]) ** 2 + (ay - pts[i][1]) ** 2
+                if bd is None or d < bd: bd, ba, bi = d, a, i
+        edges.append((ba, bi, round(math.sqrt(bd), 3))); used.append(bi); rest.remove(bi)
+    return edges
+
+_SKEL_CACHE = {}
+
+def pour_skeletons(b):
+    # #63: each pour's pad spanning tree, per (zone, copper layer).
+    # The tree is the pour's intended connectivity: the pads it joins
+    # are meant to stay connected through the fill, so foreign copper
+    # inside a tree corridor is what severs the pour. Pads are
+    # confined to the pour region (the zone's own outline) -- a pad
+    # across the board belongs to another zone of the same net, not
+    # to this pour. Width per the ticket: zone min-thickness +
+    # slack; the reserved corridor adds the board clearance on top
+    # (foreign copper must clear the skeleton track, not touch it).
+    # The result is cached per board object with a shape check on
+    # hit. #161: the shape must cover everything the computation
+    # consumes -- landed vias of the zone nets are MST nodes below,
+    # so a via edit (stitch, fix_violations) changes the skeleton
+    # even though zones and footprints never move; and a bare
+    # id(b) can be recycled by a later board in the same process,
+    # so the board's filename rides the key. #186: counts alone
+    # were not enough -- a fix_violations repair can rip a via and
+    # re-close with another at new coordinates, every count
+    # unchanged and the tree different, so the shape carries the
+    # zone-net via positions (netcode, x, y in exact nm) themselves.
+    key = (id(b), b.GetFileName())
+    zone_nets = set()
+    for z in b.Zones():
+        if not z.GetIsRuleArea() and z.GetNetname(): zone_nets.add(z.GetNetname())
+    via_sig = tuple(sorted((t.GetNetCode(), t.GetPosition().x, t.GetPosition().y)
+                           for t in b.GetTracks()
+                           if t.Type() == pcbnew.PCB_VIA_T and t.GetNetname() in zone_nets))
+    hit = _SKEL_CACHE.get(key)
+    if hit is not None and hit[0] == len(list(b.Zones())) and hit[1] == len(list(b.GetFootprints())) and hit[2] == via_sig:
+        return hit[3]
+    stack = copper_stack(b); lidx = {lay: k for k, lay in enumerate(stack)}
+    clr = board_clearance(b)
+    net_pads = {}
+    net_vias = {}
+    if zone_nets:
+        for fp in b.GetFootprints():
+            for p in fp.Pads():
+                n = p.GetNetname()
+                if n in zone_nets: net_pads.setdefault(n, []).append(p)
+        for t in b.GetTracks():
+            if t.Type() == pcbnew.PCB_VIA_T and t.GetNetname() in zone_nets:
+                net_vias.setdefault(t.GetNetname(), []).append(t)
+    out = []
+    for z in b.Zones():
+        if z.GetIsRuleArea(): continue
+        net = z.GetNetname()
+        if not net: continue
+        try: lays = list(z.GetLayerSet().CuStack())
+        except Exception: lays = [z.GetLayer()]
+        width = mm(z.GetMinThickness()) + SKELETON_SLACK_MM
+        rings = []
+        try:
+            o = z.Outline()
+            for oi in range(o.OutlineCount()):
+                ol = o.Outline(oi)
+                ring = [(mm(ol.CPoint(k).x), mm(ol.CPoint(k).y)) for k in range(ol.PointCount())]
+                if len(ring) >= 3: rings.append(ring)
+        except Exception:
+            rings = []
+        for lay in lays:
+            if lay not in lidx: continue
+            pts = set()
+            # Node rule: on an outer layer, the pour's connection
+            # points are the pads physically on it (SMD on-layer +
+            # through-hole). On an INNER layer every pad of the net
+            # inside the region is a connection point -- it reaches
+            # the plane by via at the pad, so the pad's position is
+            # the node (a plane whose pads are all SMD would
+            # otherwise have no skeleton at all until vias land).
+            inner = lay not in (pcbnew.F_Cu, pcbnew.B_Cu)
+            for p in net_pads.get(net, []):
+                if p.GetDrillSize().x > 0 or p.IsOnLayer(lay) or inner:
+                    pt = (round(mm(p.GetPosition().x), 3), round(mm(p.GetPosition().y), 3))
+                    if rings and not any(_in_poly(pt[0], pt[1], r) for r in rings): continue
+                    pts.add(pt)
+            for v in net_vias.get(net, []):
+                try:
+                    if not v.IsOnLayer(lay): continue
+                except Exception:
+                    pass
+                pt = (round(mm(v.GetPosition().x), 3), round(mm(v.GetPosition().y), 3))
+                if rings and not any(_in_poly(pt[0], pt[1], r) for r in rings): continue
+                pts.add(pt)
+            pts = sorted(pts)
+            if len(pts) < 2: continue
+            out.append({'net': net, 'layer': lay, 'layer_idx': lidx[lay],
+                        'width': round(width, 3), 'corridor': round(width / 2 + clr, 3),
+                        'pads': pts, 'edges': _mst_edges(pts)})
+    _SKEL_CACHE[key] = (len(list(b.Zones())), len(list(b.GetFootprints())), via_sig, out)
+    return out
+
+def _seg_in_band(x1, y1, x2, y2, sx1, sy1, sx2, sy2, band):
+    # Sampled length of segment (x1..y2) lying within `band` of the
+    # skeleton segment (sx1..sy2); 0.0 when it never enters the band.
+    L = math.hypot(x2 - x1, y2 - y1)
+    if L == 0: return 0.0
+    steps = max(1, int(L / 0.25))
+    hit = 0
+    for k in range(steps + 1):
+        t = k / steps
+        if seg_pt(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, sx1, sy1, sx2, sy2) < band: hit += 1
+    return L * hit / (steps + 1)
+
+def skeleton_intrusions(b, skeletons=None):
+    # #63 gate census: foreign copper inside reserved corridors.
+    # Returns (items, mm, per_net): an item is one foreign track
+    # segment or via whose copper enters a corridor (centreline
+    # distance < corridor + the item's own half-width); mm is the
+    # sampled in-corridor length of intruding segments (vias add no
+    # length). An item is counted once per pour it intrudes.
+    if skeletons is None: skeletons = pour_skeletons(b)
+    if not skeletons: return 0, 0.0, {}
+    stack = copper_stack(b); lidx = {lay: k for k, lay in enumerate(stack)}
+    segs_by_layer = {}
+    vias = []
+    for t in b.GetTracks():
+        if t.Type() == pcbnew.PCB_VIA_T:
+            vias.append((t.GetNetname(), mm(t.GetPosition().x), mm(t.GetPosition().y), t))
+        else:
+            li = lidx.get(t.GetLayer())
+            if li is None: continue
+            if t.Type() == pcbnew.PCB_ARC_T:
+                # (#198): an arc is not its chord -- sample it as
+                # start->mid and mid->end; both halves carry the
+                # arc's own item key so the arc still counts once.
+                _sx, _sy = mm(t.GetStart().x), mm(t.GetStart().y)
+                _mx, _my = mm(t.GetMid().x), mm(t.GetMid().y)
+                _ex, _ey = mm(t.GetEnd().x), mm(t.GetEnd().y)
+                _hr = mm(t.GetWidth()) / 2
+                _akey = ('A', t.GetNetname(), li, round(_sx, 2), round(_sy, 2), round(_mx, 2), round(_my, 2), round(_ex, 2), round(_ey, 2))
+                segs_by_layer.setdefault(li, []).append((t.GetNetname(), _sx, _sy, _mx, _my, _hr, _akey))
+                segs_by_layer.setdefault(li, []).append((t.GetNetname(), _mx, _my, _ex, _ey, _hr, _akey))
+            else:
+                segs_by_layer.setdefault(li, []).append((t.GetNetname(), mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y), mm(t.GetWidth()) / 2, None))
+    items = 0; total_mm = 0.0; per_net = {}
+    for sk in skeletons:
+        net = sk['net']; li = sk['layer_idx']; cor = sk['corridor']
+        seen = set()
+        for (i, j, _d) in sk['edges']:
+            sx1, sy1 = sk['pads'][i]; sx2, sy2 = sk['pads'][j]
+            bx0, bx1 = min(sx1, sx2) - cor - 1.0, max(sx1, sx2) + cor + 1.0
+            by0, by1 = min(sy1, sy2) - cor - 1.0, max(sy1, sy2) + cor + 1.0
+            for (n2, x1, y1, x2, y2, hr, ikey) in segs_by_layer.get(li, []):
+                if n2 == net: continue
+                if max(x1, x2) < bx0 or min(x1, x2) > bx1 or max(y1, y2) < by0 or min(y1, y2) > by1: continue
+                if seg_seg_dist((x1, y1, x2, y2), (sx1, sy1, sx2, sy2)) < cor + hr:
+                    key = ikey or ('T', n2, li, round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2))
+                    if key not in seen:
+                        seen.add(key); items += 1; per_net[net] = per_net.get(net, 0) + 1
+                    total_mm += _seg_in_band(x1, y1, x2, y2, sx1, sy1, sx2, sy2, cor + hr)
+            for (n2, cx, cy, vobj) in vias:
+                if n2 == net: continue
+                # (#198): a via intrudes only on a layer it
+                # actually spans -- the layer-blind test counted
+                # blind/buried vias against corridors on layers
+                # they never touch, at F.Cu width.
+                try:
+                    if not vobj.IsOnLayer(stack[li]): continue
+                    vr = mm(vobj.GetWidth(stack[li])) / 2
+                except Exception:
+                    continue
+                if not (bx0 <= cx <= bx1 and by0 <= cy <= by1): continue
+                if seg_pt(cx, cy, sx1, sy1, sx2, sy2) < cor + vr:
+                    key = ('V', n2, round(cx, 2), round(cy, 2))
+                    if key not in seen:
+                        seen.add(key); items += 1; per_net[net] = per_net.get(net, 0) + 1
+    return items, round(total_mm, 1), per_net
+
 class Grid:
     def __init__(self, b, window, track_w=None, via_r=None):
         self.X0, self.X1, self.Y0, self.Y1 = window
@@ -306,6 +829,18 @@ class Grid:
             if _still:
                 raise ValueError('--no-tracks-on names not resolvable on this board: %s (copper layers: %s)' % (', '.join(_still), ', '.join(b.GetLayerName(l) for l in self.stack)))
             _banned = set(_banned) | _extra
+        _cost = dict(LAYER_COST_BY_ID)
+        for _nm, _f in LAYER_COST_UNRESOLVED:
+            _ids, _still = _resolve_banned_on_board(b, [_nm])
+            if _still:
+                raise ValueError('--layer-cost names not resolvable on this board: %s (copper layers: %s)' % (', '.join(_still), ', '.join(b.GetLayerName(l) for l in self.stack)))
+            for _lid in _ids: _cost[_lid] = _f
+        # v1.11 (#73): a priced layer is NOT banned -- if a layer
+        # arrives as both (legs receive the raw configured bans),
+        # the price wins, mirroring the pipeline's effective law.
+        _banned = _banned - set(_cost)
+        self.layer_cost = {self.lidx[lay]: f for lay, f in _cost.items() if lay in self.lidx}
+        self._lfac = [float(self.layer_cost.get(k, 1)) for k in range(self.nl)]
         self.routable = {k for k, lay in enumerate(self.stack) if lay not in _banned}
         self.banned_idx = {k for k, lay in enumerate(self.stack) if lay in _banned}
         self.pads, self.segs, self.vias = [], [], []
@@ -373,6 +908,20 @@ class Grid:
                     _xs = [q[0] for q in pts]; _ys = [q[1] for q in pts]
                     if max(_xs) < _wx0 or min(_xs) > _wx1 or max(_ys) < _wy0 or min(_ys) > _wy1: continue
                 self.keepouts.append((pts, layers, z.GetDoNotAllowTracks(), z.GetDoNotAllowVias()))
+        # v1.12 (#63): pour skeletons whose corridors touch the window
+        # (the same +-2 mm filter as the copper above). build() and
+        # build_owners() stamp them as foreign-net keepouts; the
+        # corridors are stored as plain segments per skeleton.
+        self.skeletons = []
+        if SKELETON_ON:
+            for sk in pour_skeletons(b):
+                keep = []
+                for (i, j, _d) in sk['edges']:
+                    x1, y1 = sk['pads'][i]; x2, y2 = sk['pads'][j]
+                    if max(x1, x2) < _wx0 or min(x1, x2) > _wx1 or max(y1, y2) < _wy0 or min(y1, y2) > _wy1: continue
+                    keep.append((x1, y1, x2, y2))
+                if keep:
+                    self.skeletons.append({'net': sk['net'], 'layer_idx': sk['layer_idx'], 'width': sk['width'], 'segs': keep})
     def _domain_lidx(self, names):
         # #110 (residual of #80): domains.json carries BOARD layer
         # names (the cmd_hvgeom facts use b.GetLayerName), so resolve
@@ -512,6 +1061,21 @@ class Grid:
             if net not in ignore_nets: stamp_disc(set(range(self.nl)), cx, cy, r)
         for net, li, x1, y1, x2, y2, hr in self.segs:
             if net not in ignore_nets: stamp_seg(li, x1, y1, x2, y2, hr)
+        # v1.12 (#63): reserved skeleton corridors, stamped LAST so
+        # no ordinary stamping can reopen them. A corridor blocks
+        # every net except its own pour's; with target None, the
+        # ignore set names the nets being re-planned and their own
+        # pours' corridors stay open to them. Callers' free_disc()
+        # at the target's pads still applies afterwards -- a foreign
+        # pad inside a corridor stays reachable; the reservation
+        # guards the path between the pour's pads, not other pads.
+        if SKELETON_ON:
+            for sk in self.skeletons:
+                if target is not None:
+                    if sk['net'] == target: continue
+                elif sk['net'] in ignore_nets: continue
+                for (x1, y1, x2, y2) in sk['segs']:
+                    stamp_seg(sk['layer_idx'], x1, y1, x2, y2, sk['width'] / 2)
         return blocked, via_block
     def free_disc(self, blocked, via_block, cx, cy, layers):
         NX, NY, X0, Y0 = self.NX, self.NY, self.X0, self.Y0
@@ -537,7 +1101,8 @@ class Grid:
         # including the banned GND plane, whose blocked plane is
         # nearly empty, so heal/finish paths ran tracks straight
         # across it and the pour refill hid them from DRC.
-        allowed = self.routable | set(extra_layers)
+        extra = set(extra_layers)
+        allowed = self.routable | extra
         si = self.cell(*start_xy); gi = self.cell(*goal_xy)
         starts = [(l, si[1], si[0]) for l in start_layers if l in allowed]
         # v1.8.1 (#11): a blocked goal cell is unreachable -- exclude it
@@ -568,7 +1133,7 @@ class Grid:
                     # between two blocked orthogonal neighbours -- it passes
                     # within p/sqrt(2) of their corners (v3 audit, bug #6).
                     if dj and di and (blocked[li, j + dj, i] or blocked[li, j, i + di]): continue
-                    nd = dcur + (1.41421356 if dj and di else 1.0); nb = (li, nj, ni)
+                    nd = dcur + (1.41421356 if dj and di else 1.0) * (1.0 if li in extra else self._lfac[li]); nb = (li, nj, ni)  # v1.11 (#73): travel on a priced layer costs its factor per cell (1 = unpriced, the old cost exactly; the heuristic stays unit-cost, admissible since factors are >= 1). v1.11.2 (#103): a layer the caller vouches for via extra_layers -- a net's OWN plane, at every call site -- travels at unit cost; pricing it inverted the policy (an own-plane bridge dearer than under the hard ban the price replaced)
                     if nd < dist.get(nb, 1e18): dist[nb] = nd; prev[nb] = node; heapq.heappush(pq, (nd + _h(nj, ni), nd, nb))
             if not via_block[j, i]:
                 # A through via pierces every layer: transition to any
@@ -698,6 +1263,14 @@ class Grid:
                 key = (int(li), int(j), int(i)); owner[key] = owner.get(key, 0) | bn
             for j, i in zip(*np.nonzero(vm)):
                 key = (int(j), int(i)); via_owner[key] = via_owner.get(key, 0) | bn
+        # v1.12 (#63): skeleton corridors are HARD in the owners
+        # grid too -- a cut-set path may rip priced victims, but it
+        # may not sever a pour skeleton and call the pour a victim.
+        if SKELETON_ON:
+            for sk in self.skeletons:
+                if sk['net'] == target: continue
+                for (x1, y1, x2, y2) in sk['segs']:
+                    stamp_seg(hard, vhard, sk['layer_idx'], x1, y1, x2, y2, sk['width'] / 2)
         return hard, vhard, owner, via_owner, nets
 
     def cutset_astar(self, blocked, via_block, owner, via_owner, start_xy, goal_xy, start_layers, goal_layers, phi, *, nets, extra_layers=()):
@@ -734,7 +1307,8 @@ class Grid:
             nid[0] += 1
             prev[nid[0]] = (parent, li, j, i, mask)
             heapq.heappush(pq, (cost + _h(j, i), cost, nid[0]))
-        allowed = self.routable | set(extra_layers)
+        extra = set(extra_layers)
+        allowed = self.routable | extra
         for l in start_layers:
             if l in allowed: push(0.0, l, si[1], si[0], 0, 0)
         goalset = {(l, gi[1], gi[0]) for l in goal_layers if l in allowed and not blocked[l, gi[1], gi[0]]}
@@ -752,7 +1326,7 @@ class Grid:
                 if not (0 <= nj < self.NY and 0 <= ni < self.NX) or blocked[li, nj, ni]: continue
                 if dj and di and (blocked[li, j + dj, i] or blocked[li, j, i + di]): continue
                 add, nmask = _charge(owner.get((li, nj, ni), 0), mask)
-                push(dcur + (1.41421356 if dj and di else 1.0) + add, li, nj, ni, nmask, this)
+                push(dcur + (1.41421356 if dj and di else 1.0) * (1.0 if li in extra else self._lfac[li]) + add, li, nj, ni, nmask, this)  # v1.11 (#73): priced-layer factor, as in astar; v1.11.2 (#103): extra (own-plane) layers at unit cost, as in astar
             if not via_block[j, i]:
                 vo = via_owner.get((j, i), 0)
                 for ol in allowed:
@@ -843,12 +1417,14 @@ def add_seg(b, nets, netname, li, x1, y1, x2, y2, w=0.20):
     t.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1))); t.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
     t.SetWidth(nm(w)); t.SetLayer(copper_stack(b)[li])
     t.SetNetCode(nets[netname].GetNetCode()); b.Add(t)
+    return t
 
 def add_via(b, nets, netname, x, y, w=0.60, drill=0.30):
     v = pcbnew.PCB_VIA(b)
     v.SetPosition(pcbnew.VECTOR2I(nm(x), nm(y)))
     v.SetWidth(nm(w)); v.SetDrill(nm(drill))
     v.SetNetCode(nets[netname].GetNetCode()); b.Add(v)
+    return v
 
 def path_segs_vias(simp):
     segs = [(a[0], a[1], a[2], bb[1], bb[2]) for a, bb in zip(simp, simp[1:]) if a[0] == bb[0]]
@@ -979,7 +1555,7 @@ def _bridge_plan(b, net, before, margins=(12, 20)):
                     g.inf = bw / 2 + g.clr_plan
                 blocked, via_block = g.build({net}, target=net)
                 _stamp_edge_keepback(b, g, blocked, via_block, bw, vd / 2)
-                _stamp_hole_keepback(b, g, blocked, via_block, bw, vdr / 2, net=net)
+                _stamp_hole_keepback(b, g, blocked, via_block, bw, vdr / 2, net=net, vr_pad=vd / 2)
                 g.free_disc(blocked, via_block, S[1], S[2], layers=tuple(S[3]))
                 g.free_disc(blocked, via_block, Gp[1], Gp[2], layers=tuple(Gp[3]))
                 _stamp_inner_via_blocks(b, via_block, g, {net})
@@ -1020,6 +1596,7 @@ def cmd_finish_probe(board_path, net, victims):
             hits = []
             for t in list(b.GetTracks()):
                 if t.GetNetname() != v: continue
+                if t.IsLocked(): continue  # v1.12.2 (#174): locked copper is never ripped -- the leg must fail its exact check instead of displacing it
                 hit = False
                 if t.Type() == pcbnew.PCB_VIA_T:
                     cx, cy = mm(t.GetPosition().x), mm(t.GetPosition().y)
@@ -1084,6 +1661,7 @@ def _finish_attempt(board_path, out_path, net, A, Bp, simp, victims, window):
         hits = []
         for t in list(b.GetTracks()):
             if t.GetNetname() != v: continue
+            if t.IsLocked(): continue  # v1.12.2 (#174): locked copper is never a victim -- if it blocks the leg, _new_items_clean rejects the leg below
             hit = False
             if t.Type() == pcbnew.PCB_VIA_T:
                 cx, cy = mm(t.GetPosition().x), mm(t.GetPosition().y)
@@ -1153,7 +1731,7 @@ def _finish_attempt(board_path, out_path, net, A, Bp, simp, victims, window):
                             g2.inf = bw_v / 2 + g2.clr_plan
                         blocked, via_block = g2.build({v}, target=v)
                         _stamp_edge_keepback(b, g2, blocked, via_block, bw_v, _bvd / 2)
-                        _stamp_hole_keepback(b, g2, blocked, via_block, bw_v, _bvdr / 2, net=v)
+                        _stamp_hole_keepback(b, g2, blocked, via_block, bw_v, _bvdr / 2, net=v, vr_pad=_bvd / 2)
                         g2.free_disc(blocked, via_block, S[1], S[2], layers=tuple(S[3]))
                         g2.free_disc(blocked, via_block, Gp[1], Gp[2], layers=tuple(Gp[3]))
                         _stamp_inner_via_blocks(b, via_block, g2, {v})
@@ -1199,7 +1777,7 @@ def _plan_attempts(board_path, net):
         blocked, via_block = grid0.build(ignore, target=net)
         _tw = net_class_width(b0, net, W_TRACK)
         _stamp_edge_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[0] / 2)
-        _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net)
+        _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net, vr_pad=net_class_via(b0, net)[0] / 2)
         grid0.free_disc(blocked, via_block, *start_xy, layers=tuple(A[3]))
         grid0.free_disc(blocked, via_block, *goal_xy, layers=tuple(Bp[3]))
         # Stamp inner-track via blocks AFTER freeing the pad discs: a
@@ -1309,7 +1887,9 @@ def cmd_finish_leg(board_path, out_path, net, attempt_select=False):
                     pline = [sys.executable, os.path.abspath(__file__), 'finish_probe',
                              '--board', board_in, '--net', net,
                              '--victims', ','.join(victims), '--result', ppath]
-                    if NO_TRACKS_ON_RAW: pline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+                    if NO_TRACKS_ON_RAW is not None: pline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
+                    if LAYER_COST_RAW: pline += ['--layer-cost', LAYER_COST_RAW]
+                    if SKELETON_ON: pline += ['--skeleton']
                     if DOMAINS_RAW: pline += ['--domains', DOMAINS_RAW]
                     try:
                         subprocess.run(pline, capture_output=True, text=True, timeout=600)
@@ -1330,7 +1910,9 @@ def cmd_finish_leg(board_path, out_path, net, attempt_select=False):
             cmdline = [sys.executable, os.path.abspath(__file__), 'finish_attempt',
                        '--board', board_in, '--out', out_path, '--net', net,
                        '--victims', ','.join(victims), '--result', rpath]
-            if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+            if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
+            if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
+            if SKELETON_ON: cmdline += ['--skeleton']
             if DOMAINS_RAW: cmdline += ['--domains', DOMAINS_RAW]
             try:
                 subprocess.run(cmdline, capture_output=True, text=True, timeout=300)
@@ -1380,7 +1962,7 @@ def _plan_path(board_path, net, victims, bump=0.0):
     blocked, via_block = grid0.build(ignore, target=net)
     _tw = net_class_width(b0, net, W_TRACK)
     _stamp_edge_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[0] / 2)
-    _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net)
+    _stamp_hole_keepback(b0, grid0, blocked, via_block, _tw, net_class_via(b0, net)[1] / 2, net=net, vr_pad=net_class_via(b0, net)[0] / 2)
     grid0.free_disc(blocked, via_block, *start_xy, layers=tuple(A[3]))
     grid0.free_disc(blocked, via_block, *goal_xy, layers=tuple(Bp[3]))
     _stamp_inner_via_blocks(b0, via_block, grid0, ignore)
@@ -1411,6 +1993,42 @@ def cmd_finish_attempt(board_path, out_path, net, victims):
     return {'status': 'failed', 'net': net}
 
 
+def _edge_shape_segments(dr):
+    # v1.11.5 (#118): the outline segments of one Edge.Cuts drawing.
+    # Straight segments are exact. Every other shape (circle, arc,
+    # rectangle, polygon, bezier) is tessellated by KiCad itself via
+    # TransformShapeToPolygon at 0.05 mm max error, ERROR_OUTSIDE so
+    # the tessellation never overstates the distance to the true
+    # edge. The old code used the shape's BOUNDING BOX, which is
+    # wrong in both directions: too lenient at a circle's diagonals
+    # (copper 0.2 mm from a 3.2 mm circle sits ~0.33 mm from the
+    # nearest box side and passed a 0.3 mm rule) and too strict
+    # across a corner arc or a polygon notch (box sides run through
+    # the board interior). Falls back to the bbox if tessellation
+    # is unavailable.
+    if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
+        return [(mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y))]
+    try:
+        ps = pcbnew.SHAPE_POLY_SET()
+        dr.TransformShapeToPolygon(ps, dr.GetLayer(), 0, nm(0.05), pcbnew.ERROR_OUTSIDE)
+        segs = []
+        for oi in range(ps.OutlineCount()):
+            chains = [ps.Outline(oi)]
+            try:
+                for hi in range(ps.HoleCount(oi)): chains.append(ps.Hole(oi, hi))
+            except Exception: pass
+            for ch in chains:
+                pts = [(mm(ch.CPoint(i).x), mm(ch.CPoint(i).y)) for i in range(ch.PointCount())]
+                for i in range(len(pts)):
+                    x1, y1 = pts[i]; x2, y2 = pts[(i + 1) % len(pts)]
+                    if (x1, y1) != (x2, y2): segs.append((x1, y1, x2, y2))
+        if segs: return segs
+    except Exception:
+        pass
+    bb = dr.GetBoundingBox()
+    el, et, er, eb = mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom())
+    return [(el, et, er, et), (er, et, er, eb), (er, eb, el, eb), (el, eb, el, et)]
+
 def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
     # The grid has no notion of the board outline, so a board-wide leg
     # can hug the edge closer than the copper_edge_clearance rule
@@ -1419,13 +2037,8 @@ def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
     # finisher rarely reaches an edge, which is why this stayed
     # hidden). Stamp a band around every Edge.Cuts segment: track
     # centres must stand off edge_clr + tw/2, via centres edge_clr +
-    # vr. Non-line shapes are stamped by expanded bbox -- an
-    # APPROXIMATION, not a conservative one (#149 D13): the band
-    # follows the bounding box, so where the real edge cuts
-    # inside its box (arcs, curves) the band is displaced and can
-    # under-cover the edge's neighbourhood.  The exact checker
-    # remains the authority near curved outlines.  Applies to
-    # every layer.
+    # vr. Non-line shapes are stamped from their tessellated
+    # outline (_edge_shape_segments, #118). Applies to every layer.
     try: edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
     except Exception: edge_clr = 0.5
     if edge_clr <= 0: return
@@ -1444,23 +2057,24 @@ def _stamp_edge_keepback(b, g, blocked, via_block, tw, vr):
             t = np.clip(((xs - x0) * vx + (ys - y0) * vy) / L2, 0.0, 1.0)
             d = np.hypot(xs - (x0 + t * vx), ys - (y0 + t * vy))
         mask2d[j0:j1 + 1, i0:i1 + 1] |= (d < rad)
+    # v1.11.2 (#107): footprint-embedded Edge.Cuts (slots, cutouts)
+    # is board outline too -- #75 taught the exact checker to see
+    # it; this stamp kept looking only at board drawings, so legs
+    # were planned into the graze band the checker then vetoed.
+    _drawings = list(b.GetDrawings())
+    for _fp in b.GetFootprints(): _drawings.extend(list(_fp.GraphicalItems()))
     for rad, is_via in ((edge_clr + tw / 2, False), (edge_clr + vr, True)):
         band = np.zeros((g.NY, g.NX), dtype=bool)
-        for dr in b.GetDrawings():
+        for dr in _drawings:
             if dr.GetLayer() != pcbnew.Edge_Cuts: continue
-            if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
-                stamp_band(mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y), rad, band)
-            else:
-                bb = dr.GetBoundingBox()
-                stamp_band(mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetTop()), rad, band)
-                stamp_band(mm(bb.GetLeft()), mm(bb.GetBottom()), mm(bb.GetRight()), mm(bb.GetBottom()), rad, band)
-                stamp_band(mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetLeft()), mm(bb.GetBottom()), rad, band)
-                stamp_band(mm(bb.GetRight()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom()), rad, band)
+            for (sx0, sy0, sx1, sy1) in _edge_shape_segments(dr):
+                stamp_band(sx0, sy0, sx1, sy1, rad, band)
         if is_via: via_block |= band
         else:
             for li in range(g.nl): blocked[li] |= band
 
-def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None):
+def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None, vr_pad=None):
+    if vr_pad is None: vr_pad = vr_drill  # callers predating #117 pass only the drill radius
     # Drilled holes pierce every layer, and hole_clearance (drill
     # edge to foreign copper) is a separate rule from copper
     # clearance. NPTH pads carry ~no copper, so pad stamping leaves
@@ -1468,7 +2082,13 @@ def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None):
     # tracks 0.244/0.245 mm from two NPTH holes vs the 0.250 rule --
     # a miss neither the grid nor the exact checker models. Stamp
     # every drilled pad's hole at drill_r + hole_clr + tw/2 (tracks,
-    # all layers) and drill_r + hole_clr + vr_drill (via centres).
+    # all layers) and drill_r + hole_clr + vr_pad (via centres --
+    # hole_clearance measures COPPER to hole, so the via's copper
+    # radius, exactly as the #75 checker computes it; v1.11.5 #117:
+    # this stamp used the DRILL radius and under-reserved by half
+    # the annular ring, proposing via sites the checker then
+    # rejected. The hole-to-hole band below keeps the drill radius:
+    # that rule is drill-to-drill.)
     try: hole_clr = mm(b.GetDesignSettings().m_HoleClearance)
     except Exception: hole_clr = 0.25
     if hole_clr <= 0: return
@@ -1480,17 +2100,45 @@ def _stamp_hole_keepback(b, g, blocked, via_block, tw, vr_drill, net=None):
         if i1 < i0 or j1 < j0: return
         xs = gx[i0:i1 + 1][None, :]; ys = gy[j0:j1 + 1][:, None]
         mask2d[j0:j1 + 1, i0:i1 + 1] |= (np.hypot(xs - cx, ys - cy) < rad)
-    holes = []
+    holes = []; holes_all = []
     for fp in b.GetFootprints():
         for p in fp.Pads():
-            if net is not None and p.GetNetname() == net: continue
             ds = p.GetDrillSize()
             if ds.x <= 0: continue
-            holes.append((mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2))
+            _h = (mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2)
+            holes_all.append(_h)
+            if net is not None and p.GetNetname() == net: continue
+            holes.append(_h)
+    # #113 (residual of #107): existing VIA drills are drills too --
+    # the #75 checker counts them (adrills/fdrills scan GetTracks),
+    # but this stamp never saw them, so a via could be planned
+    # inside hole_to_hole of an existing via drill and the finished
+    # leg was vetoed.  Same split as pads: every via drill into
+    # holes_all, foreign ones into holes.
+    for t in b.GetTracks():
+        if t.Type() != pcbnew.PCB_VIA_T: continue
+        _h = (mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2)
+        holes_all.append(_h)
+        if net is not None and t.GetNetname() == net: continue
+        holes.append(_h)
     band_t = np.zeros((g.NY, g.NX), dtype=bool); band_v = np.zeros((g.NY, g.NX), dtype=bool)
     for (cx, cy, dr) in holes:
         stamp_disc(cx, cy, dr + hole_clr + tw / 2, band_t)
-        stamp_disc(cx, cy, dr + hole_clr + vr_drill, band_v)
+        stamp_disc(cx, cy, dr + hole_clr + vr_pad, band_v)
+    # v1.11.2 (#107): hole_to_hole is a physical drill-separation
+    # rule and binds SAME-net drills too -- #75 taught the checker
+    # (adrills), but this stamp skipped the planned net's own pads
+    # entirely, so a via could be planned inside h2h of a same-net
+    # TH pad and the finished leg was vetoed. Via centres now stand
+    # off every drill by h2h as well (the checker's own fallback
+    # when the design setting is unreadable). Track bands stay
+    # foreign-only: hole_clearance is a copper rule and same-net
+    # copper is exempt from it.
+    try: h2h = mm(b.GetDesignSettings().m_HoleToHoleMin)
+    except Exception: h2h = hole_clr
+    if h2h > 0:
+        for (cx, cy, dr) in holes_all:
+            stamp_disc(cx, cy, dr + h2h + vr_drill, band_v)
     for li in range(g.nl): blocked[li] |= band_t
     via_block |= band_v
 
@@ -1558,7 +2206,7 @@ def cmd_long_attempt(board_path, out_path, net):
                 g.inf = tw / 2 + g.clr_plan
             blocked, via_block = g.build({net}, target=net)
             _stamp_edge_keepback(b0, g, blocked, via_block, tw, vr)
-            _stamp_hole_keepback(b0, g, blocked, via_block, tw, net_class_via(b0, net)[1] / 2, net=net)
+            _stamp_hole_keepback(b0, g, blocked, via_block, tw, net_class_via(b0, net)[1] / 2, net=net, vr_pad=net_class_via(b0, net)[0] / 2)
             g.free_disc(blocked, via_block, *start_xy, layers=tuple(A[3]))
             g.free_disc(blocked, via_block, *goal_xy, layers=tuple(Bp[3]))
             _stamp_inner_via_blocks(b0, via_block, g, {net})
@@ -1589,7 +2237,9 @@ def cmd_long_leg(board_path, out_path, net):
         fd, rpath = tempfile.mkstemp(suffix='.json'); os.close(fd)
         cmdline = [sys.executable, os.path.abspath(__file__), 'long_attempt',
                    '--board', board_in, '--out', out_path, '--net', net, '--result', rpath]
-        if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+        if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
+        if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
+        if SKELETON_ON: cmdline += ['--skeleton']
         if DOMAINS_RAW: cmdline += ['--domains', DOMAINS_RAW]
         try:
             subprocess.run(cmdline, capture_output=True, text=True, timeout=900)
@@ -1706,15 +2356,19 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
     try: edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
     except Exception: edge_clr = 0.5
     if edge_clr > 0:
+        def _add_edge(dr):
+            edge_segs.extend(_edge_shape_segments(dr))  # v1.11.5 (#118): tessellated outline, not the bbox
         for dr in b.GetDrawings():
-            if dr.GetLayer() != pcbnew.Edge_Cuts: continue
-            if dr.Type() == pcbnew.PCB_SHAPE_T and dr.GetShape() == pcbnew.SHAPE_T_SEGMENT:
-                edge_segs.append((mm(dr.GetStart().x), mm(dr.GetStart().y), mm(dr.GetEnd().x), mm(dr.GetEnd().y)))
-            else:
-                bb = dr.GetBoundingBox()
-                el, et, er, eb = mm(bb.GetLeft()), mm(bb.GetTop()), mm(bb.GetRight()), mm(bb.GetBottom())
-                edge_segs += [(el, et, er, et), (er, et, er, eb), (er, eb, el, eb), (el, eb, el, et)]
+            if dr.GetLayer() == pcbnew.Edge_Cuts: _add_edge(dr)
+        # v1.11.1 (#75): Edge.Cuts drawn inside a footprint (slots,
+        # cutouts) is board outline for DRC too -- collect it as well.
+        for fp in b.GetFootprints():
+            for dr in fp.GraphicalItems():
+                if dr.GetLayer() == pcbnew.Edge_Cuts: _add_edge(dr)
     fdrills = []
+    adrills = []   # v1.11.1 (#75): EVERY drill, any net -- hole_to_hole
+    # is a physical drill-separation rule and binds same-net pairs too;
+    # fdrills stays foreign-only for the hole_clearance (copper) test.
     try: hole_clr = mm(b.GetDesignSettings().m_HoleClearance)
     except Exception: hole_clr = 0.25
     try: h2h = mm(b.GetDesignSettings().m_HoleToHoleMin)
@@ -1722,13 +2376,16 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
     if hole_clr > 0 or h2h > 0:
         for fp in b.GetFootprints():
             for p in fp.Pads():
-                if p.GetNetname() == net: continue
                 ds = p.GetDrillSize()
                 if ds.x > 0:
-                    fdrills.append((mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2))
+                    _dr = (mm(p.GetPosition().x), mm(p.GetPosition().y), max(mm(ds.x), mm(ds.y)) / 2)
+                    adrills.append(_dr)
+                    if p.GetNetname() != net: fdrills.append(_dr)
         for t in b.GetTracks():
-            if t.GetNetname() == net or t.Type() != pcbnew.PCB_VIA_T: continue
-            fdrills.append((mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2))
+            if t.Type() != pcbnew.PCB_VIA_T: continue
+            _dr = (mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetDrillValue()) / 2)
+            adrills.append(_dr)
+            if t.GetNetname() != net: fdrills.append(_dr)
     vdr = net_class_via(b, net)[1] / 2
     def in_poly(px, py, pts):
         inside = False
@@ -1779,9 +2436,9 @@ def _new_items_clean(b, net, segs, vias, keepouts, w=HEAL_W):
         for (ex1, ey1, ex2, ey2) in edge_segs:
             if seg_pt(x, y, ex1, ey1, ex2, ey2) < vr + edge_clr: return False
         for (hx, hy, hr_) in fdrills:
-            d = math.hypot(x - hx, y - hy)
-            if d < hr_ + vr + hole_clr: return False
-            if d < hr_ + vdr + h2h: return False
+            if math.hypot(x - hx, y - hy) < hr_ + vr + hole_clr: return False
+        for (hx, hy, hr_) in adrills:
+            if math.hypot(x - hx, y - hy) < hr_ + vdr + h2h: return False
     return True
 
 def cmd_heal_attempt(board_path, out_path, net, frm, dst):
@@ -1812,7 +2469,7 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
         # v1.8.1 (#11): keepbacks BEFORE free_disc (the v1.7.1 order) --
         # stamped after, they re-blocked the freed start/goal discs.
         _stamp_edge_keepback(b, g, blocked, via_block, bw, _vd0 / 2)
-        _stamp_hole_keepback(b, g, blocked, via_block, bw, _vdr0 / 2, net=net)
+        _stamp_hole_keepback(b, g, blocked, via_block, bw, _vdr0 / 2, net=net, vr_pad=_vd0 / 2)
         g.free_disc(blocked, via_block, fx, fy, layers=fl)
         g.free_disc(blocked, via_block, dx, dy, layers=dl)
         _stamp_inner_via_blocks(b, via_block, g, {net})
@@ -1859,7 +2516,7 @@ def cmd_heal_attempt(board_path, out_path, net, frm, dst):
             g2 = Grid(b, (max(min(xs) - 2, wx[0]), min(max(xs) + 2, wx[1]), max(min(ys) - 2, wx[2]), min(max(ys) + 2, wx[3])), track_w=bw, via_r=net_class_via(b, net)[0] / 2)
             bl, vb = g2.build({net}, target=net)
             _stamp_edge_keepback(b, g2, bl, vb, bw, _vd0 / 2)
-            _stamp_hole_keepback(b, g2, bl, vb, bw, _vdr0 / 2, net=net)
+            _stamp_hole_keepback(b, g2, bl, vb, bw, _vdr0 / 2, net=net, vr_pad=_vd0 / 2)
             g2.free_disc(bl, vb, fx, fy, layers=fl)
             g2.free_disc(bl, vb, dx, dy, layers=dl)
             _stamp_inner_via_blocks(b, vb, g2, {net})
@@ -2067,7 +2724,9 @@ def cmd_heal(board_path, out_path, only=None):
                            '--frm', '%s:%.2f:%.2f' % (','.join(map(str, fl)), fx, fy),
                            '--dst', '%s:%.2f:%.2f' % (','.join(map(str, dl)), dx, dy),
                            '--result', rpath]
-                if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+                if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
+                if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
+                if SKELETON_ON: cmdline += ['--skeleton']
                 if DOMAINS_RAW: cmdline += ['--domains', DOMAINS_RAW]
                 try:
                     subprocess.run(cmdline, capture_output=True, text=True, timeout=300)
@@ -2169,7 +2828,7 @@ def _bridge_island(b, conn, netname, pad):
     if li is None: li = grid.nl - 1
     blocked, via_block = grid.build({netname}, target=netname)
     _stamp_edge_keepback(b, grid, blocked, via_block, draw_w, _vd0 / 2)
-    _stamp_hole_keepback(b, grid, blocked, via_block, draw_w, _vdr0 / 2, net=netname)
+    _stamp_hole_keepback(b, grid, blocked, via_block, draw_w, _vdr0 / 2, net=netname, vr_pad=_vd0 / 2)
     goal = None
     by_layer = {}
     for (gl, ps, oi, _pts) in goals: by_layer.setdefault(gl, []).append((ps, oi))
@@ -2278,6 +2937,28 @@ def cmd_restore_locks(board_path, out_path, locks_file):
             t.SetLocked(states[u]); n += 1
     pcbnew.SaveBoard(out_path, b)
     return {'status': 'restored', 'changed': n}
+
+def cmd_lock_all(board_path, out_path):
+    # v1.12.2 (#174): snapshot EVERY track/via lock state (the
+    # cmd_lock_window record format, restorable by cmd_restore_locks)
+    # and lock them all on the output board. The pipeline runs this
+    # on the working base under route_open_only so pre-existing
+    # copper becomes untouchable for every downstream removal or
+    # displacement path (prune and strip already skip locked items;
+    # the victim rips do too, below) until finalize() restores the
+    # snapshot onto the delivered board.
+    b = pcbnew.LoadBoard(board_path)
+    states = {}
+    newly = 0
+    for t in list(b.GetTracks()):
+        try: states[t.m_Uuid.AsString()] = bool(t.IsLocked())
+        except Exception: continue
+        if not t.IsLocked():
+            t.SetLocked(True); newly += 1
+    pcbnew.SaveBoard(out_path, b)
+    locks_file = out_path + '.locks.json'
+    with open(locks_file, 'w') as f: json.dump(states, f)
+    return {'status': 'locked_all', 'items': len(states), 'newly_locked': newly, 'locks_file': locks_file}
 
 def cmd_stitch(board_path, out_path):
     b = pcbnew.LoadBoard(board_path)
@@ -2451,6 +3132,7 @@ def cmd_prune(board_path, out_path):
     before = pad_comps()
     dead = []
     for t in list(b.GetTracks()):
+        if t.IsLocked(): continue  # v1.11.5 (#119): prune is a removal path too -- locked copper is the user's, even when it is a dead component (the gate's invariance census counts any locked loss as a defect)
         items = conn.GetConnectedItems(t)
         if not any(it.Type() == pcbnew.PCB_PAD_T or it.Type() == pcbnew.PCB_ZONE_T for it in items):
             dead.append(t)
@@ -2471,20 +3153,84 @@ def cmd_refill(board_path, out_path):
     pcbnew.SaveBoard(out_path, b)
     return {'refilled': True}
 
+def _zone_layers_by_net(b):
+    # net -> set of copper layer ids its zones sit on (v1.11.5, #119:
+    # the free-via fallback and the summary census share this).
+    out = {}
+    for z in b.Zones():
+        if _is_rule_area(z): continue  # (#195): the #181 skip, missed here -- a rule area retaining a net name is not a pour, and counting it makes _via_is_free call ordinary routing vias free
+        n = z.GetNetname()
+        if not n: continue
+        try: lays = list(z.GetLayerSet().CuStack())
+        except Exception:
+            try: lays = [z.GetLayer()]
+            except Exception: lays = []
+        out.setdefault(n, set()).update(lays)
+    return out
+
+def _via_is_free(v, zone_layers):
+    # v1.11.5 (#119): a via the router did not place for connectivity:
+    # KiCad marks user-placed stitching / thermal vias FREE; where the
+    # flag reads False, fall back to the review's rule -- the via's
+    # net has a zone on one of the via's layers (a stitching via into
+    # its own pour).
+    try:
+        if v.GetIsFree(): return True
+    except Exception:
+        pass
+    for lid in zone_layers.get(v.GetNetname()) or ():
+        try:
+            if v.IsOnLayer(lid): return True
+        except Exception: continue
+    return False
+
 def cmd_strip(board_path, out_path):
+    # v1.11.5 (#119): strip used to remove EVERY track, arc and via --
+    # user-locked hand routing, stitching vias and thermal-via arrays
+    # silently vanished from every delivered board, and neither DRC
+    # nor the gate could see the loss (no rule requires them). Now:
+    # remove only UNLOCKED tracks/arcs, plus the vias that removal
+    # leaves dangling (touching no kept track and no pad). Locked
+    # items and free vias survive.
     b = pcbnew.LoadBoard(board_path)
-    tracks = b.GetTracks()  # snapshot ONCE: re-querying Tracks() after a Remove breaks in KiCad 10 pcbnew
-    n = len(tracks)
-    while tracks:
-        t = tracks.pop()
-        b.Remove(t)
-        del t
+    tracks = list(b.GetTracks())  # snapshot ONCE: re-querying Tracks() after a Remove breaks in KiCad 10 pcbnew
+    zone_layers = _zone_layers_by_net(b)
+    removed = 0
+    kept_tracks = []; vias = []
+    for t in tracks:
+        if t.Type() == pcbnew.PCB_VIA_T: vias.append(t); continue
+        if t.IsLocked(): kept_tracks.append(t)
+        else: b.Remove(t); removed += 1
+    segs = []
+    for t in kept_tracks:
+        st, en = t.GetStart(), t.GetEnd()
+        segs.append((t.GetLayer(), st.x, st.y, en.x, en.y))
+    pad_pts = set()
+    for fp in b.GetFootprints():
+        for pd in fp.Pads():
+            pad_pts.add((pd.GetPosition().x, pd.GetPosition().y, pd.GetNetname()))
+    def _via_connected(v):
+        x, y = v.GetPosition().x, v.GetPosition().y
+        if (x, y, v.GetNetname()) in pad_pts: return True
+        for (lay, sx, sy, ex, ey) in segs:
+            try:
+                if not v.IsOnLayer(lay): continue
+            except Exception: continue
+            if (sx == x and sy == y) or (ex == x and ey == y): return True
+            if (ex - sx) * (y - sy) == (ey - sy) * (x - sx) and min(sx, ex) <= x <= max(sx, ex) and min(sy, ey) <= y <= max(sy, ey): return True
+        return False
+    kept_locked = len(kept_tracks); kept_free = 0
+    for v in vias:
+        if v.IsLocked(): kept_locked += 1; continue
+        if _via_is_free(v, zone_layers): kept_free += 1; continue
+        if _via_connected(v): continue
+        b.Remove(v); removed += 1
     # NO refill here: the stripped board is an internal router input, and refilling it
     # before TraceMaker measurably fragments the pours (measured A/B 2026-11-21: pass 1
     # gate 22 unconnected / DIO1 split with refill vs 5 / 0 splits without). Refill
     # belongs at the gate (kicad-cli --refill-zones) and at finalize (user-facing save).
     pcbnew.SaveBoard(out_path, b)
-    return {'removed_tracks_vias': n}
+    return {'removed_tracks_vias': removed, 'kept_locked': kept_locked, 'kept_free_vias': kept_free}
 
 # --------------------------------------------------------------------
 # v1.5 phase (c) Stage B: joint candidate selection (0-1 ILP) across
@@ -2638,7 +3384,9 @@ def cmd_ilp_repair(board_path, out_path, nets):
             cmdline = [sys.executable, os.path.abspath(__file__), 'finish_attempt',
                        '--board', cur, '--out', tmp_out, '--net', cand['net'],
                        '--victims', ','.join(cand['victims']), '--result', rpath]
-            if NO_TRACKS_ON_RAW: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]
+            if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
+            if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
+            if SKELETON_ON: cmdline += ['--skeleton']
             if DOMAINS_RAW: cmdline += ['--domains', DOMAINS_RAW]
             try:
                 subprocess.run(cmdline, capture_output=True, text=True, timeout=600)
@@ -2665,17 +3413,41 @@ def _freerouting_bin():
     return None
 
 
+def _kill_group(p):
+    # v1.11.5 (#125): the timeout kill, per platform. POSIX: SIGKILL
+    # the whole process group. Windows has no killpg/getpgid -- the
+    # old code's except-pass hid that and the following communicate()
+    # (no timeout) then blocked forever on the still-running child.
+    # start_new_session maps to CREATE_NEW_PROCESS_GROUP there, so
+    # taskkill /T takes the tree by PID; p.kill() is the last resort.
+    if os.name == 'nt':
+        import subprocess
+        try:
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], capture_output=True, timeout=30)
+            return
+        except Exception:
+            try: p.kill()
+            except Exception: pass
+        return
+    import signal as _signal
+    try: os.killpg(os.getpgid(p.pid), _signal.SIGKILL)
+    except Exception: pass
+
 def _run_group(cmd, timeout, cwd=None):
     # v1.10.1 (#55): engines run in their own process group so a
     # timeout kills the whole tree (the Freerouting JVM, KRT's native
     # children) instead of orphaning them in the container.
-    import signal as _signal
+    # v1.11.5 (#153): import subprocess HERE -- this function never
+    # had it in scope (the callers' function-local imports do not
+    # bind the module global), so every _run_group call raised
+    # NameError and the KRT/Freerouting legs silently returned
+    # run_failed since v1.10.1.
+    import subprocess
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd, start_new_session=True)
     try:
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        try: os.killpg(os.getpgid(p.pid), _signal.SIGKILL)
-        except Exception: pass
+        _kill_group(p)
         out, err = p.communicate()
         raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
     return subprocess.CompletedProcess(cmd, p.returncode, out, err)
@@ -4281,6 +5053,29 @@ def cmd_smooth(board_path, net):
     pcbnew.SaveBoard(board_path, b)
     return {'net': net, 'smoothed': smoothed, 'skipped': skipped}
 
+def _with_yield(fn, is_fail):
+    # #63 yield: the reservation is a planning preference, not a
+    # veto -- the ticket's own rule is that it 'yields first under
+    # congestion, so it never costs a connection'. A finisher
+    # command that fails outright with the reservation on runs once
+    # more without it (the measured esp32 case: with corridors hard,
+    # finish/heal found no path at all for nets the unreserved
+    # finisher connects). The pipeline gate still counts every
+    # intrusion the yielded leg leaves behind, so the trade is
+    # priced, never free; 'skeleton_yield' in the result records
+    # that the reservation was stood down for this command.
+    global SKELETON_ON
+    res = fn()
+    if SKELETON_ON and is_fail(res):
+        SKELETON_ON = False
+        try:
+            res2 = fn()
+        finally:
+            SKELETON_ON = True
+        if not is_fail(res2):
+            res2 = dict(res2); res2['skeleton_yield'] = True
+            return res2
+    return res
 
 def main():
     ap = argparse.ArgumentParser()
@@ -4302,17 +5097,23 @@ def main():
     ap.add_argument('--result')
     ap.add_argument('--spec')
     ap.add_argument('--no-tracks-on')
+    ap.add_argument('--layer-cost')
+    ap.add_argument('--skeleton', action='store_true')  # v1.12 (#63)
+    ap.add_argument('--faults')  # v1.12 (#155): JSON fault list for fix_violations
     ap.add_argument('--domains')
     ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
-    if a.no_tracks_on:
+    if a.no_tracks_on is not None:  # v1.11.2 (#104): '' is an explicit empty ban set, not 'unset' -- the truthiness test silently restored the Grid default {In1_Cu} ban
         global BANNED_LAYER_IDS, NO_TRACKS_ON_RAW, NO_TRACKS_ON_UNRESOLVED
         NO_TRACKS_ON_RAW = a.no_tracks_on
-        BANNED_LAYER_IDS = set(); NO_TRACKS_ON_UNRESOLVED = []
-        for _x in a.no_tracks_on.split(','):
-            _i = _layer_id_from_name(_x)
-            if _i is None: NO_TRACKS_ON_UNRESOLVED.append(_x.strip())
-            else: BANNED_LAYER_IDS.add(_i)
+        BANNED_LAYER_IDS, NO_TRACKS_ON_UNRESOLVED = _parse_no_tracks_raw(a.no_tracks_on)
+    if a.layer_cost:
+        global LAYER_COST_RAW, LAYER_COST_BY_ID, LAYER_COST_UNRESOLVED
+        LAYER_COST_RAW = a.layer_cost
+        LAYER_COST_BY_ID, LAYER_COST_UNRESOLVED = _parse_layer_cost_raw(a.layer_cost)
+    if a.skeleton:
+        global SKELETON_ON
+        SKELETON_ON = True
     if a.domains:
         global DOMAINS_RAW, DOMAINS
         DOMAINS_RAW = a.domains
@@ -4337,21 +5138,24 @@ def main():
     elif a.cmd == 'rfgeom':
         with open(a.spec) as _f: res = cmd_rfgeom(a.board, json.load(_f))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
+    elif a.cmd == 'skeleton': res = cmd_skeleton(a.board)
+    elif a.cmd == 'fix_violations': res = _with_yield(lambda: cmd_fix_violations(a.board, a.out, json.load(open(a.faults))), lambda r: not r.get('fixed'))
     elif a.cmd == 'strip': res = cmd_strip(a.board, a.out)
-    elif a.cmd == 'finish_leg': res = cmd_finish_leg(a.board, a.out, a.net, attempt_select=bool(getattr(a, 'attempt_select', False)))
+    elif a.cmd == 'finish_leg': res = _with_yield(lambda: cmd_finish_leg(a.board, a.out, a.net, attempt_select=bool(getattr(a, 'attempt_select', False))), lambda r: r.get('status') not in ('routed', 'already_connected'))
     elif a.cmd == 'finish_probe': res = cmd_finish_probe(a.board, a.net, tuple(v for v in (a.victims or '').split(',') if v))
     elif a.cmd == 'finish_attempt': res = cmd_finish_attempt(a.board, a.out, a.net, [v for v in (a.victims or '').split(',') if v])
-    elif a.cmd == 'long_leg': res = cmd_long_leg(a.board, a.out, a.net)
+    elif a.cmd == 'long_leg': res = _with_yield(lambda: cmd_long_leg(a.board, a.out, a.net), lambda r: r.get('status') not in ('routed', 'already_connected'))
     elif a.cmd == 'long_attempt': res = cmd_long_attempt(a.board, a.out, a.net)
-    elif a.cmd == 'ilp_repair': res = cmd_ilp_repair(a.board, a.out, [n for n in (a.nets or '').split(',') if n])
-    elif a.cmd == 'stitch': res = cmd_stitch(a.board, a.out)
-    elif a.cmd == 'heal': res = cmd_heal(a.board, a.out, set(a.nets.split(',')) if getattr(a, 'nets', None) else None)
+    elif a.cmd == 'ilp_repair': res = _with_yield(lambda: cmd_ilp_repair(a.board, a.out, [n for n in (a.nets or '').split(',') if n]), lambda r: not r.get('routed'))
+    elif a.cmd == 'stitch': res = _with_yield(lambda: cmd_stitch(a.board, a.out), lambda r: not r.get('stitched') and bool(r.get('failed')))
+    elif a.cmd == 'heal': res = _with_yield(lambda: cmd_heal(a.board, a.out, set(a.nets.split(',')) if getattr(a, 'nets', None) else None), lambda r: not r.get('bridges') and bool(r.get('failed')))
     elif a.cmd == 'heal_attempt':
         def _pt(s):
             ls, x, y = s.split(':'); return (tuple(int(v) for v in ls.split(',')), float(x), float(y))
         res = cmd_heal_attempt(a.board, a.out, a.net, _pt(a.frm), _pt(a.dst))
     elif a.cmd == 'lock_window': res = cmd_lock_window(a.board, a.out, a.net, margin=a.margin, fx=a.fx, fy=a.fy, tx=a.tx, ty=a.ty)
     elif a.cmd == 'restore_locks': res = cmd_restore_locks(a.board, a.out, a.locks)
+    elif a.cmd == 'lock_all': res = cmd_lock_all(a.board, a.out)
     elif a.cmd == 'freeroute': res = cmd_freeroute(a.board, a.out, passes=a.passes)
     elif a.cmd == 'krt_route': res = cmd_krt_route(a.board, a.out)
     elif a.cmd == 'prune': res = cmd_prune(a.board, a.out)

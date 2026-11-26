@@ -33,14 +33,14 @@
       ],
       "versions": [
         {
-          "version": "1.10.2",
+          "version": "1.12.3",
           "status": "stable",
           "kicad_version": "10.0",
           "runtime": "swig",
-          "download_sha256": "da285fae1520e43cfd8006635c66ec6a17d494c511bbb7bdaffdfd94aad1f89c",
-          "download_size": 70110,
-          "download_url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/ai-router-1.10.2.zip",
-          "install_size": 235032
+          "download_sha256": "46a473dc97326d9dd618f28ddb94f02374dad9af7a4d6cb3641089f71a4f66ff",
+          "download_size": 120749,
+          "download_url": "https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo/ai-router-1.12.3.zip",
+          "install_size": 392516
         }
       ]
     }
