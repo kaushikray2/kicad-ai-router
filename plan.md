@@ -39,6 +39,40 @@ lanes run concurrently; neither waits for the other. Lane rules:
   (designed once for its three consumers: itself, P2.11, P2.12),
   then the remaining items and steps.
 
+**Engineered-nets GUI (branch `engineered-nets-gui`, 2026-11-26):**
+the Rev 3 wireframe implemented in full. Screen 1: an "Engineered
+nets" group in the main dialog (enable switch bound to the
+existing config key, sidecar state incl. the invalid-sidecar
+banner + repair path, per-section chips with the three-tier tags
+ENFORCED / POST-CHECK / CONDITIONAL and live condition status,
+the honesty line). Screens 2-3: the Markings... modal editor
+(By Net / By Group & Board views, per-type forms, solved-width
+preview, HV pairwise preview incl. the implicit rest-of-board
+row, #42 rule footprints read-only; every save goes through
+markings.save_markings + markings.validate). Screen 4: the
+post-run verdict bar + Report dialog fed by the pipeline's own
+engineered report structures. Backend parity: backend_client
+uploads the markings sidecar AND a netlist (sibling .net, else a
+local kicad-cli export from the sibling .kicad_sch);
+docker/server.py + run_job.py place both beside the input board;
+the engineered_nets switch now travels in the dialog overrides
+and gates the upload. Acceptance (the owner's functional bar,
+not screenshots): a fixture sidecar authored THROUGH the editor
+model (all six sections) drove a real local run -- impedance
+solved and routed at the solved width (PASS), a deliberate HV
+pairwise FAIL with coordinates (2.50 mm required / 1.90 mm
+actual), length-group check PASS, power sized from the netlist
+and recorded-only in a no-netlist rerun, quiet CONDITIONAL; the
+unmarked control run shows no engineered sections; a scratch
+backend (ML350, branch tree) returned identical verdict counts
+(4 PASS / 3 FAIL / 0 WARN / 0 LIB GAP / 2 CONDITIONAL) with
+input.net byte-identical server-side, and a switch-off backend
+control returned no engineered report. Excluded per the owner:
+the Suggest-candidates detector, the #200 fix, tol_pct, CTI /
+material-group fields. Suites on the branch tree: pytest
+341 passed, standalone 96 passed + 10 not standalone-runnable (the 8 pre-existing pytest-only files + the new pytest/xvfb GUI tests) (merged-base before
+the GUI: pytest 321, standalone 94 + 8 pytest-only files).
+
 ## Done
 
 ### Step 0 — v1.9.6 hotfix (3–5 h) — shipped 2026-11-23

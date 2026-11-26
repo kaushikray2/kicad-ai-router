@@ -115,7 +115,7 @@ def test_url_validation():
 def test_overrides_carry_the_llm_budget():
     cfg = {'mode': 'llm', 'max_passes': 4, 'no_tracks_on': 'In1.Cu',
            'layer_cost': '', 'strip_existing': True, 'max_tool_calls': 96,
-           'deterministic': False, 'route_open_only': False,
+           'deterministic': False, 'route_open_only': False, 'engineered_nets': True,
            'endpoint': 'http://server-owned'}
     ov = um.build_overrides(cfg)
     assert ov['max_tool_calls'] == 96          # decision 12: the dialog value governs
@@ -126,7 +126,7 @@ def test_overrides_carry_the_llm_budget():
 def test_overrides_carry_the_phase2_actions():
     cfg = {'mode': 'auto', 'max_passes': 4, 'no_tracks_on': 'In1.Cu',
            'layer_cost': '', 'strip_existing': False, 'max_tool_calls': 48,
-           'deterministic': True, 'route_open_only': True}
+           'deterministic': True, 'route_open_only': True, 'engineered_nets': False}
     ov = um.build_overrides(cfg)
     assert ov['deterministic'] is True and ov['route_open_only'] is True
     assert set(ov) == set(um.OVERRIDE_KEYS)

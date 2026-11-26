@@ -228,7 +228,7 @@ def valid_http_url(u):
 # runs they come from the server's own configuration.
 OVERRIDE_KEYS = ('mode', 'max_passes', 'no_tracks_on', 'layer_cost',
                  'strip_existing', 'max_tool_calls',
-                 'deterministic', 'route_open_only')
+                 'deterministic', 'route_open_only', 'engineered_nets')
 
 
 def build_overrides(cfg):

@@ -80,13 +80,18 @@ def build_payload(board_path, overrides):
     if dru:
         payload['dru_b64'] = base64.b64encode(open(dru, 'rb').read()).decode()
     # v1.11.5 (#150): the markings sidecar travels with the board --
-    # without it a backend run silently routes unmarked.
-    sidecar = markings.markings_path_for(board_path)
-    if os.path.exists(sidecar):
-        payload['markings_b64'] = base64.b64encode(open(sidecar, 'rb').read()).decode()
-    nb = _netlist_bytes(board_path)
-    if nb:
-        payload['netlist_b64'] = base64.b64encode(nb).decode()
+    # without it a backend run silently routes unmarked.  Both it
+    # and the netlist (whose only consumer is the power stage) are
+    # gated on the engineered_nets switch travelling in the
+    # overrides: unchecked in the dialog means a genuinely unmarked
+    # backend run, matching the local path.
+    if (overrides or {}).get('engineered_nets', True):
+        sidecar = markings.markings_path_for(board_path)
+        if os.path.exists(sidecar):
+            payload['markings_b64'] = base64.b64encode(open(sidecar, 'rb').read()).decode()
+        nb = _netlist_bytes(board_path)
+        if nb:
+            payload['netlist_b64'] = base64.b64encode(nb).decode()
     return payload
 
 def submit(url, token, board_path, overrides):

@@ -204,7 +204,7 @@ class RegulatorRowDialog(_RowDialog):
 
 
 class ConduitRowDialog(_RowDialog):
-    FIELDS = [('from', 'From ref', 'text'), ('to', 'To ref', 'text'), ('kind', 'Kind', 'text'),
+    FIELDS = [('ref', 'Conduit ref (component)', 'text'), ('from', 'From ref', 'text'), ('to', 'To ref', 'text'), ('kind', 'Kind', 'text'),
               ('length_mm', 'Length (mm)', 'text'), ('width_mm', 'Width (mm)', 'text'),
               ('r_mohm', 'Resistance (m\u03a9)', 'text'), ('rating_a', 'Rating (A)', 'text')]
 
@@ -412,7 +412,7 @@ class _SubTable(wx.Panel):
         self.add_b.Bind(wx.EVT_BUTTON, lambda e: self._edit(None))
         self.edit_b.Bind(wx.EVT_BUTTON, lambda e: self._edit(self.list.GetFirstSelected()))
         self.del_b.Bind(wx.EVT_BUTTON, self._remove)
-        self.list.Bind(wx.EVT_LIST_ITEM_DCLICK, lambda e: self._edit(self.list.GetFirstSelected()))
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._edit(self.list.GetFirstSelected()))
 
     def _edit(self, idx):
         row = dict(self.rows[idx]) if idx is not None and idx >= 0 else {}
@@ -454,8 +454,8 @@ class PowerForm(_FormBase):
     def cell(self, row, col):
         if col == 'State':
             try:
-                ent = mm._load_entry(row)
-                return 'UNKNOWN \u2014 needs a peak current or a KB ref' if mm.load_is_unknown(ent) else ''
+                _ref, spec = mm._load_entry(row)
+                return 'UNKNOWN \u2014 needs a peak current or a KB ref' if mm.load_is_unknown(spec) else ''
             except Exception:
                 return ''
         if col == 'KB ref':
@@ -483,7 +483,9 @@ class PowerForm(_FormBase):
         self.root_pin = self.row('Pin', _text(self))
         self.grid.Add(_label(self, ''), 0)
         self.grid.Add(_label(self, 'Pin is carried in the sidecar; it is not read by the power planner \u2014 the root is the ref.', wrap=430), 0, wx.EXPAND)
-        self.drop = self.row('Drop budget (V, whole tree)', _text(self))
+        self.drop = self.row('Drop budget (V, this rail)', _text(self))
+        self.grid.Add(_label(self, ''), 0)
+        self.grid.Add(_label(self, 'Blank = the board-level power-corners budget applies.', wrap=430), 0, wx.EXPAND)
         self.grid.Add(_label(self, 'Loads', bold=True), 0)
         self.loads = _SubTable(self, [('Ref', 60), ('Kind', 100), ('Peak (A)', 64), ('Sustained (A)', 84), ('Duty', 44), ('KB ref', 90), ('State', 190)], LoadRowDialog, self)
         self.grid.Add(self.loads, 0, wx.EXPAND)
@@ -533,19 +535,7 @@ class PowerForm(_FormBase):
                 'drop_budget_v': _num(self.drop)}
 
     def get_entry(self):
-        # The drop budget is board-level (power_corners), not part
-        # of the rail entry -- it rides the form but lands in the
-        # model's corners on Apply.
-        fd = self.form_dict()
-        drop = fd.pop('drop_budget_v')
-        entry = mm.power_entry(fd)
-        corners = self.model.power_corners()
-        if drop is not None:
-            corners['drop_budget_v'] = float(drop)
-        elif 'drop_budget_v' in corners:
-            del corners['drop_budget_v']
-        self._pending_corners = corners
-        return entry
+        return mm.power_entry(self.form_dict())
 
     def set_entry(self, entry):
         f = mm.power_form(entry)
@@ -557,8 +547,7 @@ class PowerForm(_FormBase):
         self._on_net()
         self.root_ref.SetStringSelection(f['root_ref'])
         self.root_pin.SetValue(f['root_pin'])
-        corners = self.model.power_corners()
-        self.drop.SetValue('' if corners.get('drop_budget_v') is None else str(corners['drop_budget_v']))
+        self.drop.SetValue('' if f['drop_budget_v'] is None else str(f['drop_budget_v']))
         self.loads.set_rows(f['loads'])
         self.regulators.set_rows(f['regulators'])
         self.conduits.set_rows(f['conduits'])
@@ -1093,9 +1082,6 @@ class MarkingsEditorDialog(wx.Dialog):
         else:
             index = self.selection['index']
             self.model.update_entry(section, index, entry)
-        pending = getattr(self.form, '_pending_corners', None)
-        if pending is not None:
-            self.model.set_power_corners(pending)
         err = self.model.validate_working()
         self.set_form_note('Applied \u2713 (unsaved until Save)' if not err
                            else 'Applied, but the sidecar does not validate yet: %s' % err)

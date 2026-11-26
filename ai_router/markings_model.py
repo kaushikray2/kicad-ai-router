@@ -440,19 +440,23 @@ def differential_entry(form):
 
 
 # -- power -------------------------------------------------------------
-def _load_form(ld):
-    kb = ld.get('kb') or {}
-    return {'ref': ld.get('ref') or '', 'kind': ld.get('kind') or '',
-            'peak_a': ld.get('peak_a'), 'sustained_a': ld.get('sustained_a'),
-            'duty': ld.get('duty'), 'mpn': kb.get('mpn') or '',
+def _load_form(ref, spec):
+    # Sidecar loads are an OBJECT keyed by ref; the form edits row
+    # dicts, so the ref rides the row and the spec stays separate.
+    kb = spec.get('kb') or {}
+    return {'ref': ref, 'kind': spec.get('kind') or '',
+            'peak_a': spec.get('peak_a'), 'sustained_a': spec.get('sustained_a'),
+            'duty': spec.get('duty'), 'mpn': kb.get('mpn') or '',
             'datasheet_rev': kb.get('datasheet_rev') or ''}
 
 
 def _load_entry(row):
+    # -> (ref, spec): the sidecar keys loads/regulators/conduits/
+    # protective by ref, so the ref is NOT part of the spec dict.
     ref = (row.get('ref') or '').strip()
     if not ref:
         raise ValueError('load ref is required')
-    ld = {'ref': ref}
+    ld = {}
     if row.get('kind'):
         ld['kind'] = row['kind']
     for key, label in (('peak_a', 'Peak current'), ('sustained_a', 'Sustained current'), ('duty', 'Duty cycle')):
@@ -466,15 +470,15 @@ def _load_entry(row):
         kb['datasheet_rev'] = row['datasheet_rev'].strip()
     if kb:
         ld['kb'] = kb
-    return ld
+    return ref, ld
 
 
-def load_is_unknown(load_entry_dict):
+def load_is_unknown(load_spec):
     # The wireframe's UNKNOWN state: no measured current and no
     # datasheet (KB) ref.  markings.validate rejects such a load,
     # so the editor flags it and saving stays blocked until it is
     # resolved or the row is removed.
-    return 'peak_a' not in load_entry_dict and 'kb' not in load_entry_dict
+    return 'peak_a' not in load_spec and 'kb' not in load_spec
 
 
 def power_form(entry):
@@ -483,10 +487,11 @@ def power_form(entry):
     return {'net': entry.get('net') or '', 'has_voltage': bool(entry.get('voltage')),
             'nominal_v': v.get('nominal_v'), 'min_v': v.get('min_v'), 'max_v': v.get('max_v'),
             'root_ref': root.get('ref') or '', 'root_pin': root.get('pin') or '',
-            'loads': [_load_form(x) for x in entry.get('loads') or []],
-            'regulators': [dict(x) for x in entry.get('regulators') or []],
-            'conduits': [dict(x) for x in entry.get('conduits') or []],
-            'protective': [dict(x) for x in entry.get('protective') or []]}
+            'drop_budget_v': entry.get('drop_budget_v'),
+            'loads': [_load_form(r, sp) for r, sp in (entry.get('loads') or {}).items()],
+            'regulators': [dict(sp, ref=r) for r, sp in (entry.get('regulators') or {}).items()],
+            'conduits': [dict(sp, ref=r) for r, sp in (entry.get('conduits') or {}).items()],
+            'protective': [dict(sp, ref=r) for r, sp in (entry.get('protective') or {}).items()]}
 
 
 def power_entry(form):
@@ -506,26 +511,35 @@ def power_entry(form):
         if (form.get('root_pin') or '').strip():
             root['pin'] = form['root_pin'].strip()  # carried, read nowhere (powerplan reads ref only)
         e['root'] = root
-    loads = [_load_entry(r) for r in form.get('loads') or []]
+    drop = _opt_float(form, 'drop_budget_v', 'Drop budget')
+    if drop is not None:
+        e['drop_budget_v'] = drop  # rail-level; power_corners is the fallback (powerplan #83)
+    loads = {}
+    for r in form.get('loads') or []:
+        ref, spec = _load_entry(r)
+        loads[ref] = spec
     if loads:
         e['loads'] = loads
-    regs = []
+    regs = {}
     for r in form.get('regulators') or []:
         ref = (r.get('ref') or '').strip()
         if not ref:
             raise ValueError('regulator ref is required')
-        rg = {'ref': ref}
+        rg = {}
         if r.get('type'):
             rg['type'] = r['type']
         for key, label in (('eta_min', 'Min efficiency'), ('iq_a', 'Quiescent current')):
             x = _opt_float(r, key, label)
             if x is not None:
                 rg[key] = x
-        regs.append(rg)
+        regs[ref] = rg
     if regs:
         e['regulators'] = regs
-    conduits = []
+    conduits = {}
     for r in form.get('conduits') or []:
+        ref = (r.get('ref') or '').strip()
+        if not ref:
+            raise ValueError('conduit ref (the component it models) is required')
         cd = {}
         for key in ('from', 'to', 'kind'):
             if (r.get(key) or '').strip():
@@ -534,20 +548,20 @@ def power_entry(form):
             x = _opt_float(r, key, label)
             if x is not None:
                 cd[key] = x
-        conduits.append(cd)
+        conduits[ref] = cd
     if conduits:
         e['conduits'] = conduits
-    prots = []
+    prots = {}
     for r in form.get('protective') or []:
         ref = (r.get('ref') or '').strip()
         if not ref:
             raise ValueError('protective device ref is required')
-        pr = {'ref': ref, 'rating_a': _req_float(r, 'rating_a', 'Protective rating')}
+        pr = {'rating_a': _req_float(r, 'rating_a', 'Protective rating')}
         if r.get('kind'):
             pr['kind'] = r['kind']
         if (r.get('note') or '').strip():
             pr['note'] = r['note'].strip()
-        prots.append(pr)
+        prots[ref] = pr
     if prots:
         e['protective'] = prots
     return e
@@ -774,18 +788,21 @@ def summarize_report(rep, audit=None):
         lg = rep.get('length_groups') or {}
         for g in lg.get('groups') or []:
             members = g.get('members') or {}
-            failed = [n for n, m in members.items() if m.get('failed')]
+            # lengthmatch grades members with within_tolerance; the
+            # pipeline's meander pass may add 'failed'/'after' --
+            # either signal means the group missed its band.
+            failed = [n for n, m in members.items()
+                      if m.get('failed') or m.get('within_tolerance') is False]
             verdict = 'FAIL' if (failed or g.get('error')) else 'PASS'
             parts = []
             if g.get('error'):
                 parts.append(str(g['error']))
             for n, m in sorted(members.items()):
-                if m.get('failed'):
-                    parts.append('%s short by %s' % (n, _fmt(m.get('shortfall_mm') or m.get('shortfall_ps'))))
-                elif m.get('delta_mm') is not None:
-                    parts.append('%s \u0394%s mm' % (n, _fmt(m['delta_mm'])))
+                bad = n in failed
+                if m.get('delta_mm') is not None:
+                    parts.append('%s \u0394%s mm%s' % (n, _fmt(m['delta_mm']), ' (outside tolerance)' if bad else ''))
                 elif m.get('delta_ps') is not None:
-                    parts.append('%s \u0394%s ps' % (n, _fmt(m['delta_ps'], 1)))
+                    parts.append('%s \u0394%s ps%s' % (n, _fmt(m['delta_ps'], 1), ' (outside tolerance)' if bad else ''))
             rows.append({'section': 'length_groups',
                          'marking': 'Length group \u2014 %s' % g.get('name'),
                          'verdict': verdict, 'detail': ' \u00b7 '.join(parts), 'at': None})
@@ -823,8 +840,16 @@ def summarize_report(rep, audit=None):
         if pw:
             st = pw.get('status')
             verdict = 'FAIL' if st == 'tree_failed' else 'CONDITIONAL'
+            rails = pw.get('rails') or {}
             if st == 'ok':
                 detail = 'sized from %s' % (pw.get('netlist') or 'netlist')
+                for rn, rail in sorted(rails.items()):
+                    seg = ((rail.get('design') or {}).get('peak_a') or {}).get('design_a')
+                    drops = rail.get('loop_drops') or []
+                    if seg is not None:
+                        detail += ' \u00b7 %s %s A peak' % (rn, _fmt(seg))
+                    if drops:
+                        detail += ', drop %s of %s V budget' % (_fmt(drops[0].get('drop_v'), 3), _fmt(drops[0].get('budget_v')))
                 if pw.get('widen'):
                     detail += ' \u00b7 %d nets widened' % len(pw['widen'])
                 if pw.get('kb_resolutions'):
@@ -835,17 +860,20 @@ def summarize_report(rep, audit=None):
                 detail = 'recorded only \u2014 no schematic netlist, so currents are unknown'
             else:
                 detail = str(pw.get('note') or pw.get('error') or st)
-            rows.append({'section': 'power', 'marking': 'Power \u2014 %s' % pw.get('net'),
+            rail_names = ', '.join(sorted((pw.get('rails') or {}).keys()))
+            rows.append({'section': 'power', 'marking': 'Power \u2014 %s' % (rail_names or pw.get('net') or 'rail'),
                          'verdict': verdict, 'detail': detail, 'at': None})
         qn = rep.get('quiet_nets') or {}
         for r in qn.get('results') or []:
-            ent = r.get('entry') or {}
-            label = r.get('net') or r.get('ref') or ent.get('net') or ent.get('ref') or 'quiet net'
+            # quietnets.evaluate result shape: name / profile /
+            # isolation_mm / intrusions / pass (it does not echo
+            # the entry's materialise flag -- that state lives in
+            # the sidecar and the Screen 1 chip, not here).
+            label = r.get('name') or r.get('net') or r.get('ref') or 'quiet net'
             intr = r.get('intrusions') or []
-            verdict = 'FAIL' if intr else 'CONDITIONAL'
-            parts = ['%s \u00b7 isolation %s mm' % (ent.get('profile') or r.get('profile') or 'crystal',
-                     _fmt(ent.get('isolation_mm') or r.get('isolation_mm')))]
-            parts.append('materialise %s' % ('on' if (ent.get('materialise') or r.get('materialise')) else 'off'))
+            verdict = 'FAIL' if (intr or r.get('pass') is False) else 'CONDITIONAL'
+            parts = ['%s \u00b7 isolation %s mm' % (r.get('profile') or 'crystal',
+                     _fmt(r.get('isolation_mm')))]
             if intr:
                 parts.append('%d intrusions inside the isolation' % len(intr))
             else:
@@ -881,7 +909,7 @@ def summarize_report(rep, audit=None):
 
 
 def verdict_bar_text(counts):
-    return ' \u00b7 '.join('%d %s' % (counts[v], v) for v in VERDICT_ORDER if counts.get(v))
+    return ' \u00b7 '.join('%d %s' % (counts.get(v, 0), v) for v in VERDICT_ORDER)
 
 
 def report_markdown(rows, counts, title='Engineered nets report'):

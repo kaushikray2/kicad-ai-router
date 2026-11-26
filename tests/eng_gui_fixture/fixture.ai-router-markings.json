@@ -1,0 +1,93 @@
+{
+  "differential": [
+    {
+      "name": "CLK",
+      "nets": [
+        "CLK_P",
+        "CLK_N"
+      ],
+      "zdiff_ohm": 100.0
+    }
+  ],
+  "hv_domains": [
+    {
+      "ac": false,
+      "coating": "uncoated",
+      "materialise": true,
+      "name": "HVPRI",
+      "nets": [
+        "HV_A"
+      ],
+      "peak_v": 400.0,
+      "pollution_degree": 2,
+      "voltage_v": 400.0
+    },
+    {
+      "ac": false,
+      "materialise": false,
+      "name": "HVSEC",
+      "nets": [
+        "HV_B"
+      ],
+      "peak_v": 0.0,
+      "voltage_v": 0.0
+    }
+  ],
+  "impedance": [
+    {
+      "dk_basis": "design",
+      "net": "RF_IN",
+      "role": "generic",
+      "z0_ohm": 50.0
+    },
+    {
+      "net": "RF_FAIL",
+      "z0_ohm": 30.0
+    }
+  ],
+  "length_groups": [
+    {
+      "name": "LENGRP",
+      "nets": [
+        "LEN_A",
+        "LEN_B"
+      ],
+      "target_mode": "longest",
+      "tolerance_mm": 10.0
+    }
+  ],
+  "power": [
+    {
+      "drop_budget_v": 0.25,
+      "loads": {
+        "U18": {
+          "kind": "constant_current",
+          "peak_a": 0.4,
+          "sustained_a": 0.3
+        }
+      },
+      "net": "VCC5",
+      "root": {
+        "pin": "1",
+        "ref": "U17"
+      },
+      "voltage": {
+        "max_v": 5.25,
+        "min_v": 4.75,
+        "nominal_v": 5.0
+      }
+    }
+  ],
+  "power_corners": {
+    "ambient_c": 40.0
+  },
+  "quiet": [
+    {
+      "isolation_mm": 1.5,
+      "materialise": true,
+      "net": "QUIET_X",
+      "profile": "crystal"
+    }
+  ],
+  "version": 1
+}

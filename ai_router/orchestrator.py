@@ -178,7 +178,8 @@ def run_llm(cfg, pipe, log):
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): report the gate of the DELIVERED file
     result = {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
-    result['ledger_path'] = os.path.join(pipe.workdir, 'ledger.json')
+    _wd = getattr(pipe, 'workdir', None)
+    result['ledger_path'] = os.path.join(_wd, 'ledger.json') if _wd else None
     return result
 
 def default_first_nets(pipe):
@@ -514,5 +515,6 @@ def _run_auto_once(cfg, pipe, log):
     audit = getattr(pipe, '_audit', None)  # #42: independent of markings
     if audit is not None:
         result['placement_audit'] = audit
-    result['ledger_path'] = os.path.join(pipe.workdir, 'ledger.json')
+    _wd = getattr(pipe, 'workdir', None)
+    result['ledger_path'] = os.path.join(_wd, 'ledger.json') if _wd else None
     return result
