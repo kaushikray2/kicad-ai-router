@@ -80,6 +80,17 @@ def load_config():
             if k not in cfg: cfg[k] = v
         cfg['schema_version'] = SCHEMA_VERSION
         save_config(cfg)
+    # (#196): #180 recalibrated the default work budget 20M ->
+    # 40M in default_config, but a config persisted by a pre-#180
+    # server carries the old default inside its routing dict and
+    # the schema migration above only fills MISSING top-level
+    # keys -- upgraded backends kept starving Nomad-class boards.
+    # Migrate the exact old default value only; any other
+    # operator-set value is untouched.
+    _routing = cfg.get('routing')
+    if isinstance(_routing, dict) and _routing.get('work') == 20000000:
+        _routing['work'] = 40000000
+        save_config(cfg)
     return cfg
 
 def save_config(cfg):
@@ -378,7 +389,7 @@ def selftest_status():
         row = {'board': b, 'baseline': base.get(b), 'last': None, 'verdict': 'NO BASELINE' if b not in base else 'NOT RUN'}
         if b in last:
             g = (last[b].get('gate') or {})
-            cur = {'unconnected_total': g.get('unconnected_total'), 'split_nets': len(g.get('split_nets') or []), 'banned_layer_tracks': g.get('banned_layer_tracks'), 'copper_violations': g.get('copper_violations')}  # v1.9 (M11): copper joins the recorded baseline
+            cur = {'unconnected_total': g.get('unconnected_total'), 'split_nets': len(g.get('split_nets') or []), 'banned_layer_tracks': g.get('banned_layer_tracks'), 'banned_layer_tracks_delta': g.get('banned_layer_tracks_delta'), 'copper_violations': g.get('copper_violations')}  # v1.9 (M11): copper joins the recorded baseline; (#196): the #175 delta joins it
             row['last'] = cur
             try:  # v1.10.1 (#43): flag self-test jobs whose recorded cfg_effective lacks the shipped defaults (pre-v1.10.1 backends ran self-tests without the engine portfolio)
                 _sj = json.load(open(os.path.join(DATA, 'runs', last[b]['id'], 'status.json')))
@@ -414,7 +425,7 @@ def selftest_status():
                                             and cur['unconnected_total'] <= base[b]['unconnected_total'] + tu
                                             and cur['split_nets'] <= base[b]['split_nets'] + ts
                                             and copper_ok
-                                            and not (cur['banned_layer_tracks'] or 0)) else 'DRIFT'
+                                            and not ((cur['banned_layer_tracks_delta'] if cur['banned_layer_tracks_delta'] is not None else cur['banned_layer_tracks']) or 0)) else 'DRIFT'  # (#196): #175 semantics -- pre-existing banned-layer tracks on the input are not drift; records written before the delta existed fall back to the raw count
         out.append(row)
     return out
 

@@ -186,7 +186,7 @@ def main():
             _led = os.path.join(os.path.dirname(final), 'ledger.json')
             if os.path.isfile(_led): shutil.copy(_led, os.path.join(jd, 'ledger.json'))
         gate = res.get('gate') or {}
-        write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'tracks_by_layer')}, route=res.get('route'))
+        write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'banned_layer_tracks_delta', 'tracks_by_layer')}, route=res.get('route'))  # (#196): the gate record carries the #175 delta -- selftest_status gates on it
     except Exception as e:
         import traceback; traceback.print_exc()
         write_status(status='error', error=str(e)[:500])

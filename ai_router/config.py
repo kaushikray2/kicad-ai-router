@@ -64,6 +64,12 @@ def load():
             cfg.update(json.load(f))
     except Exception:
         pass
+    # (#196): a config saved before #180's recalibration persists
+    # the old 20M default verbatim; migrate that exact value to
+    # the 40M default (persisted on the next save). Any other
+    # value is the user's own setting and is left alone.
+    if cfg.get('work') == 20000000:
+        cfg['work'] = 40000000
     return cfg
 
 def save(cfg):
