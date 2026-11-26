@@ -409,6 +409,7 @@ class RouterDialog(wx.Dialog):
         # run by design, so the checkbox is disabled while LLM mode
         # is selected (the Finish/Strip disable-with-reason pattern).
         if self.mode_llm_rb.GetValue():
+            self.det_ctrl.SetValue(False)  # #185: clear, not just disable -- a disabled-but-checked box still reads True in _collect_config (the _apply_finish_state pattern)
             self.det_ctrl.Enable(False)
             self.det_ctrl.SetToolTip('Reproducible run needs Auto mode: the LLM path picks each step as it goes, so it varies run to run.')
         elif not getattr(self, '_running', False):

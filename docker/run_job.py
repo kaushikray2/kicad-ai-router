@@ -82,6 +82,14 @@ def build_cfg(rt, llm, tm_exe):
     cfg['attempt_select'] = bool(rt.get('attempt_select', cfg.get('attempt_select', False)))
     cfg['deterministic'] = bool(rt.get('deterministic', cfg.get('deterministic', False)))  # v1.12.2 (#171)
     cfg['route_open_only'] = bool(rt.get('route_open_only', cfg.get('route_open_only', False)))  # v1.12.2 (#171)
+    if cfg['mode'] == 'llm' and cfg['deterministic']:
+        # v1.12.2 (#185): Reproducible is an Auto-mode property --
+        # the LLM path varies run to run by design. The dialog
+        # clears the checkbox under LLM and the config page guards
+        # it, but a saved llm+deterministic pair must never reach
+        # a run from ANY client, so the coercion lives here too.
+        cfg['deterministic'] = False
+        print('build_cfg: deterministic forced off -- mode is llm (Reproducible is an Auto-mode property)', file=sys.stderr, flush=True)
     cfg['layer_law_policy'] = rt.get('layer_law_policy', cfg.get('layer_law_policy', 'auto'))
     cfg['layer_cost'] = rt.get('layer_cost', cfg.get('layer_cost', ''))  # v1.11 (#73): explicit map, like layer_law_policy; the generic forwarding loop below would also carry it from DEFAULTS
     cfg['first_nets_policy'] = rt.get('first_nets_policy', cfg.get('first_nets_policy', 'auto'))

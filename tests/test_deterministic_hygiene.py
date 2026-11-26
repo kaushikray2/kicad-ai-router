@@ -98,6 +98,7 @@ class _Ctl:
     def __init__(self, value=False):
         self._v = value; self.enabled = True; self.tip = None
     def GetValue(self): return self._v
+    def SetValue(self, v): self._v = bool(v)
     def Enable(self, on=True): self.enabled = bool(on)
     def SetToolTip(self, tip): self.tip = tip
 
@@ -119,6 +120,7 @@ def _dialog_part():
     d.det_ctrl = _Ctl(True)
     d._apply_det_state()
     assert d.det_ctrl.enabled is False, 'LLM mode must disable Reproducible'
+    assert d.det_ctrl.GetValue() is False, 'LLM mode must CLEAR Reproducible (#185): a disabled-but-checked box still reads True in _collect_config'
     assert d.det_ctrl.tip and 'Auto mode' in d.det_ctrl.tip, d.det_ctrl.tip
     d.mode_llm_rb = _Ctl(False)
     d._apply_det_state()

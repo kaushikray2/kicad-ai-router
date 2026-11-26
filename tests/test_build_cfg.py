@@ -75,6 +75,18 @@ def test_phase2_actions_forward_and_default_off():
     assert cfg['deterministic'] is True     # bool() coercion, like strip_existing
 
 
+def test_llm_mode_forces_deterministic_off():
+    # #185: a saved mode=llm + deterministic=True pair (the dialog
+    # leak, or the config page before its guard) must never reach
+    # a run -- Reproducible is an Auto-mode property.
+    cfg = run_job.build_cfg({'mode': 'llm', 'deterministic': True}, {}, '/tm')
+    assert cfg['deterministic'] is False, cfg['deterministic']
+    cfg = run_job.build_cfg({'mode': 'auto', 'deterministic': True}, {}, '/tm')
+    assert cfg['deterministic'] is True
+    cfg = run_job.build_cfg({'mode': 'llm'}, {}, '/tm')
+    assert cfg['deterministic'] is False
+
+
 def test_phase2_actions_in_server_config_whitelist():
     server = open(os.path.join(os.path.dirname(__file__), '..', 'docker', 'server.py')).read()
     line = [l for l in server.splitlines() if l.strip().startswith('for k in (')][0]

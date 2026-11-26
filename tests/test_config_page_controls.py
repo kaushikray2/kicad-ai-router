@@ -38,6 +38,13 @@ def test_load_and_save_wiring():
     assert 'deterministic:document.getElementById(\'rt_det\').checked' in PAGE
     assert 'route_open_only:document.getElementById(\'rt_roo\').checked' in PAGE
 
+def test_llm_mode_guards_deterministic():
+    # #185: the mode select must drive the same clear+disable the
+    # dialog applies -- llm + checked rt_det is the poisoned pair.
+    assert 'applyDetState' in PAGE
+    assert 'onchange="applyDetState()"' in PAGE
+
+
 def test_finish_disables_strip():
     assert 'applyRooState' in PAGE
 
