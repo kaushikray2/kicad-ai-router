@@ -40,9 +40,11 @@ import copy, html, os
 try:
     from . import markings
     from . import naming
+    from . import hvdomains
 except ImportError:
     import markings
     import naming
+    import hvdomains
 
 SECTIONS = markings.SECTIONS
 SECTION_TITLES = {'impedance': 'Impedance', 'differential': 'Differential',
@@ -701,22 +703,46 @@ def hv_entry(form):
     return e
 
 
-def hv_pairwise_rows(model):
+def hv_pairwise_rows(model, extra=None):
     # Screen 3's pairwise preview: declared domains plus the
     # implicit rest-of-board domain at 0 V the check paths add
-    # (tool_hv_domains #146).  |delta| drives the required spacing;
-    # the table shows the pairs the checker will test.
+    # (tool_hv_domains #146).  |delta| drives the required spacing
+    # (hvdomains, IPC-2221B Table 6-1, each domain's declared
+    # coating/altitude on external layers -- the checker itself
+    # evaluates every layer; the preview shows the governing
+    # external value); the table shows the pairs the checker will
+    # test.  `extra` is the HV form's live (un-applied) domain
+    # (#206): it replaces the saved entry of the same name, or is
+    # appended when the form is a new domain.
     doms = []
     for e in model.entries('hv_domains'):
         doms.append({'name': e.get('name'), 'peak_v': e.get('peak_v') or 0.0,
+                     'coating': e.get('coating') or 'uncoated',
+                     'altitude_m': e.get('altitude_m') or 0,
                      'nets': len(e.get('nets') or []), 'implicit': False})
+    if extra is not None:
+        ex = {'name': extra.get('name'), 'peak_v': extra.get('peak_v') or 0.0,
+              'coating': extra.get('coating') or 'uncoated',
+              'altitude_m': extra.get('altitude_m') or 0,
+              'nets': len(extra.get('nets') or []), 'implicit': False}
+        for i, d in enumerate(doms):
+            if d['name'] == ex['name']:
+                doms[i] = ex
+                break
+        else:
+            doms.append(ex)
     doms.append({'name': 'Rest of board / unmarked nets', 'peak_v': 0.0,
+                 'coating': 'uncoated', 'altitude_m': 0,
                  'nets': None, 'implicit': True})
     rows = []
     for i in range(len(doms)):
         for j in range(i + 1, len(doms)):
+            dv = abs(doms[i]['peak_v'] - doms[j]['peak_v'])
+            cols = {hvdomains.column_for(True, doms[i]['coating'], doms[i]['altitude_m']),
+                    hvdomains.column_for(True, doms[j]['coating'], doms[j]['altitude_m'])}
+            req = max(hvdomains.required_spacing_mm(dv, c) for c in cols)
             rows.append({'a': doms[i]['name'], 'b': doms[j]['name'],
-                         'delta_v': abs(doms[i]['peak_v'] - doms[j]['peak_v'])})
+                         'delta_v': dv, 'required_mm': req})
     return rows
 
 

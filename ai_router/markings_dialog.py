@@ -85,10 +85,70 @@ def _net_value(choice_ctrl, nets):
 
 
 def _set_net_choice(ctrl, nets, value):
+    if not value:
+        return
+    if value not in nets:
+        # An unmatched saved net must survive the load (the rebind
+        # flow depends on it): prepend it as '(not on board)', the
+        # _net_choice convention, instead of letting the scan
+        # settle on some other net (#206).
+        ctrl.SetItems([value + '  (not on board)'] + list(nets))
+        ctrl.SetSelection(0)
+        return
     for i in range(ctrl.GetCount()):
         ctrl.SetSelection(i)
         if _net_value(ctrl, nets) == value:
             return
+
+
+def solved_preview_diff(board_path, form, banned_layers):
+    # The differential Solved-preview strip (Rev 3 wireframe):
+    # tlcalc.solve_diff_geometry over the board stackup's top
+    # surface layer (edge-coupled microstrip), computed from the
+    # form's unsaved values.  Same degrade-honestly discipline as
+    # the impedance strip.
+    try:
+        from . import worker as workermod
+        from . import tlcalc
+    except ImportError:
+        import worker as workermod
+        import tlcalc
+    try:
+        su = workermod.cmd_stackup(board_path, [])
+    except Exception as e:
+        return 'Solved preview unavailable (%s)' % e
+    if not su.get('defined'):
+        return ('No stackup defined on this board — the pair cannot be solved; '
+                'the run will record the marking without sizing.')
+    top = next((c for c in su.get('copper') or [] if c.get('class') == 'surface_top'), None)
+    if top is None:
+        return 'Solved preview unavailable (no surface layer in the stackup)'
+    diel = top.get('diel_below') or {}
+    h = diel.get('thickness_mm')
+    er = form.get('dk') or diel.get('er')
+    if not h or not er:
+        return 'Solved preview unavailable (dielectric thickness/er missing)'
+    t = top.get('thickness_mm') or 0.035
+    try:
+        zdiff = float(form.get('zdiff'))
+    except (TypeError, ValueError):
+        return 'Enter a target Zdiff to solve the pair geometry.'
+    try:
+        gap = float(form['gap_mm']) if form.get('gap_mm') not in (None, '') else None
+        width = float(form['width_mm']) if form.get('width_mm') not in (None, '') else None
+    except (TypeError, ValueError):
+        return 'Solved preview unavailable (gap/width not numeric)'
+    diff_of = lambda w, s: tlcalc.diff_microstrip(w, s, h, t, float(er))
+    single_of = lambda w: tlcalc.microstrip(w, h, t, float(er), f_hz=0.0)
+    try:
+        r = tlcalc.solve_diff_geometry(diff_of, single_of, zdiff, gap_mm=gap, width_mm=width)
+    except Exception as e:
+        return 'Solved preview unavailable (%s)' % e
+    if 'error' in r:
+        return 'Solved preview unavailable (%s)' % r['error']
+    return ('Solved: width %s mm · gap %s mm for Zdiff %s Ω on the top layer '
+            '(preview — the run re-solves per layer).'
+            % (r['width_mm'], r['gap_mm'], r['zdiff']))
 
 
 def _num(tc):
@@ -365,7 +425,12 @@ class DifferentialForm(_FormBase):
         layers = self.model.board_index.get('layers') or []
         self.layers = wx.CheckListBox(self, choices=layers, size=(-1, 74))
         self.row('Layers', self.layers)
+        self.preview = _label(self, '', wrap=430)
+        self.grid.Add(wx.StaticText(self, label=''), 0)
+        self.grid.Add(self.preview, 0, wx.EXPAND)
         self.net_a.Bind(wx.EVT_CHOICE, self._on_a)
+        for c in (self.zdiff, self.gap, self.width, self.dk):
+            c.Bind(wx.EVT_TEXT, lambda e: self.refresh_preview())
         self._on_a()
 
     def _on_a(self, _evt=None):
@@ -373,6 +438,19 @@ class DifferentialForm(_FormBase):
         cands = _pair_candidates(self.nets(), a) if a else []
         self.hint.SetLabel('Auto-pair hint: %s' % cands[0] if cands else '')
         self.hint.Wrap(430)
+        if cands and not _net_value(self.net_b, self.nets()):
+            # Rev 3 wireframe: the candidate FILLS Net B (still
+            # editable) -- it never replaces a chosen net.
+            _set_net_choice(self.net_b, self.nets(), cands[0])
+        self.refresh_preview()
+
+    def refresh_preview(self):
+        try:
+            self.preview.SetLabel(solved_preview_diff(self.editor.board_path, self.form_dict(),
+                                                      self.editor.banned_layers))
+            self.preview.Wrap(430)
+        except Exception:
+            pass
 
     def form_dict(self):
         return {'name': self.name.GetValue().strip(),
@@ -387,7 +465,7 @@ class DifferentialForm(_FormBase):
         f = mm.differential_form(entry)
         self.name.SetValue(f['name'])
         for ctrl, val in ((self.net_a, f['net_a']), (self.net_b, f['net_b'])):
-            ctrl.SetStringSelection(val)
+            _set_net_choice(ctrl, self.nets(), val)
         self.zdiff.SetValue('' if f['zdiff'] is None else str(f['zdiff']))
         self.freq.SetValue('' if f['freq_mhz'] is None else str(f['freq_mhz']))
         self.gap.SetValue('' if f['gap_mm'] is None else str(f['gap_mm']))
@@ -677,20 +755,40 @@ class HVForm(_FormBase):
         warn.SetForegroundColour(wx.Colour(176, 96, 0))
         self.grid.Add(wx.StaticText(self, label=''), 0)
         self.grid.Add(warn, 0, wx.EXPAND)
-        self.grid.Add(_label(self, 'Pairwise spacing preview (saved markings)', bold=True), 0, wx.TOP, 6)
+        self.grid.Add(_label(self, 'Pairwise spacing preview', bold=True), 0, wx.TOP, 6)
         self.pairs = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=(-1, 110))
         self.pairs.InsertColumn(0, 'Domain A', width=170)
         self.pairs.InsertColumn(1, 'Domain B', width=170)
         self.pairs.InsertColumn(2, '\u0394V', width=70)
+        self.pairs.InsertColumn(3, 'Required (mm)', width=100)
         self.grid.Add(self.pairs, 0, wx.EXPAND)
+        self.name.Bind(wx.EVT_TEXT, lambda e: self.refresh_pairs())
+        self.peak.Bind(wx.EVT_TEXT, lambda e: self.refresh_pairs())
+        self.coating.Bind(wx.EVT_CHOICE, lambda e: self.refresh_pairs())
+        self.altitude.Bind(wx.EVT_TEXT, lambda e: self.refresh_pairs())
         self.refresh_pairs()
 
     def refresh_pairs(self):
+        # Reflects the form's live values (#206): the domain being
+        # edited is substituted into the model's rows before
+        # pairing (mm.hv_pairwise_rows' `extra`).
+        extra = None
+        try:
+            fd = self.form_dict()
+            if fd.get('name'):
+                extra = {'name': fd['name'],
+                         'peak_v': float(fd['peak_v']) if fd.get('peak_v') not in (None, '') else 0.0,
+                         'coating': fd.get('coating') or 'uncoated',
+                         'altitude_m': float(fd['altitude_m']) if fd.get('altitude_m') not in (None, '') else 0,
+                         'nets': fd.get('nets') or []}
+        except Exception:
+            extra = None
         self.pairs.DeleteAllItems()
-        for r in mm.hv_pairwise_rows(self.model):
+        for r in mm.hv_pairwise_rows(self.model, extra=extra):
             i = self.pairs.InsertItem(self.pairs.GetItemCount(), r['a'])
             self.pairs.SetItem(i, 1, r['b'])
             self.pairs.SetItem(i, 2, '%s V' % r['delta_v'])
+            self.pairs.SetItem(i, 3, '%.2f' % r['required_mm'])
 
     def form_dict(self):
         return {'name': self.name.GetValue().strip(),
@@ -768,7 +866,7 @@ class QuietForm(_FormBase):
     def set_entry(self, entry):
         f = mm.quiet_form(entry)
         (self.rb_ref if f['mode'] == 'ref' else self.rb_net).SetValue(True)
-        self.net.SetStringSelection(f['net'])
+        _set_net_choice(self.net, self.nets(), f['net'])
         self.ref.SetStringSelection(f['ref'])
         self.profile.SetStringSelection(f['profile'])
         self.iso.SetValue('' if f['isolation_mm'] is None else str(f['isolation_mm']))
