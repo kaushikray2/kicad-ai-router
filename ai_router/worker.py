@@ -174,6 +174,12 @@ def _via_on_pad_census(b, tracks):
     return out
 
 
+def _is_rule_area(z):
+    # (#181): a rule area (keepout / rule zone) is not a copper pour;
+    # zone censuses skip it. Guarded: older bindings may lack the call.
+    try: return bool(z.GetIsRuleArea())
+    except Exception: return False
+
 def cmd_summary(board_path, fast=False):
     b = pcbnew.LoadBoard(board_path)
     refill(b)
@@ -208,7 +214,7 @@ def cmd_summary(board_path, fast=False):
     locked_items = sum(1 for t in tracks if t.IsLocked())
     _zl = _zone_layers_by_net(b)
     free_vias = sum(1 for t in tracks if t.Type() == pcbnew.PCB_VIA_T and _via_is_free(t, _zl))
-    pour_nets = sorted({z.GetNetname() for z in b.Zones() if z.GetNetname()})
+    pour_nets = sorted({z.GetNetname() for z in b.Zones() if z.GetNetname() and not _is_rule_area(z)})  # (#181): rule areas are not pours
     ncu = b.GetCopperLayerCount()
     copper_layers = (['F.Cu'] + ['In%d.Cu' % i for i in range(1, ncu - 1)] + ['B.Cu']) if ncu > 1 else ['F.Cu']
     # v1.3.2 layer census: tracks per canonical layer. The gate turns
@@ -246,6 +252,7 @@ def cmd_summary(board_path, fast=False):
     for z in b.Zones():
         _zn = z.GetNetname()
         if not _zn: continue
+        if _is_rule_area(z): continue  # (#181): same skip as the pour_nets census above
         try: _zlays = list(z.GetLayerSet().CuStack())
         except Exception: _zlays = [z.GetLayer()]
         for _zl in _zlays:

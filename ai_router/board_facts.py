@@ -64,6 +64,11 @@ def load_facts(board_path):
         zones_by_layer = {c: [] for c in canon}
         nzones = 0
         for z in b.Zones():
+            try:
+                if z.GetIsRuleArea():
+                    continue  # (#181): rule areas are not pours -- counting them inflated the census (Nomad fixture: 19 reported, 8 real zones)
+            except Exception:
+                pass
             nzones += 1
             net = z.GetNetname()
             if not net:
