@@ -6,7 +6,7 @@ the silent 'updates never appear' failure, so it happens here, always."""
 import datetime, hashlib, json, os, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VERSION = '1.11.6'
+VERSION = '1.12.0'
 IDENTIFIER = 'ca.siliconbrane.ai-router'
 REPO_BASE_URL = 'https://raw.githubusercontent.com/kaushikray2/kicad-ai-router/main/pcm-repo'
 DESCRIPTION = ('LLM-orchestrated PCB routing for KiCad: deterministic TraceMaker passes, '
@@ -78,7 +78,8 @@ def main():
     zip_path = os.path.join(repo_dir, zip_name)
     pkg_src = os.path.join(HERE, 'ai_router')
     files = ['__init__.py', 'ai_router_plugin.py', 'dialog.py', 'config.py', 'llm_client.py',
-             'orchestrator.py', 'pipeline.py', 'worker.py', 'backend_client.py', 'icon.png']
+             'orchestrator.py', 'pipeline.py', 'worker.py', 'backend_client.py', 'icon.png',
+             'naming.py', 'ui_model.py', 'board_facts.py']  # v1.12 (#167/#168): the dialog's new modules -- CI asserts every ai_router/*.py ships in the zip
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('metadata.json', json.dumps(METADATA, indent=2))
         z.writestr('plugins/__init__.py', PCM_ENTRYPOINT)

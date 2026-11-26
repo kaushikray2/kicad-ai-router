@@ -218,6 +218,46 @@ README carries the verified Windows install notes (Documents
 diagnostic, config path, the 1.11.5 scripting/plugins
 workaround).
 
+### Off-plan -- dialog redesign + result naming, v1.12.0 (2026-11-25)
+
+#167: result boards are named <project>-<YYYYMMDD>-<HHMMSS>
+(project = the sibling .kicad_pro stem, board stem as fallback;
+generated suffixes stripped so names never compound -- the
+routed-6040g-backend-backend failure; collisions take -2, -3,
+never overwrite). Client-side in both modes: at the backend
+download point, and as a post-run copy beside the source board
+for local runs (the timestamped workdir stays as audit trail).
+Server-side names unchanged.
+
+#168: the plugin dialog is built from the open board instead of
+free text. Per-layer ban checkboxes + cost preset dropdowns are
+generated from the board's stackup (a layer name cannot be
+mistyped; a cost spec cannot be malformed; pricing un-checks the
+ban, the pipeline's own rule made structural). Smart defaults
+at open: Auto mode and an Automatic layer law banning only
+detected GND-plane layers; when the saved config differs on
+mode/law, a one-line notice offers [Use recommended] instead of
+silently inheriting a stale experiment (the mechanism behind
+the owner's 59-unconnected Nomad run). A status lamp band
+(colour + word + detail) reports IDLE (green) / RUNNING (red) /
+DONE (green, with the final gate in the detail line -- green
+never implies a clean board) / FAILED (orange-red) / CANCELLED
+(grey), driven by the existing backend poll and local worker
+lifecycle. Layer-law Automatic/Custom radio surfaces the
+auto-escalation rule; backend URL gets presets, live validation
+and a Test-connection button on the existing health() call;
+the hidden config keys (finisher caps, engine portfolio,
+pass_advice, layer_law_policy, and the LLM tool-call budget)
+live in an Advanced collapsible, and max_tool_calls now rides
+in the backend overrides so the dialog value governs backend
+LLM runs (run_job.build_cfg already forwarded it). Existing
+config.json files map losslessly (config keys and the strings
+the pipeline consumes are unchanged). GUI smoke under xvfb on
+the Nomad fixture asserts the recommended open state and the
+stale-config notice path (21 checks, screenshots in
+agent-runs/dialog-smoke/). Code only -- production backends
+stay on 1.10.2, no redeploy.
+
 ## In progress
 
 - **P2.1b** is implemented on branch `p21b-fix-violations` and
