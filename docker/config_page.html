@@ -57,6 +57,8 @@ code{background:#eef;padding:.1em .35em;border-radius:4px}
   <label>Never route tracks on layers (comma list)</label><input type="text" id="rt_ban">
   <label>Layer costs (LAYER=FACTOR, comma list, e.g. In1.Cu=10,In2.Cu=10; blank = off)</label><input type="text" id="rt_cost">
   <label style="display:inline"><input type="checkbox" id="rt_strip" style="width:auto"> Strip existing routing first</label><br>
+  <label style="display:inline"><input type="checkbox" id="rt_det" style="width:auto"> Reproducible run (deterministic engine, bounded by the work budget)</label><br>
+  <label style="display:inline"><input type="checkbox" id="rt_roo" style="width:auto" onchange="applyRooState()"> Finish this board (keep existing copper &mdash; never strips)</label><br>
   <button onclick="saveConfig()">Save settings</button><div class="msg" id="cfgmsg"></div>
   <h2>TraceMaker</h2>
   <div id="tm_list" class="msg">…</div>
@@ -85,7 +87,7 @@ function msg(id, text, ok){ const e=document.getElementById(id); e.textContent=t
 async function loadAll(){
   try{
     const h = await (await api('/health')).json();
-    document.getElementById('health').innerHTML = 'Backend <code>'+h.backend_version+'</code> · KiCad <code>'+h.kicad_cli+'</code> · TraceMaker selected <code>'+(h.tracemaker_selected||'none')+'</code> · queue '+h.queue_depth+' · running '+h.jobs_running;
+    document.getElementById('health').innerHTML = 'Backend <code>'+h.backend_version+'</code> · KiCad <code>'+h.kicad_cli+'</code> · TraceMaker selected <code>'+(h.tracemaker_selected||'none')+'</code> · engine build <code>'+(h.tracemaker_provenance||'unknown')+'</code> · queue '+h.queue_depth+' · running '+h.jobs_running;
     const c = await (await api('/api/config')).json();
     document.getElementById('app').style.display='block'; document.getElementById('login').style.display='none';
     document.getElementById('llm_endpoint').value=c.llm.endpoint||'';
@@ -97,6 +99,9 @@ async function loadAll(){
     document.getElementById('rt_ban').value=c.routing.no_tracks_on||'';
     document.getElementById('rt_cost').value=c.routing.layer_cost||'';
     document.getElementById('rt_strip').checked=!!c.routing.strip_existing;
+    document.getElementById('rt_det').checked=!!c.routing.deterministic;
+    document.getElementById('rt_roo').checked=!!c.routing.route_open_only;
+    applyRooState();
     tmLoad(); stLoad(); jobsLoad();
   }catch(e){}
 }
@@ -106,7 +111,9 @@ async function saveConfig(){
     routing:{mode:document.getElementById('rt_mode').value, max_passes:parseInt(document.getElementById('rt_passes').value),
     work:parseInt(document.getElementById('rt_work').value), no_tracks_on:document.getElementById('rt_ban').value,
     layer_cost:document.getElementById('rt_cost').value,
-    strip_existing:document.getElementById('rt_strip').checked}};
+    strip_existing:document.getElementById('rt_strip').checked,
+    deterministic:document.getElementById('rt_det').checked,
+    route_open_only:document.getElementById('rt_roo').checked}};
   const r = await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){ msg('cfgmsg','Saved.',true); document.getElementById('llm_key').value=''; document.getElementById('llm_clear').checked=false; loadAll(); }
   else msg('cfgmsg','Save failed.',false);
@@ -115,8 +122,8 @@ async function tmLoad(){
   const t = await (await api('/api/tracemaker')).json();
   document.getElementById('tm_url').value = t.url||'';
   if(!t.installed.length){ document.getElementById('tm_list').textContent='No TraceMaker versions installed yet.'; return; }
-  let html='<table><tr><th></th><th>Version</th><th>sha256 (TOFU)</th></tr>';
-  for(const v of t.installed){ html+='<tr><td><input type="radio" name="tmv" value="'+v.version+'" '+(v.selected?'checked':'')+' onchange="tmSelect(this.value)"></td><td><code>'+v.version+'</code>'+(v.selected?' (active)':'')+'</td><td><code>'+(v.sha256?v.sha256.slice(0,16)+'…':'—')+'</code></td></tr>'; }
+  let html='<table><tr><th></th><th>Version</th><th>sha256 (TOFU)</th><th>Provenance</th></tr>';
+  for(const v of t.installed){ html+='<tr><td><input type="radio" name="tmv" value="'+v.version+'" '+(v.selected?'checked':'')+' onchange="tmSelect(this.value)"></td><td><code>'+v.version+'</code>'+(v.selected?' (active)':'')+'</td><td><code>'+(v.sha256?v.sha256.slice(0,16)+'…':'—')+'</code></td><td><code>'+(v.provenance||'—')+'</code></td></tr>'; }
   document.getElementById('tm_list').innerHTML=html+'</table>';
 }
 async function tmSelect(v){
@@ -130,7 +137,8 @@ async function tmUpdate(){
   if(r.ok){ msg('tmmsg','Installed TraceMaker '+j.version+' · sha256 '+j.sha256.slice(0,16)+'…',true); tmLoad(); }
   else msg('tmmsg','Update failed: '+(j.error||r.status),false);
 }
-async function loadHealthOnly(){ try{ const h=await (await api('/health')).json(); document.getElementById('health').innerHTML='Backend <code>'+h.backend_version+'</code> · KiCad <code>'+h.kicad_cli+'</code> · TraceMaker selected <code>'+(h.tracemaker_selected||'none')+'</code> · queue '+h.queue_depth+' · running '+h.jobs_running; }catch(e){} }
+function applyRooState(){ const roo=document.getElementById('rt_roo').checked; const st=document.getElementById('rt_strip'); if(roo){ st.checked=false; st.disabled=true; } else { st.disabled=false; } }
+async function loadHealthOnly(){ try{ const h=await (await api('/health')).json(); document.getElementById('health').innerHTML='Backend <code>'+h.backend_version+'</code> · KiCad <code>'+h.kicad_cli+'</code> · TraceMaker selected <code>'+(h.tracemaker_selected||'none')+'</code> · engine build <code>'+(h.tracemaker_provenance||'unknown')+'</code> · queue '+h.queue_depth+' · running '+h.jobs_running; }catch(e){} }
 async function stLoad(){
   const rows = await (await api('/api/selftest')).json();
   if(!rows.length){ document.getElementById('st_list').textContent='No self-test boards baked into this image.'; return; }
