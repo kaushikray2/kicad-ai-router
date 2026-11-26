@@ -168,8 +168,12 @@ engineered-nets branch, the three merge blockers are fixed:
 #150 (PCM glob + markings sidecar round-trip). Follow-ups:
 the NAS layer-cost factor sweep (1.25/1.5/2/3) -- owner ruled
 config (a) 2026-11-25 (In1.Cu = f, In2.Cu = 1 on the NAS board),
-protocol pre-declared on #121, and the sweep is running on the
-scratch backend (ML350:8733) on v1.11.6; #138's merge-time
+protocol pre-declared on #121; the sweep completed 2026-11-25
+on the scratch backend (ML350:8733) on v1.11.6 -- completion
+insensitive to the factor (16 unconnected at every f), In1 usage
+falling monotonically to zero at f = 3 (a soft ban at the top of
+the range); record: agent-runs/weaveengine-review/nas-compare/
+RESULTS-NAS-LAYERCOST-R4SWEEP-2026-11-25.md, comments on #73/#121; #138's merge-time
 remainder.
 
 ### Open-bug sweep (2026-11-25)
@@ -312,6 +316,12 @@ aggregate 17 vs ~22.5 open; full table on #170). The adoption
 ruling is the owner's. #172 (route-batch) stays open with its
 assessment.
 
+**Ruled, merged and released (2026-11-26):** the owner adopted
+the engine and ruled the merge of everything except the
+engineered-nets line; the branch merged to main as 021a365 and
+shipped in v1.12.2 (release entry below). The local branch is
+deleted; #170/#171 are closed with the release evidence.
+
 ### Off-plan -- v1.12.2 audit fix pass, main-area fixes (2026-11-26)
 
 The main-area proven claims of the adoption-branch audit
@@ -331,22 +341,21 @@ unguarded module-level pcbnew import -- no code change. The
 branch-area fixes (#173-#180) are recorded on
 phase2-adoption-v1.12.2.
 
-## In progress
+### P2.1b -- tool_fix_violations -- done, merged to main 2026-11-26
 
-- **P2.1b** was implemented on branch `p21b-fix-violations`
-  (step 0, #63, closed; tool_fix_violations, #155) and merged to
-  main on 2026-11-26 under the owner's ruling, with the external
-  review's proven findings fixed on the branch as #158-#163.
-  What remains is measurement, not code: the dataset-v3 bench
-  rerun for step 0's improvement half and a re-route-trade sample
-  for the tool, both riding the Phase 2E harness (#62) once it
-  exists. The design tickets #164/#165/#166 stay open for the
-  owner's ruling. Phase 2E (below) follows P2.7a; the fair engine
-  A/B sits inside it, per the owner's sequencing.
+**Status (2026-11-26): MERGED to main** (merge 6ba630c) under
+the owner's ruling, on top of the review-fix round (#158-#163,
+closed). Merged-tree suites: pytest 95 passed, standalone
+45/45 (the two new test files' module-level sys.exit was
+guarded under __main__ at merge time so pytest collection
+survives pcbnew being present). #155 is closed with the merge
+evidence. What remains is measurement, not code: the
+dataset-v3 bench rerun (step 0's improvement half) and a live
+re-route-trade sample, both riding the Phase 2E harness (#62)
+once it exists. Design tickets #164/#165/#166 stay open,
+awaiting the owner's ruling; the merge shipped the branch's
+current behaviour.
 
-## Remaining (in sequence)
-
-### P2.1b — tool_fix_violations (12–20 h)
 
 **Status (2026-11-25): implemented on branch
 `p21b-fix-violations` (tip 49ccc5c), NOT merged.** Step 0 (#63)
@@ -473,6 +482,45 @@ retry skeleton-blocked faults unreserved). The merge checklist
 (conflicts in config/orchestrator/pipeline/worker against main
 v1.11.6, plus the parity list) is recorded on #155; the branch is
 still NOT merged.
+
+### Off-plan -- v1.12.2 release: Phase 2 engine adopted + P2.1b merged (2026-11-26)
+
+The owner ruled: merge everything to main except the
+engineered-nets line (untouched; its merge gate after the final
+exam stands). p21b-fix-violations merged as 6ba630c (CI
+success), then phase2-adoption-v1.12.2 as 021a365 (CI
+success). Merged-tree suites: pytest 95 passed, standalone
+45/45. VERSION and BACKEND_VERSION to 1.12.2 (code only;
+production backends stay on 1.10.2, no redeploy). pcm-repo
+regenerated: ai-router-1.12.2.zip (119646 bytes, sha256
+bf9f16fc46a4c09117c5d2628db77f080554b678e1ffcf12aeeeb9a49e565f80),
+the 1.12.1 zip retired; the shipped zip registers exactly one
+AIRouterPlugin under KiCad's own pcbnew.LoadPlugins. The
+adopted engine is TraceMaker phase-2-end (598c4e5), pinned by
+commit + provenance sha256 (the version string is still
+0.12.1 -- TraceMaker #40). Adoption evidence: the pre-declared
+A/B decision rule met on both clauses (13/15 boards tie
+exactly, f91w improves 14-15 -> 9 open, aggregate 17 vs ~22.5
+open; table on #170) and Nomad acceptance at 0/0/14 through
+the fixed pipeline at the recalibrated 40M default. #155,
+#170 and #171 are closed with this evidence; #172
+(route-batch) stays open with its assessment. The merged
+accept key is (fault_count, unconnected, splits,
+starved_delta, intrusions, cost_tail), with fault_count =
+FAULT_CLASSES + banned_delta (#175) and intrusions priced as
+their own term (#158).
+
+
+## In progress
+
+- Nothing in flight. v1.12.2 (Phase 2 engine adoption +
+  P2.1b) is released and recorded in Done above; production
+  backends stay on 1.10.2 until the owner calls a deploy.
+  Next in sequence: **P2.7a** (below). Open owner items: the
+  #164/#165/#166 design rulings; #172 (route-batch) stays
+  open with its assessment.
+
+## Remaining (in sequence)
 
 ### P2.7a — Performance quick wins (4–8 h)
 Remove verified double-gating (the base is gated twice per run; the
