@@ -645,7 +645,7 @@ class Pipeline:
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.base)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), 1800)  # v1.12.2 (#170/#171)
+        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), 1800, relax=(eng == 'tm_relax'))  # v1.12.2 (#170/#171); relax: #184 (deterministic round budget)
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
             _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(2400, self.cfg.get('work', 40000000))).returncode  # v1.12.2 (#176)

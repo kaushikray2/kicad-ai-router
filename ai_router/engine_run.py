@@ -42,7 +42,7 @@ Verified against the binary built at fork tag phase-2-end (commit
 """
 
 
-def route_flags(cfg, work, time_s=3600, open_only=True):
+def route_flags(cfg, work, time_s=3600, open_only=True, relax=False):
     """The work/mode tail of an engine route command line.
 
     A default config reproduces the pre-Phase-2 command line
@@ -51,11 +51,30 @@ def route_flags(cfg, work, time_s=3600, open_only=True):
     the mode does not apply). deterministic appends
     '--deterministic' and drops '--time': the run is bounded by
     the work budget alone.
+
+    relax=True marks a --relax leg (#184): the engine budgets a
+    relax run by rounds, not by --work (its cli.md: '--work does
+    not limit it'), and its deterministic gate counts a relax run
+    as work-bounded only via --round-work/--rounds -- a
+    deterministic relax leg carrying --work alone is refused
+    outright. Under deterministic the configured budget is
+    therefore translated into rounds of the engine's own 20M
+    round quantum (the split its rescue path derives from a work
+    budget), keeping the same total budget. Non-deterministic
+    relax lines are unchanged: --work + --time, as shipped.
     """
     flags = ['--work', str(work)]
     if open_only and cfg.get('route_open_only'):
         flags.append('--route-open-only')
     if cfg.get('deterministic'):
+        if relax:
+            try:
+                _w = int(work)
+            except (TypeError, ValueError):
+                _w = 0
+            if _w > 0:
+                _rounds = max(1, -(-_w // 20000000))
+                flags += ['--round-work', str(max(1, _w // _rounds)), '--rounds', str(_rounds)]
         flags.append('--deterministic')
     else:
         flags += ['--time', str(time_s)]
