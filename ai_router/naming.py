@@ -69,6 +69,33 @@ def project_stem(board_path):
     return strip_generated_suffixes(stem)
 
 
+def sidecar_paths(board_path):
+    # (#182): the project's .kicad_pro / .kicad_dru for a board,
+    # resolved with the same stem logic as project_stem: prefer
+    # the files sharing the board's stem; else, when the directory
+    # holds exactly one .kicad_pro, that project's files. Either
+    # entry may be None. Single-sourced because Pipeline.__init__,
+    # backend_client.submit and the dialog's local delivery each
+    # hardcoded splitext(board)+ext and silently lost the sidecars
+    # of a renamed board -- it routed without its netclasses and
+    # DRC rules and the result was delivered bare.
+    board_path = os.path.abspath(board_path)
+    d = os.path.dirname(board_path)
+    stem = os.path.splitext(os.path.basename(board_path))[0]
+    pro = os.path.join(d, stem + '.kicad_pro')
+    if not os.path.exists(pro):
+        pros = glob.glob(os.path.join(d, '*.kicad_pro'))
+        if len(pros) == 1:
+            pro = pros[0]
+            stem = os.path.splitext(os.path.basename(pro))[0]
+        else:
+            pro = None
+    dru = os.path.join(d, stem + '.kicad_dru')
+    if not os.path.exists(dru):
+        dru = None
+    return pro, dru
+
+
 def result_filename(board_path, when=None):
     when = when or datetime.now()
     return '%s-%s.kicad_pcb' % (project_stem(board_path), when.strftime('%Y%m%d-%H%M%S'))

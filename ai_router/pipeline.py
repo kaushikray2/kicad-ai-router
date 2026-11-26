@@ -59,6 +59,11 @@ except Exception:
     except Exception:
         _CFG_DEFAULTS = {}
 
+try:
+    from . import naming
+except Exception:
+    import naming
+
 def resolve_ban_names(raw, aliases):
     # v1.10.1 (#49): the ONE layer-law resolution point. raw config
     # names (canonical, board-specific, any case) -> canonical names
@@ -218,12 +223,11 @@ class Pipeline:
         self.last_route = None
         src_copy = os.path.join(self.workdir, 'input.kicad_pcb')
         shutil.copy(self.board_path, src_copy)
-        pro = os.path.splitext(self.board_path)[0] + '.kicad_pro'
-        if os.path.exists(pro):
-            shutil.copy(pro, os.path.join(self.workdir, 'input.kicad_pro'))
-        dru = os.path.splitext(self.board_path)[0] + '.kicad_dru'
-        if os.path.exists(dru):
-            shutil.copy(dru, os.path.join(self.workdir, 'input.kicad_dru'))
+        _pro, _dru = naming.sidecar_paths(self.board_path)  # (#182): project-stem resolution, not splitext(board) -- a renamed board keeps its netclasses / DRC rules
+        if _pro:
+            shutil.copy(_pro, os.path.join(self.workdir, 'input.kicad_pro'))
+        if _dru:
+            shutil.copy(_dru, os.path.join(self.workdir, 'input.kicad_dru'))
         self._gseq = 0   # v1.8.2 (#15): unique gate report names
         self._oseq = 0   # v1.8.2 (#14): unique step output names
         if cfg.get('strip_existing', True):

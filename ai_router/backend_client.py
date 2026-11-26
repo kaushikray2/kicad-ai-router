@@ -19,6 +19,10 @@
 
 """HTTP client for the AI Router Docker backend (stdlib only)."""
 import base64, json, os, urllib.request
+try:
+    from . import naming
+except ImportError:
+    import naming
 
 def _req(url, path, token='', method='GET', payload=None, timeout=120):
     data = json.dumps(payload).encode() if payload is not None else None
@@ -35,11 +39,10 @@ def health(url):
 def submit(url, token, board_path, overrides):
     payload = {'board_b64': base64.b64encode(open(board_path, 'rb').read()).decode(),
                'board_name': os.path.basename(board_path), 'overrides': overrides or {}}
-    pro = os.path.splitext(board_path)[0] + '.kicad_pro'
-    if os.path.exists(pro):
+    pro, dru = naming.sidecar_paths(board_path)  # (#182): project-stem resolution -- a renamed board submits its real netclasses / DRC rules
+    if pro:
         payload['pro_b64'] = base64.b64encode(open(pro, 'rb').read()).decode()
-    dru = os.path.splitext(board_path)[0] + '.kicad_dru'
-    if os.path.exists(dru):
+    if dru:
         payload['dru_b64'] = base64.b64encode(open(dru, 'rb').read()).decode()
     out = json.loads(_req(url, '/api/runs', token, 'POST', payload, timeout=300))
     return out['job_id']

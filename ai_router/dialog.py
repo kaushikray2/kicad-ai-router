@@ -864,12 +864,11 @@ class RouterDialog(wx.Dialog):
         try:
             dest = naming.unique_result_path(board)
             shutil.copyfile(final, dest)
-            src_stem = os.path.splitext(board)[0]
             dst_stem = os.path.splitext(dest)[0]
-            for ext in ('.kicad_pro', '.kicad_dru'):
-                s = src_stem + ext
-                if os.path.exists(s):
-                    shutil.copyfile(s, dst_stem + ext)
+            _src_pro, _src_dru = naming.sidecar_paths(board)  # (#182): project-stem resolution -- a renamed board delivers its real sidecars
+            for _s, ext in ((_src_pro, '.kicad_pro'), (_src_dru, '.kicad_dru')):
+                if _s:
+                    shutil.copyfile(_s, dst_stem + ext)
             self._log_ui('Result board: %s' % dest)
             return dest
         except Exception as e:
