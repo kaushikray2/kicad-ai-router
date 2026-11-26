@@ -652,15 +652,48 @@ the 1.12.2 zip retired; the shipped zip registers exactly
 one AIRouterPlugin under KiCad's own pcbnew.LoadPlugins.
 
 
+### Off-plan -- v1.12.4 release: external audit round 6 fixes + Add server (2026-11-26)
+
+Patch release carrying the external audit round 6 fix pass
+(#191-#198, recorded above) plus Add server (#199, merged
+from branch add-server-button in 6733516): #191 (CRITICAL
+regression from #189 -- Variant B never ran in v1.12.3;
+run_auto now builds Variant B on its own Pipeline from an
+explicit cfg copy), #192 (pinned engine bootstrap let the
+stored config URL beat TRACEMAKER_URL when the pinned
+install was missing), #193 (failed engine runs could become
+the delivered board), #194 (#185 llm+deterministic coercion
+now also in Pipeline.__init__), #195 (fix_violations could
+delete free stitching vias), #196 (#180 40M work value never
+reached existing installs -- a persisted 20000000 is migrated
+on both load paths), #197 (config page rendered engine
+provenance unescaped), #198 (sidecar .kicad_dru stem;
+skeleton intrusions were layer-blind), #199 (custom backend
+servers in the Run on group: Add server modal, persisted
+backend_servers list, Remove server with confirmation;
+presets unchanged). Scope: the owner first ruled fixes only,
+then extended the release to include #199 before the cut;
+P2.7a (#190) stays out and rides the next release. The
+shipped v1.12.3 contained all eight round-6 bugs, #191
+included. VERSION and BACKEND_VERSION to 1.12.4 (code only;
+production backends stay on 1.10.2, no redeploy). pcm-repo
+regenerated: ai-router-1.12.4.zip (125068 bytes, sha256
+9b4b7956ed6da8ea060f78651bc7af28bcb566997fb8caf380c9e6d8679b6c26),
+the 1.12.3 zip retired; the shipped zip registers exactly
+one AIRouterPlugin under KiCad pcbnew.LoadPlugins.
+
+
 ## In progress
 
-- Nothing in flight. v1.12.3 (external audit round 5
-  fixes #184-#189) is released and recorded in Done above;
-  production backends stay on 1.10.2 until the owner calls
-  a deploy.
-  Next in sequence: **P2.7a** (below). Open owner items: the
-  #164/#165/#166 design rulings; #172 (route-batch) stays
-  open with its assessment.
+- Nothing in flight. v1.12.4 (external audit round 6
+  fixes #191-#198 + Add server #199) is released and
+  recorded in Done above; production backends stay on
+  1.10.2 until the owner calls a deploy.
+  Next in sequence: **P2.7a** (below) -- #190 is complete
+  on branch p27a-perf and rides the next release. Open
+  owner items: the #164/#165/#166 design rulings; #172
+  (route-batch) stays open with its assessment.
+
 
 ## Remaining (in sequence)
 
