@@ -264,12 +264,18 @@ def run_auto(cfg, pipe, log):
         layers = summ.get('copper_layers') or []
         pour_layers = summ.get('pour_layers') or {}
         if len(layers) >= 4 and any('In2.Cu' in (ls or []) for ls in pour_layers.values()):
-            orig = cfg.get('no_tracks_on')
-            cfg['no_tracks_on'] = 'In1.Cu,In2.Cu'
+            # v1.12.3 (#191): Variant B runs on its OWN Pipeline,
+            # built from an explicit cfg copy -- the construction
+            # Variant A below already used. The old code switched B
+            # on by mutating the caller's cfg and reusing the pipe
+            # the caller had already constructed; since #189 the
+            # Pipeline works on a construction-time copy of cfg, so
+            # the mutation never reached it and 'Variant B' ran
+            # Variant A's law while the log claimed In2 was banned.
+            import time as _time; _time.sleep(1.1)  # pipe_b needs a distinct workdir stamp
+            cfg_b = dict(cfg); cfg_b['no_tracks_on'] = 'In1.Cu,In2.Cu'
             log('Layer-law policy: Variant B (In2 banned) first on this %d-layer pour board' % len(layers))
-            res_b = _run_auto_once(cfg, pipe, log)
-            if orig is None: cfg.pop('no_tracks_on', None)
-            else: cfg['no_tracks_on'] = orig
+            res_b = _run_auto_once(cfg_b, Pipeline(cfg_b, pipe.board_path, log), log)
             if not _b_needs_escalation(res_b['gate']):
                 log('Layer-law policy: B left no split nets -- keeping B')
                 return res_b
