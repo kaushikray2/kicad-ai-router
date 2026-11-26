@@ -221,11 +221,14 @@ def valid_http_url(u):
 # Keys the dialog sends to the backend as job overrides: the five
 # the dialog has always sent, plus max_tool_calls (proposal decision
 # 12 recommendation -- run_job.build_cfg already forwards it from
-# overrides, pinned by tests/test_build_cfg.py). The remaining
+# overrides, pinned by tests/test_build_cfg.py) and the Phase 2 run
+# actions deterministic / route_open_only (v1.12.2, #171 -- the
+# same forwarding path, pinned the same way). The remaining
 # Advanced keys govern local runs from the saved config; on backend
 # runs they come from the server's own configuration.
 OVERRIDE_KEYS = ('mode', 'max_passes', 'no_tracks_on', 'layer_cost',
-                 'strip_existing', 'max_tool_calls')
+                 'strip_existing', 'max_tool_calls',
+                 'deterministic', 'route_open_only')
 
 
 def build_overrides(cfg):

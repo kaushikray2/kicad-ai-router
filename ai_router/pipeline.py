@@ -71,6 +71,12 @@ try:
     from . import naming
 except Exception:
     import naming
+# v1.12.2 (#170): the Phase 2 engine run contracts (pure helpers:
+# route flags, exit-code mapping, stopped_by, why_open lines).
+try:
+    from . import engine_run
+except Exception:
+    import engine_run
 
 def resolve_ban_names(raw, aliases):
     # v1.10.1 (#49): the ONE layer-law resolution point. raw config
@@ -182,6 +188,19 @@ def starved_delta(g):
     # for). Absent on records from before the tier existed: 0.
     return int((g or {}).get('starved_thermal_delta') or 0)
 
+def banned_delta(g):
+    # v1.12.2 (#175): the routing-caused banned-layer delta the gate
+    # baked into this record (the #116 treatment: the base board's
+    # own count under the same law subtracted, floored at 0 --
+    # inherited tracks on a banned layer are not this run's to
+    # answer for, and each variant Pipeline baking its own base
+    # reference is what removes the A/B asymmetry). Records from
+    # before the field existed fall back to the RAW count, so old
+    # ledgers keep their historical meaning.
+    if (g or {}).get('banned_layer_tracks_delta') is None:
+        return int((g or {}).get('banned_layer_tracks') or 0)
+    return int(g['banned_layer_tracks_delta'] or 0)
+
 def _accept_key(g):
     # v1.8.2 (#16): step acceptance is lexicographic -- a step is kept
     # only if it is no worse in (copper faults, unconnected items,
@@ -235,7 +254,9 @@ def fault_count(g):
     # test, the reroute connectivity key). The census still rides
     # every gate record, so intrusion movement stays visible in
     # the ledger and in finalize's records.
-    return sum(c.get(k, 0) for k in FAULT_CLASSES) + int((g or {}).get('banned_layer_tracks') or 0)
+    # v1.12.2 (#175): the term keys on the DELTA above the base
+    # board's own count (banned_delta), not the raw census.
+    return sum(c.get(k, 0) for k in FAULT_CLASSES) + banned_delta(g)
 
 def _conn_key(g):
     # tool_reroute_window's 'connectivity' acceptance key:
@@ -290,6 +311,12 @@ class Pipeline:
             shutil.copy(_dru, os.path.join(self.workdir, 'input.kicad_dru'))
         self._gseq = 0   # v1.8.2 (#15): unique gate report names
         self._oseq = 0   # v1.8.2 (#14): unique step output names
+        if cfg.get('route_open_only') and cfg.get('strip_existing', True):
+            # v1.12.2 (#171): Finish-this-board routes only what is
+            # open and never touches existing copper -- stripping
+            # first would delete the copper the mode exists to keep.
+            cfg['strip_existing'] = False
+            self.log('route_open_only: strip_existing forced off (existing copper is kept)')
         if cfg.get('strip_existing', True):
             self.base = os.path.join(self.workdir, 'base.kicad_pcb')
             r = self._worker('strip', '--board', src_copy, '--out', self.base)
@@ -298,6 +325,22 @@ class Pipeline:
             self.base = src_copy
         self.current = self.base
         self._record('setup', {'base': self.base})
+        if cfg.get('route_open_only'):
+            # v1.12.2 (#174): structural copper protection for
+            # Finish-this-board. Strip is already forced off above;
+            # now snapshot the input's lock flags and lock EVERY
+            # pre-existing track/via on the working base, so no
+            # engine, finisher or victim selection can remove or
+            # displace the user's copper during the run. finalize()
+            # restores the snapshot onto the delivered board.
+            _locked_base = os.path.join(self.workdir, 'base.kicad_pcb')
+            _lr = self._worker('lock_all', '--board', self.base, '--out', _locked_base)
+            self._locks_file = _lr.get('locks_file')
+            self._locks_protected = True
+            self.base = _locked_base
+            self.current = self.base
+            self._record('lock_protect', {'items': _lr.get('items'), 'newly_locked': _lr.get('newly_locked')})
+            self.log('route_open_only: %s pre-existing items locked for the run (original lock flags are restored at finalize)' % _lr.get('items'))
 
     # ------------------------------------------------------------ internals
     def _record(self, step, data):
@@ -402,10 +445,16 @@ class Pipeline:
             cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(inp)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += ['--work', str(work or self.cfg.get('work', 20000000)), '--time', '3600']
+        cmdline += engine_run.route_flags(self.cfg, work or self.cfg.get('work', 40000000))  # v1.12.2 (#170/#171)
         with open(log_path, 'w') as lf:
-            p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=3900)
+            p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(3900, work or self.cfg.get('work', 40000000)))  # v1.12.2 (#176): scales with the work budget
         if not os.path.exists(outp):
+            _err = engine_run.engine_error(p.returncode, None)
+            if _err:
+                _tail = ''
+                try: _tail = open(log_path).read().strip().splitlines()[-1][:200]
+                except Exception: pass
+                raise PipelineError('%s: %s (see %s)' % (_err, _tail, log_path))
             raise PipelineError('TraceMaker produced no board (see %s)' % log_path)
         try:
             self._worker('refill', '--board', outp, '--out', outp)  # zone fills must track the new layout before this board is saved/used
@@ -421,6 +470,7 @@ class Pipeline:
         unrouted = []
         routed = (None, None)
         stuck = {'unrouted': [], 'by_reason': []}
+        rj = {}
         try:
             rj = json.load(open(os.path.join(self.workdir, 'route%d.json' % self.pass_no)))
             routed = (rj.get('routed'), rj.get('connections'))
@@ -456,6 +506,24 @@ class Pipeline:
         self.last_route = {'pass': self.pass_no, 'routed': routed, 'unrouted': unrouted, 'board': outp,
                            'stuck_unrouted': len(stuck['unrouted']), 'by_reason': stuck['by_reason'],
                            'route_stats': stuck.get('route'), 'cuts': stuck.get('cuts')} 
+        # v1.12.2 (#170): the structured contract -- the exit code,
+        # stopped_by and why_open come from the route JSON / process
+        # return code, not from log inference. rc 1/2 aborts the
+        # pass with the engine's message; rc 3 is a normal partial.
+        _err = engine_run.engine_error(p.returncode, rj)
+        if _err:
+            _tail = ''
+            try: _tail = text.strip().splitlines()[-1][:200]
+            except Exception: pass
+            raise PipelineError('%s: %s (see %s)' % (_err, _tail, log_path))
+        self.last_route['exit_code'] = rj.get('exit_code', p.returncode)
+        self.last_route['stopped_by'] = rj.get('stopped_by')
+        self.last_route['route_open_only'] = bool(rj.get('route_open_only'))
+        self.last_route['open_at_start'] = rj.get('open_at_start')
+        if rj.get('stopped_by'):
+            self.log('Pass %d: engine stopped: %s' % (self.pass_no, engine_run.stopped_by_text(rj.get('stopped_by'))))
+        for _line in engine_run.why_open_lines(rj):
+            self.log(_line)
         self._record('route', self.last_route)
         self.log('Pass %d: routed %s/%s connections; %d unrouted' % (self.pass_no, routed[0], routed[1], len(unrouted)))
         return self.last_route
@@ -475,6 +543,8 @@ class Pipeline:
         # TraceMaker's priced cost with the mis-score invisible.
         # Exclude them while a valid cost spec is in force, loudly.
         excluded = []
+        excluded_roo = []
+        excluded_det = []
         _cost = self._layer_cost_spec(self.base)
         if _cost:
             for eng in ('freerouting', 'krt'):
@@ -482,7 +552,28 @@ class Pipeline:
                     engines.remove(eng)
                     excluded.append(eng)
                     self.log('portfolio: %s excluded -- cannot honour layer_cost %s; priced-layer tracks would carry no gate penalty (#109)' % (eng, _cost))
+        # v1.12.2 (#174): under route_open_only the same two engines
+        # are excluded for the stronger reason -- they re-route the
+        # base from scratch and know nothing of the mode, so a win
+        # would replace the user's existing copper wholesale.
+        if self.cfg.get('route_open_only'):
+            for eng in ('freerouting', 'krt'):
+                if eng in engines:
+                    engines.remove(eng)
+                    excluded_roo.append(eng)
+                    self.log('portfolio: %s excluded -- route_open_only keeps existing copper; %s re-routes from scratch (#174)' % (eng, eng))
+        # v1.12.2 (#176): deterministic mode excludes the same two
+        # engines for its own reason -- freerouting runs -mt 2
+        # (multithreaded, run-variant) and krt has no determinism
+        # contract, so neither may win a Reproducible run.
+        if self.cfg.get('deterministic'):
+            for eng in ('freerouting', 'krt'):
+                if eng in engines:
+                    engines.remove(eng)
+                    excluded_det.append(eng)
+                    self.log('portfolio: %s excluded -- deterministic mode requires the reproducible engine only (#176)' % eng)
         results = []
+        route_recs = {}
         winner = None
         for eng in engines:
             outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
@@ -517,14 +608,25 @@ class Pipeline:
                             'seconds': (r or {}).get('seconds')})
             self.log('portfolio: %s key %s (unc %s, copper %s, banned %s)' %
                      (eng, key, g.get('unconnected_total'), g.get('copper_violations'), g.get('banned_layer_tracks')))
+            if (r or {}).get('route'): route_recs[eng] = r['route']
             if winner is None or key < winner[0]:
-                winner = (key, outp, g)
+                winner = (key, outp, g, eng)
         _rec = {'engines': list(engines), 'results': results,
                 'winner': winner[1] if winner else None}
         if excluded: _rec['excluded_layer_cost'] = excluded
+        if excluded_roo: _rec['excluded_route_open_only'] = excluded_roo
+        if excluded_det: _rec['excluded_deterministic'] = excluded_det
         self._record('portfolio', _rec)
         if winner:
             self.current = winner[1]
+            # v1.12.2 (#177): a TraceMaker win seeds the job route
+            # record from the winning variant's route JSON -- with
+            # the main passes skipped on a clean win, nothing else
+            # would ever populate it.
+            _wr = route_recs.get(winner[3])
+            if _wr:
+                self.last_route = dict(_wr, source='portfolio:' + winner[3])
+                self._record('route', self.last_route)
             return winner[2]
         return None
 
@@ -538,14 +640,15 @@ class Pipeline:
             except Exception: self._copper_layers = []
         banned = self._banned_for(self.base)  # v1.10.1 (#49)
         cmdline = [self.cfg['tracemaker_path'], 'route', self.base, '-o', outp, flag,
+                   '--json', outp + '.route.json',  # v1.12.2 (#177): the variant's structured record, seeded into last_route if it wins
                    '--soft-zones', '--keep-vias-off-pads', '--diff-pairs', '--si-rules', '--critical-auto']
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.base)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
+        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), 1800)  # v1.12.2 (#170/#171)
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
-            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=2400).returncode
+            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(2400, self.cfg.get('work', 40000000))).returncode  # v1.12.2 (#176)
         if _rc != 0:
             self.log('TraceMaker variant %s exited with code %d (log: %s)' % (eng, _rc, log_path))  # v1.9.6 (#40)
         if not os.path.exists(outp):
@@ -553,7 +656,18 @@ class Pipeline:
         try: self._worker('refill', '--board', outp, '--out', outp)
         except Exception: pass
         self._sidecars(outp)
-        return {'status': 'routed'}
+        # v1.12.2 (#177): hand the caller the variant's structured
+        # record (same fields tool_route bakes into last_route), so
+        # a portfolio win can seed the job's route record.
+        _rj = {}
+        try: _rj = json.load(open(outp + '.route.json'))
+        except Exception: pass
+        _rec = {'engine': eng, 'board': outp,
+                'exit_code': _rj.get('exit_code', _rc),
+                'stopped_by': _rj.get('stopped_by'),
+                'route_open_only': bool(_rj.get('route_open_only')),
+                'open_at_start': _rj.get('open_at_start')}
+        return {'status': 'routed', 'seconds': _rj.get('seconds'), 'route': _rec}
 
     def _drc_measure(self, board):
         # v1.9: parse the JSON DRC report -- structured output instead
@@ -754,7 +868,14 @@ class Pipeline:
         # loss warns. The same census serves the #45 invariance gate.
         if getattr(self, '_input_census', None) is None:
             try:
-                _is = self._worker('summary', '--board', self.board_path, '--fast')
+                # v1.12.2 (#174): while route_open_only lock
+                # protection is active the honest reference is the
+                # protected base (every pre-existing item locked) --
+                # a stage losing one must warn. finalize() restores
+                # the original locks and resets the census, so the
+                # delivered board is compared against the input.
+                _census_src = self.base if getattr(self, '_locks_protected', False) else self.board_path
+                _is = self._worker('summary', '--board', _census_src, '--fast')
                 self._input_census = {'locked_items': _is.get('locked_items'), 'free_vias': _is.get('free_vias')}
             except Exception:
                 self._input_census = {'locked_items': None, 'free_vias': None}
@@ -795,6 +916,12 @@ class Pipeline:
         if board == self.base and getattr(self, '_base_starved', None) is None:
             self._base_starved = _st
         _st_delta = max(0, _st - int(getattr(self, '_base_starved', _st) or 0))
+        # v1.12.2 (#175): same baking for the banned-layer census --
+        # the first gate of the base board sets the reference under
+        # THIS pipeline's law, later gates key on the excess only.
+        if board == self.base and getattr(self, '_base_banned', None) is None:
+            self._base_banned = banned_layer_tracks
+        _banned_delta = max(0, banned_layer_tracks - int(getattr(self, '_base_banned', banned_layer_tracks) or 0))
         self.last_gate = {'violations_total': total, 'unconnected_total': unc,
                           'violations_excl_unconnected': total,  # v1.8.2 (#18): the KiCad header total ALREADY excludes unconnected items (proven on a live report); subtracting them again undercounted
                           'board_sha256': hashlib.sha256(open(board, 'rb').read()).hexdigest(),
@@ -802,7 +929,7 @@ class Pipeline:
                           'vias': summ.get('vias'), 'wirelength_mm': summ.get('wirelength_mm'),
                           'classes': classes, 'starved_thermal': _st, 'starved_thermal_delta': _st_delta, 'isolated_copper': int(classes.get('isolated_copper') or 0), 'pour_items': pour, 'split_signal_nets': split_signal_nets, 'split_pour_nets': split_pour_nets,
                           'signal_items': signal, 'split_nets': split_nets,
-                          'pour_nets': pour_nets, 'invariance': _inv, 'tracks_by_layer': _tbl, 'via_on_pad': summ.get('via_on_pad'), 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_exempt_own_plane': banned_exempt_own_plane, 'skeleton_intrusions': summ.get('skeleton_intrusions'), 'skeleton_intrusion_mm': summ.get('skeleton_intrusion_mm'), 'board': board}
+                          'pour_nets': pour_nets, 'invariance': _inv, 'tracks_by_layer': _tbl, 'via_on_pad': summ.get('via_on_pad'), 'track_length_by_layer': _tll, 'cost_weighted_wirelength_mm': _cost_weighted, 'banned_layer_tracks': banned_layer_tracks, 'banned_layer_tracks_delta': _banned_delta, 'banned_exempt_own_plane': banned_exempt_own_plane, 'skeleton_intrusions': summ.get('skeleton_intrusions'), 'skeleton_intrusion_mm': summ.get('skeleton_intrusion_mm'), 'board': board}
         self._record('gate', self.last_gate)
         self.log('Gate: %d unconnected (%d pour, %d signal), %d violations' % (unc, pour, len(signal), total))
         if self.last_gate.get('skeleton_intrusions'):
@@ -928,11 +1055,11 @@ class Pipeline:
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.current)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += ['--work', str(self.cfg.get('work', 20000000)), '--time', '1800']
+        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), 1800, open_only=False)  # v1.12.2 (#170/#171): --route-open-only does not apply to a --reroute call
         log_path = os.path.join(self.workdir, 'tm-rw-%d.log' % self._oseq)
         try:
             with open(log_path, 'w') as lf:
-                subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=1900)
+                subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(1900, self.cfg.get('work', 40000000)))  # v1.12.2 (#176)
         except Exception as e:
             self._record('reroute_window', {'net': net, 'status': 'error', 'detail': str(e)[:200]})
             return {'status': 'error', 'net': net}
@@ -1103,6 +1230,14 @@ class Pipeline:
         return r
 
     def tool_prune(self):
+        if self.cfg.get('route_open_only'):
+            # v1.12.2 (#174): prune's whole diet is unlocked,
+            # pad-less, zone-less copper -- under Finish-this-board
+            # that describes the user's unfinished stubs and fanouts,
+            # not router debris. The stage does not run in this mode.
+            self._record('prune', {'pruned': 0, 'status': 'skipped_route_open_only'})
+            self.log('prune: skipped -- route_open_only keeps all existing copper')
+            return {'pruned': 0, 'status': 'skipped_route_open_only'}
         # v1.8.2 (#16): prune is gated like every other step -- before
         # it accepted its output unconditionally, so a prune that
         # disconnected live copper was invisible to the run.
@@ -1130,6 +1265,15 @@ class Pipeline:
         # introduced delta was previously invisible in the ledger.
         pre = self.last_gate if (self.last_gate and self.last_gate.get('board') == self.current) else None
         self._worker('refill', '--board', self.current, '--out', final)
+        if getattr(self, '_locks_protected', False) and getattr(self, '_locks_file', None):
+            # v1.12.2 (#174): hand the delivered board its ORIGINAL
+            # lock flags back (items added during the run keep the
+            # state they were created with), then reset the census
+            # reference to the input for the caller's final gate.
+            self._worker('restore_locks', '--board', final, '--out', final, '--locks', self._locks_file)
+            self._locks_protected = False
+            self._input_census = None
+            self._record('lock_restore', {'locks_file': self._locks_file})
         pro = os.path.join(self.workdir, 'input.kicad_pro')
         if os.path.exists(pro):
             shutil.copy(pro, os.path.join(self.workdir, 'final.kicad_pro'))

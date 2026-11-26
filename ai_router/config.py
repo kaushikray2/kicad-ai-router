@@ -41,13 +41,15 @@ DEFAULTS = {
     'reroute_margin': 6.0,     # v1.9 (Phase 1.5): window margin (mm) around the stuck corridor / net bbox   # v1.9 (Phase 1.3): with pass_advice='priority', also reserve the stuck report's per-connection region_mm corridor for its net (advice 'regions', reserve_for)
     'attempt_select': False,  # v1.7: bridge-aware attempt selection in finish_leg -- DEFAULT OFF: measured 2026-11-22 head-to-head vs v1.6.0 on srambo (6 nets) + Manikin (4 nets): outcomes identical on all 10, 0 closures, probes cost +14-39s where they engage; enable for the attempts_probed diagnostics
     'ilp_repair_cap': 0,      # AUTO: joint ILP repair per run (v1.5, phase (c) Stage B) -- DEFAULT OFF: measured 2026-11-22, the ILP closes nothing yet (execution/re-bridge binds, not selection); enable per-run to experiment     # AUTO: max large-window hard-A* long_finish attempts per run (v1.4, phase (c) Stage B-0)     # AUTO: max pour-net finish_leg attempts per run (was hard-coded 2)
-    'work': 20000000,
+    'work': 40000000,  # v1.12.2 (#180): recalibrated -- 20M starved Nomad-class boards on the Phase 2 engine (Stage C: 1 unconnected, stopped_by=work; the 40M rerun restored 0/0/14, job 0d50e2a7)
     'no_tracks_on': 'In1.Cu',
     'layer_law_policy': 'auto',  # v1.8: B-first + escalate on >=4L In2-pour boards (dataset-v3 gap)
     'layer_cost': '',  # v1.11 (#73): graded layer pricing, engine syntax 'In1.Cu=10,In2.Cu=10' (1 = normal, max 1000; fractional factors to two decimal places since v1.11.5, #121); '' = off. A costed layer is NOT banned -- it leaves the effective no_tracks_on set, and an explicit spec disables layer_law_policy 'auto' escalation.
     'fix_violations': True,  # v1.12 (#155, P2.1b): after reroute_window, repair router-added copper faults on connected nets (base-diff, rip +-3 mm, exact-checked re-close, gate-verified).
     'pour_skeleton': True,  # v1.12 (#63): reserve each pour's pad spanning tree in the finisher grids; the gate counts foreign copper inside a reserved corridor as a router-added fault. Engine passes stay unconstrained -- the post-route gate is the catch.
     'strip_existing': True,
+    'deterministic': False,  # v1.12.2 (#171): Reproducible run -- engine --deterministic, bounded by the work budget alone (no --time is passed)
+    'route_open_only': False,  # v1.12.2 (#171): Finish this board -- engine --route-open-only; forces strip_existing off (the existing copper is the point)
     'max_tool_calls': 48,
     'request_timeout_s': 600,
     'use_backend': False,

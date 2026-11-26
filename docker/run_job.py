@@ -74,12 +74,14 @@ def build_cfg(rt, llm, tm_exe):
                 'api_key': llm.get('api_key', ''), 'tracemaker_path': tm_exe, 'kicad_cli': 'kicad-cli'})
     cfg['mode'] = rt.get('mode', cfg.get('mode', 'auto'))
     cfg['max_passes'] = _int_or(rt, 'max_passes', cfg.get('max_passes', 4))
-    cfg['work'] = _int_or(rt, 'work', cfg.get('work', 20000000))
+    cfg['work'] = _int_or(rt, 'work', cfg.get('work', 40000000))
     cfg['no_tracks_on'] = rt.get('no_tracks_on', cfg.get('no_tracks_on', 'In1.Cu'))
     cfg['strip_existing'] = bool(rt.get('strip_existing', cfg.get('strip_existing', True)))
     for _k, _d in (('finish_signal_cap', 8), ('finish_pour_cap', 4), ('long_finish_cap', 6), ('ilp_repair_cap', 0)):
         cfg[_k] = _int_or(rt, _k, cfg.get(_k, _d))
     cfg['attempt_select'] = bool(rt.get('attempt_select', cfg.get('attempt_select', False)))
+    cfg['deterministic'] = bool(rt.get('deterministic', cfg.get('deterministic', False)))  # v1.12.2 (#171)
+    cfg['route_open_only'] = bool(rt.get('route_open_only', cfg.get('route_open_only', False)))  # v1.12.2 (#171)
     cfg['layer_law_policy'] = rt.get('layer_law_policy', cfg.get('layer_law_policy', 'auto'))
     cfg['layer_cost'] = rt.get('layer_cost', cfg.get('layer_cost', ''))  # v1.11 (#73): explicit map, like layer_law_policy; the generic forwarding loop below would also carry it from DEFAULTS
     cfg['first_nets_policy'] = rt.get('first_nets_policy', cfg.get('first_nets_policy', 'auto'))
@@ -95,7 +97,8 @@ def build_cfg(rt, llm, tm_exe):
                 'mode', 'max_passes', 'work', 'no_tracks_on', 'strip_existing',
                 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap',
                 'ilp_repair_cap', 'attempt_select', 'layer_law_policy',
-                'layer_cost', 'first_nets_policy', 'engine_portfolio'}
+                'layer_cost', 'first_nets_policy', 'engine_portfolio',
+                'deterministic', 'route_open_only'}
     try:
         for _k in _cm.DEFAULTS:
             if _k not in _handled and _k in rt: cfg[_k] = rt[_k]
@@ -175,7 +178,7 @@ def main():
             _led = os.path.join(os.path.dirname(final), 'ledger.json')
             if os.path.isfile(_led): shutil.copy(_led, os.path.join(jd, 'ledger.json'))
         gate = res.get('gate') or {}
-        write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'tracks_by_layer')})
+        write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'tracks_by_layer')}, route=res.get('route'))
     except Exception as e:
         import traceback; traceback.print_exc()
         write_status(status='error', error=str(e)[:500])

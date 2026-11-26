@@ -130,6 +130,14 @@ def _cfg_int(cfg, key, default):
         return default
 
 
+def _route_info(pipe):
+    # v1.12.2 (#170): the last engine pass's structured contract,
+    # carried into the run result (the backend writes it into the
+    # job status; the dialog result keeps it too).
+    lr = getattr(pipe, 'last_route', None) or {}
+    return {k: lr.get(k) for k in ('exit_code', 'stopped_by', 'route_open_only', 'open_at_start')}
+
+
 def run_llm(cfg, pipe, log):
     client = LLMClient(cfg['endpoint'], cfg['model'], cfg.get('api_key', ''), cfg.get('request_timeout_s', 600))
     messages = [{'role': 'system', 'content': PLAYBOOK},
@@ -169,7 +177,7 @@ def run_llm(cfg, pipe, log):
         if finished: break
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): report the gate of the DELIVERED file
-    return {'final_board': final, 'gate': gate}
+    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
 
 def default_first_nets(pipe):
     summ = pipe.tool_board_summary()
@@ -209,6 +217,18 @@ def _final_key(g):
     # policy census, so starved ranks first of the two.
     _intr = int(g.get('skeleton_intrusions') or 0)
     return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), starved_delta(g), _intr, cost_tail(g))
+
+def _b_needs_escalation(gate):
+    # v1.12.2 (#179): B is kept only when it left NOTHING split.
+    # The original condition looked at split SIGNAL nets alone, so
+    # a B run whose only splits were POUR nets (the v1.12.2 Stage C
+    # sample-2 shape: split_pour [GND], split_signal []) never
+    # escalated -- yet a pour split is exactly what Variant A's
+    # different layer law can change. A is still kept only when
+    # the final key prefers it, so this can only add the A run,
+    # never force its result.
+    g = gate or {}
+    return bool((g.get('split_signal_nets') or []) or (g.get('split_pour_nets') or []))
 
 def run_auto(cfg, pipe, log):
     # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54
@@ -250,10 +270,10 @@ def run_auto(cfg, pipe, log):
             res_b = _run_auto_once(cfg, pipe, log)
             if orig is None: cfg.pop('no_tracks_on', None)
             else: cfg['no_tracks_on'] = orig
-            if not (res_b['gate'].get('split_signal_nets') or []):
-                log('Layer-law policy: B left no split signal nets -- keeping B')
+            if not _b_needs_escalation(res_b['gate']):
+                log('Layer-law policy: B left no split nets -- keeping B')
                 return res_b
-            log('Layer-law policy: B left split signal nets %s -- escalating to Variant A' % res_b['gate'].get('split_signal_nets'))
+            log('Layer-law policy: B left split nets (signal %s, pour %s) -- escalating to Variant A' % (res_b['gate'].get('split_signal_nets'), res_b['gate'].get('split_pour_nets')))
             import time as _time; _time.sleep(1.1)  # pipe2 needs a distinct workdir stamp
             cfg2 = dict(cfg); cfg2['no_tracks_on'] = 'In1.Cu'
             res_a = _run_auto_once(cfg2, Pipeline(cfg2, pipe.board_path, log), log)
@@ -448,4 +468,4 @@ def _run_auto_once(cfg, pipe, log):
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))
-    return {'final_board': final, 'gate': gate}
+    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
