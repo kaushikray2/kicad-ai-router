@@ -230,3 +230,19 @@ OVERRIDE_KEYS = ('mode', 'max_passes', 'no_tracks_on', 'layer_cost',
 
 def build_overrides(cfg):
     return {k: cfg[k] for k in OVERRIDE_KEYS if k in cfg}
+
+
+def capped_open_size(want_w, want_h, client_w, client_h):
+    """#169: the dialog's opening size -- the natural size capped at
+    the display's usable client area (95% x 93%), with a modest
+    floor so the window never opens unusably small (the floor
+    itself yields to a tiny display). The cap is a ceiling, not a
+    shrink-to-fit: on a large display the natural size passes
+    through unchanged. Returns (w, h, min_w, min_h)."""
+    max_w = max(320, int(client_w * 0.95))
+    max_h = max(320, int(client_h * 0.93))
+    min_w = min(560, max_w)
+    min_h = min(400, max_h)
+    w = max(min(int(want_w), max_w), min_w)
+    h = max(min(int(want_h), max_h), min_h)
+    return w, h, min_w, min_h

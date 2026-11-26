@@ -72,7 +72,7 @@ LAMP_COLOURS = {'IDLE': wx.Colour(0, 176, 80), 'RUNNING': wx.Colour(220, 0, 0),
 
 class RouterDialog(wx.Dialog):
     def __init__(self, parent, board_path):
-        super().__init__(parent, title='AI Router — LLM-orchestrated routing', size=(800, 740))
+        super().__init__(parent, title='AI Router — LLM-orchestrated routing', size=(800, 600), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.cfg = cfgmod.load()
         self.cancel_event = threading.Event()
         self.worker_thread = None
@@ -87,35 +87,53 @@ class RouterDialog(wx.Dialog):
         self.extra_bans = []
         self.extra_costs = {}
         self.cost_spec_error = None
-        panel = wx.Panel(self)
-        self.panel = panel
+        # Layout (#169): the status band, the action buttons and the
+        # log live on the outer panel, always visible. The settings
+        # stack (board / strategy / layers / run-on / advanced) lives
+        # in a scrolled panel -- at natural size it is ~950 px tall,
+        # more than a 768-line laptop display, so it must scroll
+        # instead of clipping its lower groups off-screen.
+        outer = wx.Panel(self)
         vbox = wx.BoxSizer(wx.VERTICAL)
-        vbox.Add(self._build_status_band(panel), 0, wx.EXPAND | wx.ALL, 8)
-        vbox.Add(self._build_board_group(panel, board_path or ''), 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
-        vbox.Add(self._build_strategy_group(panel), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        self._outer_sizer = vbox
+        vbox.Add(self._build_status_band(outer), 0, wx.EXPAND | wx.ALL, 8)
+        self.scroll = wx.ScrolledWindow(outer, style=wx.VSCROLL)
+        self.scroll.SetScrollRate(0, 10)
+        self.scroll.SetMinSize((-1, 160))
+        panel = wx.Panel(self.scroll)
+        self.panel = panel
+        settings_box = wx.BoxSizer(wx.VERTICAL)
+        settings_box.Add(self._build_board_group(panel, board_path or ''), 0, wx.EXPAND)
+        settings_box.Add(self._build_strategy_group(panel), 0, wx.EXPAND | wx.TOP, 8)
         self.notice_label = wx.StaticText(panel, label='')
         self.use_rec_btn = wx.Button(panel, label='Use recommended')
         self.use_rec_btn.Hide(); self.notice_label.Hide()
         nb = wx.BoxSizer(wx.HORIZONTAL)
         nb.Add(self.notice_label, 1, wx.ALIGN_CENTER_VERTICAL)
         nb.Add(self.use_rec_btn, 0, wx.LEFT, 8)
-        vbox.Add(nb, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
-        vbox.Add(self._build_layers_group(panel), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
-        vbox.Add(self._build_runon_group(panel), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
-        vbox.Add(self._build_advanced(panel), 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        settings_box.Add(nb, 0, wx.EXPAND | wx.TOP, 8)
+        settings_box.Add(self._build_layers_group(panel), 0, wx.EXPAND | wx.TOP, 8)
+        settings_box.Add(self._build_runon_group(panel), 0, wx.EXPAND | wx.TOP, 8)
+        settings_box.Add(self._build_advanced(panel), 0, wx.EXPAND | wx.TOP, 8)
+        panel.SetSizer(settings_box)
+        scroll_box = wx.BoxSizer(wx.VERTICAL)
+        scroll_box.Add(panel, 1, wx.EXPAND)
+        self.scroll.SetSizer(scroll_box)
+        vbox.Add(self.scroll, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
         btns = wx.BoxSizer(wx.HORIZONTAL)
-        self.run_btn = wx.Button(panel, label='Run routing pipeline')
-        self.cancel_btn = wx.Button(panel, label='Cancel')
+        self.run_btn = wx.Button(outer, label='Run routing pipeline')
+        self.cancel_btn = wx.Button(outer, label='Cancel')
         self.cancel_btn.Disable()
-        self.open_btn = wx.Button(panel, label='Open result board')
+        self.open_btn = wx.Button(outer, label='Open result board')
         self.open_btn.Disable()
         btns.Add(self.run_btn, 0, wx.RIGHT, 8)
         btns.Add(self.cancel_btn, 0, wx.RIGHT, 8)
         btns.Add(self.open_btn, 0)
         vbox.Add(btns, 0, wx.LEFT | wx.TOP, 10)
-        self.log_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.log_ctrl = wx.TextCtrl(outer, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.log_ctrl.SetMinSize((-1, 90))
         vbox.Add(self.log_ctrl, 1, wx.EXPAND | wx.ALL, 10)
-        panel.SetSizer(vbox)
+        outer.SetSizer(vbox)
         self.run_btn.Bind(wx.EVT_BUTTON, self.on_run)
         self.cancel_btn.Bind(wx.EVT_BUTTON, self.on_cancel)
         self.open_btn.Bind(wx.EVT_BUTTON, self.on_open)
@@ -123,6 +141,40 @@ class RouterDialog(wx.Dialog):
         self._load_board_facts(board_path or '')
         self._populate_all()
         self.set_status('IDLE', 'Ready — no run yet')
+        self._relayout()
+        self._fit_to_display()
+
+    # ---------------------------------------------------------- layout
+    def _relayout(self):
+        # Content changed size (layer rows rebuilt, Advanced pane
+        # expanded, ...): relayout the settings stack and re-fit the
+        # scroll region's virtual size so new content stays reachable.
+        sizer = self.panel.GetSizer()
+        if sizer is not None:
+            sizer.Layout()
+        if getattr(self, 'scroll', None) is not None:
+            self.scroll.FitInside()
+
+    def _fit_to_display(self):
+        # Open at the natural size, but never larger than the
+        # display's usable client area (#169: the old fixed opening
+        # overflowed 768-line displays and clipped the dialog's
+        # bottom with no way to reach it). The cap is a ceiling --
+        # on a large display the dialog opens at its natural size.
+        ca = wx.GetClientDisplayRect()
+        # Natural size: the outer sizer's min counts the scroll
+        # region at its floor height, so swap in the settings
+        # stack's real natural height (and width, plus room for
+        # the scroll region's padding and scrollbar).
+        fixed = self._outer_sizer.CalcMin()
+        content = self.panel.GetSizer().CalcMin()
+        want_w = max(fixed.x, content.x + 34)
+        want_h = fixed.y - self.scroll.GetMinSize().y + content.y
+        w, h, min_w, min_h = ui_model.capped_open_size(
+            want_w, want_h, ca.width, ca.height)
+        self.SetMinSize((min_w, min_h))
+        self.SetSize(wx.Size(w, h))
+        self.Centre(wx.BOTH)
 
     # ---------------------------------------------------------- status lamp
     def _build_status_band(self, panel):
@@ -265,7 +317,7 @@ class RouterDialog(wx.Dialog):
             self.rows_sizer.Add(row, 0, wx.EXPAND | wx.BOTTOM, 2)
             self.layer_rows[canon] = {'ban': ban, 'cost': cost, 'custom': None}
             self._config_controls += [ban, cost]
-        self.panel.GetSizer().Layout()
+        self._relayout()
 
     def _on_ban(self, canon):
         # Structural form of the pipeline's own rule: a layer is
@@ -461,7 +513,7 @@ class RouterDialog(wx.Dialog):
             self.notice_label.Show(); self.use_rec_btn.Show()
         else:
             self.notice_label.Hide(); self.use_rec_btn.Hide()
-        self.panel.GetSizer().Layout()
+        self._relayout()
 
     def _on_use_recommended(self, _evt):
         self.mode_auto_rb.SetValue(True)
@@ -470,7 +522,7 @@ class RouterDialog(wx.Dialog):
             self._on_law()
         self.extra_bans = []; self.extra_costs = {}
         self.notice_label.Hide(); self.use_rec_btn.Hide()
-        self.panel.GetSizer().Layout()
+        self._relayout()
         self._on_settings_changed()
 
     # ---------------------------------------------------------- Run-on group
@@ -598,7 +650,7 @@ class RouterDialog(wx.Dialog):
     # ---------------------------------------------------------- Advanced
     def _build_advanced(self, panel):
         pane = wx.CollapsiblePane(panel, label='Advanced — finisher caps, engine portfolio, LLM tool-call budget, layer-law policy')
-        pane.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, lambda e: self.panel.GetSizer().Layout())
+        pane.Bind(wx.EVT_COLLAPSIBLEPANE_CHANGED, lambda e: self._relayout())
         win = pane.GetPane()
         g = wx.FlexGridSizer(0, 4, 6, 8)
         def spin(val, lo, hi, tip):
@@ -786,7 +838,7 @@ class RouterDialog(wx.Dialog):
         self.open_btn.Enable()
         if final:
             self.open_btn.SetLabel('Open result board (%s)' % os.path.basename(final))
-            self.panel.GetSizer().Layout()
+            self._relayout()
 
     def on_cancel(self, _evt):
         self.cancel_event.set()

@@ -122,6 +122,23 @@ def test_overrides_carry_the_llm_budget():
     assert set(ov) == set(um.OVERRIDE_KEYS)
 
 
+def test_capped_open_size_never_exceeds_the_display():
+    # #169: a 768-line laptop -- the owner's case. Natural 966x1057
+    # must cap to 93% of the client height, width under 95%.
+    w, h, mw, mh = um.capped_open_size(966, 1057, 1366, 768)
+    assert (w, h) == (966, 714) and h <= 768
+    assert (mw, mh) == (560, 400)
+    # a large display: the natural size passes through untouched
+    w, h, mw, mh = um.capped_open_size(966, 1057, 2560, 1440)
+    assert (w, h) == (966, 1057)
+    # a tiny display: the cap wins over the floor
+    w, h, mw, mh = um.capped_open_size(966, 1057, 800, 600)
+    assert (w, h) == (760, 558) and (mw, mh) == (560, 400)
+    # a small natural size still opens at the usable floor
+    w, h, mw, mh = um.capped_open_size(300, 200, 1920, 1080)
+    assert (w, h) == (560, 400)
+
+
 if __name__ == '__main__':
     for _n, _f in sorted(list(globals().items())):
         if _n.startswith('test_'):
