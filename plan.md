@@ -287,6 +287,27 @@ pinned lamp/buttons and scroll reachability (screenshots in
 agent-runs/dialog-smoke/). Code only -- production backends
 stay on 1.10.2, no redeploy.
 
+### Off-plan -- Phase 2 engine adoption + audit fix pass (branch `phase2-adoption-v1.12.2`, 2026-11-25/26)
+
+#170/#171: the phase-2-end TraceMaker engine (598c4e5) is adopted
+on this branch -- engine pin + provenance in the backend health,
+engine_run contract plumbing, Reproducible run and Finish this
+board dialog actions. Stage C self-test stopped the release:
+Nomad finished 1 unconnected in both samples against the 0/0/14
+baseline. The external audit of the branch was verified claim by
+claim (agent-runs/audit-verify/REPORT-AUDIT-V1122-2026-11-26.md);
+every proven claim is fixed on the branch and closed: #173
+(pinned-build in-band upgrade path), #174 (route_open_only copper
+protection), #175 (banned-layer delta key), #176 (deterministic
+hygiene), #177 (portfolio route record), #178 (config page
+controls + provenance), #179 (pour-split escalation), #180 (work
+default recalibrated 20M -> 40M on the job-0d50e2a7 measurement).
+Branch suites: pytest 87, standalone 40/40. NOT pushed and NOT
+released: the owner's sequence is fixes first, then the engine
+A/B comparison reruns and Nomad routes through the fixed
+pipeline; the adoption ruling follows that evidence. #172
+(route-batch) stays open with its assessment.
+
 ## In progress
 
 - **P2.1b** is implemented on branch `p21b-fix-violations` and
