@@ -86,6 +86,8 @@ tool errors, read the error and adapt; do not retry it verbatim."""
 TOOLS = [
     {'type': 'function', 'function': {'name': 'board_summary', 'description': 'Board orientation: nets, pad counts, split nets (pads in >1 component), track/via counts.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'scorecard', 'description': 'Physics scorecard: worst decoupling caps by distance to nearest same-net pad.', 'parameters': {'type': 'object', 'properties': {}}}},
+    {'type': 'function', 'function': {'name': 'skeleton', 'description': 'Pour skeletons (#63): per-pour pad components, severed spanning-tree edges, and the reserved-corridor intrusion census of the current board.', 'parameters': {'type': 'object', 'properties': {}}}},
+    {'type': 'function', 'function': {'name': 'fix_violations', 'description': 'Repair router-added copper faults on connected nets (#155): diff DRC faults against the base board, rip the offending net within 3 mm, re-close exactly. Gate-verified; reverts if faults do not strictly drop.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'route', 'description': 'One TraceMaker pass. From the clean base unless from_current is true.', 'parameters': {'type': 'object', 'properties': {'first_nets': {'type': 'array', 'items': {'type': 'string'}}, 'work': {'type': 'integer'}, 'from_current': {'type': 'boolean'}}}}},
     {'type': 'function', 'function': {'name': 'gate', 'description': 'KiCad DRC gate with zone refill: unconnected decomposed into pour vs signal, violation classes, split nets.', 'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {'name': 'finish_leg', 'description': 'Scripted in-place finisher for one net: grid A*, single-net displacement if blocked, re-bridge of the displaced net.', 'parameters': {'type': 'object', 'properties': {'net': {'type': 'string'}}, 'required': ['net']}}},
@@ -100,6 +102,8 @@ TOOLS = [
 def _dispatch(pipe, name, args):
     if name == 'board_summary': return pipe.tool_board_summary()
     if name == 'scorecard': return pipe.tool_scorecard()
+    if name == 'skeleton': return pipe.tool_skeleton()
+    if name == 'fix_violations': return pipe.tool_fix_violations()
     if name == 'route': return pipe.tool_route(args.get('first_nets') or [], args.get('work'), bool(args.get('from_current')))
     if name == 'gate': return pipe.tool_gate()
     if name == 'finish_leg': return pipe.tool_finish_leg(args.get('net', ''))
@@ -198,10 +202,13 @@ def _final_key(g):
     # order is deliberate (#37) and unchanged; the tail only breaks
     # full ties, so between two passes equal on the gate the cheaper
     # one now wins instead of whichever came first.
-    # v1.11.5 (#116): the starved-thermal delta tier joins the final
-    # key too, after faults and before the cost tail (same subordination
-    # as in _accept_key).
-    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), starved_delta(g), cost_tail(g))
+    # Merged key (P2.1b merge, 2026-11-26): the starved-thermal
+    # delta tier (#116) and the skeleton-intrusion tier (#63/#158)
+    # both price after real faults and before the cost tail --
+    # starved is a connectivity-quality signal, intrusions a
+    # policy census, so starved ranks first of the two.
+    _intr = int(g.get('skeleton_intrusions') or 0)
+    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), starved_delta(g), _intr, cost_tail(g))
 
 def run_auto(cfg, pipe, log):
     # v1.8 layer-law policy (dataset-v3: SBS 333 vs VBS 289 on 54
@@ -430,6 +437,14 @@ def _run_auto_once(cfg, pipe, log):
                 try: pipe.tool_reroute_window(net, margin=float(cfg.get('reroute_margin', 6.0)))
                 except Exception as e: log('reroute_window %s failed: %s' % (net, e))
             gate = pipe.tool_gate()
+    # v1.12 (#155, P2.1b): repair router-added copper faults on
+    # already-connected nets -- after reroute_window, so it also
+    # cleans up the trades that stage accepted. Gate-verified
+    # inside the tool; a no-op when the base diff finds nothing.
+    if cfg.get('fix_violations', True):
+        try: pipe.tool_fix_violations()
+        except Exception as e: log('fix_violations failed: %s' % e)
+        gate = pipe.tool_gate()
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))

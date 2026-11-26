@@ -45,6 +45,8 @@ DEFAULTS = {
     'no_tracks_on': 'In1.Cu',
     'layer_law_policy': 'auto',  # v1.8: B-first + escalate on >=4L In2-pour boards (dataset-v3 gap)
     'layer_cost': '',  # v1.11 (#73): graded layer pricing, engine syntax 'In1.Cu=10,In2.Cu=10' (1 = normal, max 1000; fractional factors to two decimal places since v1.11.5, #121); '' = off. A costed layer is NOT banned -- it leaves the effective no_tracks_on set, and an explicit spec disables layer_law_policy 'auto' escalation.
+    'fix_violations': True,  # v1.12 (#155, P2.1b): after reroute_window, repair router-added copper faults on connected nets (base-diff, rip +-3 mm, exact-checked re-close, gate-verified).
+    'pour_skeleton': True,  # v1.12 (#63): reserve each pour's pad spanning tree in the finisher grids; the gate counts foreign copper inside a reserved corridor as a router-added fault. Engine passes stay unconstrained -- the post-route gate is the catch.
     'strip_existing': True,
     'max_tool_calls': 48,
     'request_timeout_s': 600,

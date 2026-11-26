@@ -308,11 +308,16 @@ phase2-adoption-v1.12.2.
 
 ## In progress
 
-- **P2.1b** is implemented on branch `p21b-fix-violations` and
-  awaits the owner's review (status in its section below); the R4
-  layer-cost sweep (#121) is running on the scratch backend.
-  Phase 2E (below) follows P2.7a; the fair engine A/B sits inside
-  it, per the owner's sequencing.
+- **P2.1b** was implemented on branch `p21b-fix-violations`
+  (step 0, #63, closed; tool_fix_violations, #155) and merged to
+  main on 2026-11-26 under the owner's ruling, with the external
+  review's proven findings fixed on the branch as #158-#163.
+  What remains is measurement, not code: the dataset-v3 bench
+  rerun for step 0's improvement half and a re-route-trade sample
+  for the tool, both riding the Phase 2E harness (#62) once it
+  exists. The design tickets #164/#165/#166 stay open for the
+  owner's ruling. Phase 2E (below) follows P2.7a; the fair engine
+  A/B sits inside it, per the owner's sequencing.
 
 ## Remaining (in sequence)
 
@@ -342,6 +347,36 @@ diff below, which pour faults count as router-added. Exit for step 0:
 split-only failures drop measurably on the bench, no completion or
 copper regression.
 
+**Step 0 landed** (2026-11-25, branch `p21b-fix-violations`, commits
+c627667..b9abb40 + this entry; NOT merged — owner reviews the lane's
+landings first). Ruled shape (owner, 2026-11-25: "ok lets implement
+63 then first"): grid-stamped reservation — each pour's pad spanning
+tree (pads confined to the zone outline; inner layers take every pad
+of the net as a via connection point; landed vias join as nodes;
+width = zone min-thickness + 0.1 mm slack; corridor = width/2 +
+clearance) is stamped last into the finisher grids as a hard
+foreign-net keepout; engine passes stay unconstrained and the gate is
+the catch: the summary carries an intrusion census (foreign copper
+inside a reserved corridor) that `fault_count` counts as router-added
+faults. The reservation yields first, per the ticket: a finisher
+command that fails outright with it on re-runs once without it
+(`skeleton_yield` recorded), and the accept/final keys price
+intrusions after connectivity and real faults — the first cut shipped
+without the yield and regressed esp32_S2 2 → 5 unconnected on
+identical engine lineage (finish/heal `no_path`); with the yield the
+board is at exact baseline parity. Local A/B exit measurement
+(pristine 4cc04bb vs branch, identical runner/config, 3 self-tests +
+3 pour-bearing train boards): no completion or copper regression on
+any board — hbridge/mapone/imu identical, STM32-RF parity (+1.5%
+wire), Nomad parity ({1, GND, 14}; +0.7% wire), esp32_S2 parity. The
+exit's improvement half (split-only failures dropping on the
+population) is NOT demonstrated locally — the local sample holds two
+split-failure boards and both tie; it needs the dataset-v3 bench
+rerun (backend time), which is the remaining step-0 measurement.
+Config `pour_skeleton` (default on; off = pre-feature command lines).
+Tests: tests/test_pour_skeleton.py (29 checks, fails on base);
+branch suite 19/19 standalone + 40/40 pytest.
+
 Repair copper faults on already-connected nets: diff the board's DRC
 violations against the base board's; for each router-added fault, rip
 only the offending net's copper within ±3 mm and re-close with the
@@ -353,6 +388,66 @@ bought −4 unconnected) and dense-board engine output. Also runs after
 can be cleaned locally. Exit: copper strictly down, unconnected
 unchanged, on the sample. Kill: rip-and-reclose re-opens more than it
 cleans.
+
+**Tool stage landed** (2026-11-25, branch `p21b-fix-violations`,
+commits 4475c73 + 806cb25 + this entry; #155 stays open for the
+owner's review). Pipeline `tool_fix_violations` diffs item-level
+DRC faults (JSON report) against the base board's — a fault is
+router-added when no base fault of the same type sits within
+0.5 mm — and works them in class order (shorts, crossings,
+clearance, hole rules, then the rest; cap 32). The worker rips
+only the offending net's copper within ±3 mm (plus vias the rip
+strands) and re-closes with the exact-checked bridge planner;
+per-fault rollback restores the ripped geometry when a re-close
+cannot hold the net's component count. Gate-verified: the output
+stands only if `fault_count` strictly drops, unconnected and
+splits do not grow, and the faults-first accept key does not
+regress — a fix that trades faults is reverted. Runs in AUTO
+after `reroute_window`; config `fix_violations` (default on).
+Local exit measurement (the step-0 A/B finals, tool driven on the
+delivered boards against their own stripped bases): Nomad — the
+one router-added fault (a dangling GND stub) fixed, copper
+14 → 13, unconnected 1 → 1, splits unchanged; esp32_S2 —
+`no_router_faults` (all 20 copper items pre-exist on its base;
+board untouched). Kill criterion not triggered. The re-route-
+trade sample (bitaxe-class) was not reproduced locally — no
+local run produced an accepted trade to clean; the planted
+fixtures cover the trade's mechanics (clearance graze and
+same-layer crossing ripped and re-closed exactly, connectivity
+preserved). Tests: tests/test_fix_violations.py (22 checks,
+fails on base); branch suite green (see the report).
+
+**Review-fix round** (2026-11-25, same branch; an external review
+of this lane's landing was verified claim-by-claim against the
+branch -- every proven defect fixed in its own chain, design-level
+items ticketed for the owner's ruling; the verdict table is on
+#155). Six fixes: #158 -- `fault_count` no longer counts
+`skeleton_intrusions` (the step-0 text above describes the
+original shape): the census is priced as its own term in the
+accept/final keys and in the reroute connectivity key, which also
+repairs the portfolio skip guard (it compared a winner's
+intrusions against the stripped base's structural zero), the
+tool's acceptance test (a fix removing a real fault while adding
+an intrusion was rejected; the unconnected term is None-is-worst
+now), and the reroute key (a real short could trade against
+intrusions). #159 -- the tool never rips user-locked copper, and
+rollback restores arcs as arcs (midpoint preserved) instead of
+straight chords. #160 -- the base diff matches faults greedily
+1-to-1 within 0.5 mm (the documented rule), replacing the grid
+snap that misattributed in both directions. #161 -- the skeleton
+cache validates on track/via counts and the board filename, so
+via edits no longer serve stale skeletons. #162 -- each fault in
+a `cmd_fix_violations` batch is judged against freshly refilled
+zone fill. #163 -- the two P2.1b test files follow the #122
+importorskip convention. Ticketed for ruling, not improvised:
+#164 (isolated plane vias counted as intrusions, and plane
+corridors stamping the global via block -- census semantics),
+#165 (per-fault gating instead of one 32-fault batch gate), #166
+(the yield fires only on total failure, so partial runs never
+retry skeleton-blocked faults unreserved). The merge checklist
+(conflicts in config/orchestrator/pipeline/worker against main
+v1.11.6, plus the parity list) is recorded on #155; the branch is
+still NOT merged.
 
 ### P2.7a — Performance quick wins (4–8 h)
 Remove verified double-gating (the base is gated twice per run; the
