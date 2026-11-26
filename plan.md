@@ -341,6 +341,32 @@ unguarded module-level pcbnew import -- no code change. The
 branch-area fixes (#173-#180) are recorded on
 phase2-adoption-v1.12.2.
 
+### Off-plan -- external audit round 5 fix pass (2026-11-26)
+
+Six claims from a fifth external audit (of v1.12.2, main
+fe310fe) were verified claim by claim and all six proved REAL;
+each is fixed on main in its own commit chain with a
+fail-before/pass-after regression test, no version bump:
+#184 (deterministic tm_relax portfolio leg refused on 100% of
+Reproducible runs -- --relax budgets by rounds, not --work;
+route_flags now translates the budget into --round-work/
+--rounds under deterministic; proven against the shipped
+phase-2-end binary and in a full local pipeline run: leg route
+JSON deterministic: true, 89/89, no refusal), #185 (LLM mode
+could run with deterministic=True -- #176 disabled the dialog
+checkbox without clearing it; the dialog now clears it,
+build_cfg forces it off under llm, the config page guards it),
+#186 (pour-skeleton cache validated on counts only -- a
+count-preserving via move inside fix_violations served a stale
+skeleton; the shape now carries zone-net via positions), #187
+(fix_violations rollback lost via type/span/free and rounded
+geometry to 1 um; keys are now exact-nm with full via
+identity), #188 (_route_variant logged rc 3 as an error and
+dropped the engine's refusal message; it now mirrors
+tool_route), #189 (Pipeline.__init__ mutated the caller's cfg
+dict; it copies). One semantics note: the #174 test's assert
+on the caller's dict was updated to the #189 contract.
+
 ### P2.1b -- tool_fix_violations -- done, merged to main 2026-11-26
 
 **Status (2026-11-26): MERGED to main** (merge 6ba630c) under
