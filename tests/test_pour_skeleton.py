@@ -84,6 +84,21 @@ w.add_via(b3, b3.GetNetsByName(), 'GND', 30, 25, 0.6, 0.3)
 sk2 = w.pour_skeletons(b3)
 check('skeleton cache: a landed via becomes a node (#161)', sk2 is not sk1 and any(abs(px - 30) < 0.01 and abs(py - 25) < 0.01 for s in sk2 for (px, py) in s['pads']))
 
+# --- skeleton cache: count-preserving via move (#186) -----------------
+# The #161 shape counted vias, but the tree consumes their POSITIONS:
+# a fix_violations repair can rip a zone-net via and re-close with
+# another at new coordinates -- every count unchanged, the skeleton
+# different. The cache must not serve the pre-move tree.
+b4 = mk_board()
+w.add_via(b4, b4.GetNetsByName(), 'GND', 30, 25, 0.6, 0.3)
+sk1 = w.pour_skeletons(b4)
+check('cache setup: landed via is a node', any(abs(px - 30) < 0.01 and abs(py - 25) < 0.01 for s in sk1 for (px, py) in s['pads']))
+for t in list(b4.GetTracks()):
+    if t.Type() == pcbnew.PCB_VIA_T: b4.RemoveNative(t)
+w.add_via(b4, b4.GetNetsByName(), 'GND', 34, 25, 0.6, 0.3)
+sk2 = w.pour_skeletons(b4)
+check('skeleton cache: count-preserving via move is fresh (#186)', sk2 is not sk1 and any(abs(px - 34) < 0.01 and abs(py - 25) < 0.01 for s in sk2 for (px, py) in s['pads']) and not any(abs(px - 30) < 0.01 and abs(py - 25) < 0.01 for s in sk2 for (px, py) in s['pads']))
+
 # --- Grid stamp -------------------------------------------------------
 w.SKELETON_ON = True
 g = w.Grid(mk_board(), (5, 55, 5, 45))

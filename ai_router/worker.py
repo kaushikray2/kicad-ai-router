@@ -627,18 +627,23 @@ def pour_skeletons(b):
     # so a via edit (stitch, fix_violations) changes the skeleton
     # even though zones and footprints never move; and a bare
     # id(b) can be recycled by a later board in the same process,
-    # so the board's filename rides the key.
+    # so the board's filename rides the key. #186: counts alone
+    # were not enough -- a fix_violations repair can rip a via and
+    # re-close with another at new coordinates, every count
+    # unchanged and the tree different, so the shape carries the
+    # zone-net via positions (netcode, x, y in exact nm) themselves.
     key = (id(b), b.GetFileName())
-    n_tracks = len(list(b.GetTracks()))
-    n_vias = sum(1 for t in b.GetTracks() if t.Type() == pcbnew.PCB_VIA_T)
-    hit = _SKEL_CACHE.get(key)
-    if hit is not None and hit[0] == len(list(b.Zones())) and hit[1] == len(list(b.GetFootprints())) and hit[2] == n_tracks and hit[3] == n_vias:
-        return hit[4]
-    stack = copper_stack(b); lidx = {lay: k for k, lay in enumerate(stack)}
-    clr = board_clearance(b)
     zone_nets = set()
     for z in b.Zones():
         if not z.GetIsRuleArea() and z.GetNetname(): zone_nets.add(z.GetNetname())
+    via_sig = tuple(sorted((t.GetNetCode(), t.GetPosition().x, t.GetPosition().y)
+                           for t in b.GetTracks()
+                           if t.Type() == pcbnew.PCB_VIA_T and t.GetNetname() in zone_nets))
+    hit = _SKEL_CACHE.get(key)
+    if hit is not None and hit[0] == len(list(b.Zones())) and hit[1] == len(list(b.GetFootprints())) and hit[2] == via_sig:
+        return hit[3]
+    stack = copper_stack(b); lidx = {lay: k for k, lay in enumerate(stack)}
+    clr = board_clearance(b)
     net_pads = {}
     net_vias = {}
     if zone_nets:
@@ -695,7 +700,7 @@ def pour_skeletons(b):
             out.append({'net': net, 'layer': lay, 'layer_idx': lidx[lay],
                         'width': round(width, 3), 'corridor': round(width / 2 + clr, 3),
                         'pads': pts, 'edges': _mst_edges(pts)})
-    _SKEL_CACHE[key] = (len(list(b.Zones())), len(list(b.GetFootprints())), n_tracks, n_vias, out)
+    _SKEL_CACHE[key] = (len(list(b.Zones())), len(list(b.GetFootprints())), via_sig, out)
     return out
 
 def _seg_in_band(x1, y1, x2, y2, sx1, sy1, sx2, sy2, band):
