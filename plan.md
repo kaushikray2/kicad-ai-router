@@ -287,6 +287,25 @@ pinned lamp/buttons and scroll reachability (screenshots in
 agent-runs/dialog-smoke/). Code only -- production backends
 stay on 1.10.2, no redeploy.
 
+### Off-plan -- v1.12.2 audit fix pass, main-area fixes (2026-11-26)
+
+The main-area proven claims of the adoption-branch audit
+(agent-runs/audit-verify/REPORT-AUDIT-V1122-2026-11-26.md),
+fixed and closed on main, no version bump (the #110-#113
+residuals precedent): #181 (zone census skips rule areas --
+the fixture measures 19 total / 13 rule areas / 6 pours on a
+zone-by-zone enumeration; the audit report 11/8 arithmetic was
+corrected on the issue), #182 (sidecar resolution single-
+sourced in naming.sidecar_paths), #183 (dialog stale-settings
+notice basis-consistent and refreshed on change). The audit
+pytest exit-1 mechanism (an unguarded module-level pcbnew
+import in tests/test_pcm_entrypoint.py) was DISPROVEN by AST
+scan: the line-45 import is inside the harness string literal,
+the loader half already guards, and no test file has an
+unguarded module-level pcbnew import -- no code change. The
+branch-area fixes (#173-#180) are recorded on
+phase2-adoption-v1.12.2.
+
 ## In progress
 
 - **P2.1b** is implemented on branch `p21b-fix-violations` and
