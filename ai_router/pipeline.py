@@ -501,6 +501,18 @@ class Pipeline:
             stuck['by_reason'] = sj.get('unrouted_by_reason') or []
         except Exception:
             pass
+        # (#193): a failed pass (rc / route-JSON exit_code 1-2)
+        # must not move ANY run state -- the old order assigned
+        # last_stuck / last_stuck_board / current / last_route
+        # first and raised afterwards, so the failed board became
+        # current, overwrote a prior valid last_route, and could
+        # be delivered by the orchestrator's best-is-None path.
+        _err = engine_run.engine_error(p.returncode, rj)
+        if _err:
+            _tail = ''
+            try: _tail = text.strip().splitlines()[-1][:200]
+            except Exception: pass
+            raise PipelineError('%s: %s (see %s)' % (_err, _tail, log_path))
         self.last_stuck = stuck
         self.last_stuck_board = outp  # v1.10.1 (#48): the stuck report describes the route OUTPUT; v1.9.6 tagged the pre-route board, so valid corridors were discarded and a restored earlier board could receive a newer pass's corridor
         if stuck['unrouted']:
@@ -518,13 +530,8 @@ class Pipeline:
         # v1.12.2 (#170): the structured contract -- the exit code,
         # stopped_by and why_open come from the route JSON / process
         # return code, not from log inference. rc 1/2 aborts the
-        # pass with the engine's message; rc 3 is a normal partial.
-        _err = engine_run.engine_error(p.returncode, rj)
-        if _err:
-            _tail = ''
-            try: _tail = text.strip().splitlines()[-1][:200]
-            except Exception: pass
-            raise PipelineError('%s: %s (see %s)' % (_err, _tail, log_path))
+        # pass with the engine's message (checked above, #193);
+        # rc 3 is a normal partial.
         self.last_route['exit_code'] = rj.get('exit_code', p.returncode)
         self.last_route['stopped_by'] = rj.get('stopped_by')
         self.last_route['route_open_only'] = bool(rj.get('route_open_only'))
@@ -682,6 +689,19 @@ class Pipeline:
         _rj = {}
         try: _rj = json.load(open(outp + '.route.json'))
         except Exception: pass
+        # (#193): engine_error was consulted only when the output
+        # file was MISSING -- a variant that failed (rc / JSON
+        # exit_code 1-2) after writing a board returned 'routed'
+        # and competed in the portfolio on its gate numbers, and a
+        # win seeded last_route with the failed record. A failed
+        # variant is a failed leg: raise, and tool_portfolio's
+        # per-leg catch logs it with the engine's message.
+        _err = engine_run.engine_error(_rc, _rj)
+        if _err:
+            _tail = ''
+            try: _tail = open(log_path).read().strip().splitlines()[-1][:200]
+            except Exception: pass
+            raise PipelineError('%s: %s (see %s)' % (_err, _tail, log_path))
         _rec = {'engine': eng, 'board': outp,
                 'exit_code': _rj.get('exit_code', _rc),
                 'stopped_by': _rj.get('stopped_by'),
@@ -1077,15 +1097,30 @@ class Pipeline:
         if _cost: cmdline += ['--layer-cost', _cost]
         cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), 1800, open_only=False)  # v1.12.2 (#170/#171): --route-open-only does not apply to a --reroute call
         log_path = os.path.join(self.workdir, 'tm-rw-%d.log' % self._oseq)
+        _rc = None
         try:
             with open(log_path, 'w') as lf:
-                subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(1900, self.cfg.get('work', 40000000)))  # v1.12.2 (#176)
+                _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(1900, self.cfg.get('work', 40000000))).returncode  # v1.12.2 (#176)
         except Exception as e:
             self._record('reroute_window', {'net': net, 'status': 'error', 'detail': str(e)[:200]})
             return {'status': 'error', 'net': net}
         if not os.path.exists(outp):
             self._record('reroute_window', {'net': net, 'status': 'no_output'})
             return {'status': 'no_output', 'net': net}
+        # (#193): the return code used to be discarded and the
+        # route JSON never read -- a failed --reroute that wrote a
+        # board proceeded to gate + accept on gate numbers alone.
+        _rwj = {}
+        try: _rwj = json.load(open(os.path.join(self.workdir, 'route-rw-%d.json' % self._oseq)))
+        except Exception: pass
+        _err = engine_run.engine_error(_rc, _rwj)
+        if _err:
+            _tail = ''
+            try: _tail = open(log_path).read().strip().splitlines()[-1][:200]
+            except Exception: pass
+            self.log('reroute_window %s: %s: %s (see %s)' % (net, _err, _tail, log_path))
+            self._record('reroute_window', {'net': net, 'status': 'engine_failed', 'detail': _err})
+            return {'status': 'engine_failed', 'net': net}
         try: self._worker('refill', '--board', outp, '--out', outp)
         except Exception: pass
         if res.get('locks_file'):  # v1.10.1 (#50): restore the original lock flags before this board can be delivered
