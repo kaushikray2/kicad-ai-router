@@ -347,3 +347,17 @@ def test_summarize_length_group_reads_post_meander_state():
     assert '\u03943.50 mm' in out['detail'] and 'outside tolerance' in out['detail'], out['detail']
     plain = rows['Length group — PLAIN']
     assert plain['verdict'] == 'FAIL' and '\u03944.00 mm' in plain['detail'], plain
+
+
+def test_summarize_quiet_row_states_materialise():
+    # #219: the Report row states the keepout's materialise state
+    # instead of leaving it to the sidecar / Screen 1 chip.
+    rep = {'quiet_nets': {'results': [
+        {'name': 'Q1', 'profile': 'crystal', 'isolation_mm': 1.5,
+         'intrusions': [], 'pass': True,
+         'materialise': True, 'enforced_in_domains': True},
+        {'name': 'Q2', 'profile': 'crystal', 'isolation_mm': 1.5,
+         'intrusions': [], 'pass': True}]}}
+    rows = {r['marking']: r for r in mm.summarize_report(rep)['rows']}
+    assert 'keepout materialised' in rows['Quiet \u2014 Q1']['detail'], rows
+    assert 'report-only (not materialised)' in rows['Quiet \u2014 Q2']['detail'], rows

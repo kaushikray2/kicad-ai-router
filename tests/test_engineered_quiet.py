@@ -161,3 +161,19 @@ def test_quiet_materialise_enforces_via_domains_not_zones(tmp_path):
     q = [e for e in spec if e['kind'] == 'quiet'][0]
     assert set(q['nets']) == {'XTAL1', 'XTAL2', 'GND', 'GUARD'}
     assert q['rects'] and all(len(r['layers']) == 4 for r in q['rects'])
+
+
+def test_quiet_report_echoes_materialise_state(tmp_path):
+    # #219: evaluate echoes the entry's materialise flag and the
+    # pipeline stamps whether the keepout actually landed in
+    # domains.json enforcement.
+    board = str(tmp_path / 'q.kicad_pcb')
+    _build(board, materialise=True)
+    r = _pipe(board).tool_quiet_nets()['results'][0]
+    assert r['materialise'] is True, r
+    assert r['enforced_in_domains'] is True, r
+    board2 = str(tmp_path / 'q2.kicad_pcb')
+    _build(board2, materialise=False)
+    r2 = _pipe(board2).tool_quiet_nets()['results'][0]
+    assert r2['materialise'] is False, r2
+    assert r2['enforced_in_domains'] is False, r2
