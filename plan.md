@@ -153,6 +153,25 @@ behind the loader. Suites after round 9: pytest 385 passed
 (379 + 6 new), standalone 102 passed with the
 not-standalone-runnable set unchanged at the same 13 files.
 
+**Round 10 audit fixes (branch `engineered-nets-gui`, 2026-11-26):**
+two follow-ups to the round 9 fixes, both verified real and
+fixed in their own chains -- #228 the #221 selection restore
+matched a net row by entry alone, so for a multi-net entry
+(differential pair / length group / HV domain) a search edit
+restored the highlight to the FIRST of the entry's net rows,
+not the row that was clicked; the selection now records the
+net it was shown from (net-row click, entry_pick switch, and
+carried across Apply) and _row_matches prefers it. #229 the
+#220 Locate fix admitted tracks by endpoint (chord) distance
+<= 4 mm, which for a PCB_ARC_T admits a near-closed arc whose
+endpoints sit <4 mm apart while FocusOnItem centres on the
+arc, far from the marked point; arcs are now excluded from
+the direct-focus candidates and fall through to pads / the
+transient shape at the exact point. The five main-side round
+10 items (#223-#227, in the #62 bench harness and the #186
+skeleton cache signature) are recorded on main's plan.md.
+Suites after round 10: see the fix pass report.
+
 ## Done
 
 ### Step 0 — v1.9.6 hotfix (3–5 h) — shipped 2026-11-23
