@@ -299,3 +299,19 @@ def test_hv_pairwise_rows_carry_required_spacing():
                                          'nets': ['HV_A']})
     row2 = [r for r in live if r['a'] == 'HVPRI' and 'Rest' in r['b']][0]
     assert row2['delta_v'] == 100.0 and abs(row2['required_mm'] - 0.60) < 1e-9, row2
+
+
+def test_impedance_gap_must_be_positive():
+    # #216: the model layer mirrors the validator -- a coplanar
+    # gap of 0 or negative is refused at entry construction.
+    for gv in (0, -0.2):
+        try:
+            mm.impedance_entry({'net': 'RF_IN', 'z0': 50,
+                                'model': 'coplanar', 'gap_mm': gv})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('gap_mm %r accepted' % (gv,))
+    e = mm.impedance_entry({'net': 'RF_IN', 'z0': 50,
+                            'model': 'coplanar', 'gap_mm': 0.2})
+    assert e['gap_mm'] == 0.2

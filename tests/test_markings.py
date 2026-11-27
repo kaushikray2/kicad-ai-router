@@ -129,3 +129,28 @@ def test_power_section_validation():
         except markings.MarkingsError:
             continue
         raise AssertionError('accepted bad power entry: %r' % (bad,))
+
+
+def test_impedance_model_and_gap_validation():
+    # #216: the schema validator itself checks model/gap_mm --
+    # a hand-written sidecar must fail at validate(), not at
+    # pipeline run time (the editor half was #201).
+    bad = [
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'model': 'waveguide'}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'model': 'coplanar', 'gap_mm': 0}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'model': 'coplanar', 'gap_mm': -0.2}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'gap_mm': 'wide'}]},
+        {'impedance': [{'net': 'X', 'z0_ohm': 50, 'model': 'coplanar'}]},
+    ]
+    for data in bad:
+        try:
+            markings.validate(data)
+            raise AssertionError('expected MarkingsError for %r' % (data,))
+        except markings.MarkingsError:
+            pass
+    ok = markings.validate({'impedance': [
+        {'net': 'A', 'z0_ohm': 50, 'model': 'coplanar', 'gap_mm': 0.15},
+        {'net': 'B', 'z0_ohm': 50, 'model': 'microstrip'},
+        {'net': 'C', 'z0_ohm': 50, 'model': 'stripline', 'gap_mm': 0.3}]})
+    assert ok['impedance'][0]['gap_mm'] == 0.15
+    assert ok['impedance'][2]['gap_mm'] == 0.3
