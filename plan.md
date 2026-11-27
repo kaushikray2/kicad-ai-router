@@ -701,6 +701,35 @@ merge redone. No version bump; production backends stay
 on 1.10.2.
 
 
+### Off-plan -- external audit round 8 fix pass, main (2026-11-26)
+
+One residual claim against the round 7 #211 fix, verified
+real by code trace and a driven handler sequence:
+
+- #213 (MEDIUM): editing the Backend URL after picking a
+  custom server detached _sel_entry while the token field
+  still held that server's token; the next custom pick's
+  stash branch then recorded the custom token as
+  _preset_token, and a later preset pick injected it (and
+  collect_cfg persisted it). The dialog now tracks whether
+  the token field's content is custom-derived
+  (_tok_from_custom: set when a custom pick applies,
+  cleared when a preset pick applies, on remove, and when
+  the user types a token while no custom entry is
+  represented) and stashes only genuinely non-custom
+  content; the add-server stash carries the same guard.
+  Regression tests drive the full pick -> edit -> pick ->
+  preset sequence (fail-before / pass-after); the xvfb
+  add-server smoke stays green.
+
+The round also filed #214 (the engineered-nets LLM-mode
+half-state, record-only -- the remedy is the #60+#141
+ruling) and the branch-side fixes #215-#219 on the
+engineered-nets-gui branch, and appended a second
+discrepancy to #200 (record-only; still parked). No
+version bump; production backends stay on 1.10.2.
+
+
 ### Off-plan -- v1.12.5 release: P2.7a gate-verdict cache + Add server picker fixes (2026-11-26)
 
 Patch release carrying P2.7a (#190, landed on main in
