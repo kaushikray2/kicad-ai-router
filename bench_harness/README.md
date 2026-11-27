@@ -60,7 +60,7 @@ runs/<run-id>/        manifest.json  (stack, config fingerprint,
 python3 -m bench_harness inventory [--fixtures-dir DIR]
 python3 -m bench_harness prep    --slugs a,b
 python3 -m bench_harness run     --stack current --slugs a,b \
-                                 [--cfg-json '{"tm_work": 40000000}'] \
+                                 [--cfg-json '{"work": 40000000}'] \
                                  [--run-id ID]
 python3 -m bench_harness ramp    --baseline RUN_DIR --split train
 python3 -m bench_harness compare RUN_A RUN_B [--gate] [--out table.md]

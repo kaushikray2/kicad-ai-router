@@ -188,10 +188,10 @@ def test_compare_table_and_gate():
 
 
 def test_manifest_identity():
-    cfg1 = {'tracemaker_path': '/nonexistent/tm', 'tm_work': 40000000}
-    cfg2 = {'tm_work': 40000000, 'tracemaker_path': '/nonexistent/tm'}
+    cfg1 = {'tracemaker_path': '/nonexistent/tm', 'work': 40000000}
+    cfg2 = {'work': 40000000, 'tracemaker_path': '/nonexistent/tm'}
     assert runner.cfg_fingerprint(cfg1) == runner.cfg_fingerprint(cfg2)
-    cfg3 = dict(cfg1, tm_work=20000000)
+    cfg3 = dict(cfg1, work=20000000)
     assert runner.cfg_fingerprint(cfg3) != runner.cfg_fingerprint(cfg1)
     with tempfile.NamedTemporaryFile(delete=False) as f:
         f.write(b'engine-bytes')

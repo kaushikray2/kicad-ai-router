@@ -76,6 +76,16 @@ def worker_op(op, board, out=None):
     if out:
         cmd += ['--out', out]
     cmd += ['--result', result]
+    # #225(d): never let a result file from an EARLIER invocation
+    # be read as this one's -- the path is deterministic, unlike
+    # Pipeline._worker's per-call sequence-numbered path.  The
+    # return code is deliberately NOT gated on: worker.py writes
+    # its result before exiting and pcbnew can segfault at
+    # interpreter exit after successful work (Pipeline._worker
+    # ignores rc for the same reason); after the unlink, a result
+    # file that exists can only be this invocation's.
+    if os.path.exists(result):
+        os.unlink(result)
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     if os.path.exists(result):
         with open(result) as f:
@@ -93,10 +103,10 @@ def strip_board(src, out):
     return worker_op('strip', src, out)
 
 
-def kicad_drc(board, out_json):
+def kicad_drc(board, out_json, kicad_cli='kicad-cli'):
     """KiCad DRC with zone refill: the yardstick invocation the
     pipeline's own gate uses (Pipeline._drc_measure)."""
-    p = subprocess.run(['kicad-cli', 'pcb', 'drc', '--refill-zones',
+    p = subprocess.run([kicad_cli, 'pcb', 'drc', '--refill-zones',
                         '--format', 'json', '--output', out_json, board],
                        capture_output=True, text=True, timeout=900)
     if p.returncode != 0 or not os.path.exists(out_json):
@@ -107,10 +117,40 @@ def kicad_drc(board, out_json):
         return json.load(f)
 
 
+# cfg keys the pipeline/orchestrator read via cfg.get() with their
+# own defaults, beyond config.DEFAULTS (grepped 2026-11-26).
+KNOWN_EXTRA_CFG_KEYS = frozenset({'first_nets_policy'})
+
+
 def effective_cfg(overrides=None):
     from ai_router import config as cfgmod
     cfg = dict(cfgmod.DEFAULTS)
-    cfg.update(overrides or {})
+    overrides = overrides or {}
+    # #225(b): machine tool paths are machine state, not stack
+    # state -- take them from the persisted config when the stack
+    # does not override them.  DEFAULTS' tracemaker_path is a
+    # stale 2026-11-12 path; a bench that silently used it would
+    # measure a different engine than the manifest claims.
+    loaded = cfgmod.load()
+    for k in ('tracemaker_path', 'kicad_cli'):
+        if k not in overrides:
+            cfg[k] = loaded.get(k, cfg[k])
+    # #225(a): an override key the pipeline does not define (the
+    # old README example 'tm_work' for the real key 'work') used
+    # to change the cfg fingerprint while changing nothing else
+    # -- a bench that silently ran the default budget.  Warn
+    # loudly instead.
+    unknown = sorted(k for k in overrides
+                     if k not in cfgmod.DEFAULTS
+                     and k not in KNOWN_EXTRA_CFG_KEYS)
+    if unknown:
+        sys.stderr.write(
+            'bench_harness: WARNING: unknown cfg override key(s) '
+            '%s -- not pipeline config keys; they change the cfg '
+            'fingerprint but nothing else.  Config keys live in '
+            'ai_router.config.DEFAULTS (the work budget key is '
+            "'work').\n" % ', '.join(unknown))
+    cfg.update(overrides)
     cfg['mode'] = 'auto'
     return cfg
 
@@ -176,7 +216,8 @@ def run_board(board, prep_meta, stack_name, cfg, fingerprint, run_dir, log,
 
     t0 = time.time()
     try:
-        in_doc = kicad_drc(staged, os.path.join(bdir, 'input.drc.json'))
+        in_doc = kicad_drc(staged, os.path.join(bdir, 'input.drc.json'),
+                           kicad_cli=cfg.get('kicad_cli') or 'kicad-cli')
         rec['input_drc'] = drc_mod.parse_drc_report(in_doc)
         from ai_router import orchestrator
         from ai_router.pipeline import Pipeline
@@ -217,7 +258,9 @@ def run_board(board, prep_meta, stack_name, cfg, fingerprint, run_dir, log,
         if os.path.exists(dru):
             shutil.copy2(dru, os.path.join(bdir, 'result.kicad_dru'))
         out_doc = kicad_drc(out_copy,
-                            os.path.join(bdir, 'output.drc.json'))
+                            os.path.join(bdir, 'output.drc.json'),
+                            kicad_cli=cfg.get('kicad_cli')
+                            or 'kicad-cli')
         rec['output_drc'] = drc_mod.parse_drc_report(out_doc)
         rec['caused'] = drc_mod.caused_deltas(
             rec['output_drc']['kinds'], rec['input_drc']['kinds'])
