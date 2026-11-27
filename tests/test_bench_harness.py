@@ -211,6 +211,68 @@ def test_manifest_identity():
         os.unlink(path)
 
 
+
+def test_nothing_worse_fails_crashed_candidate():
+    # #223: a crashed candidate record (status=error, no gate, no
+    # caused) must FAIL the nothing-worse gate, not pass it by
+    # treating every missing value as zero / skipping the checks.
+    base = {'b1': _rec('b1', 2, 0, 1, {'clearance': 1})}
+    crashed = {'slug': 'b1', 'status': 'error',
+               'error': 'RuntimeError: boom'}
+    gate = cmp_mod.nothing_worse({'b1': crashed}, base)
+    assert not gate['ok'], gate
+    # status=done but nothing measured (no final board): also a fail
+    hollow = {'slug': 'b1', 'status': 'done'}
+    gate = cmp_mod.nothing_worse({'b1': hollow}, base)
+    assert not gate['ok'], gate
+    # a gate triple with a None component is missing data, not a pass
+    nones = _rec('b1', None, 0, 1, {'clearance': 1})
+    gate = cmp_mod.nothing_worse({'b1': nones}, base)
+    assert not gate['ok'], gate
+    # a crashed baseline cannot certify a candidate either
+    gate = cmp_mod.nothing_worse(base, {'b1': crashed})
+    assert not gate['ok'], gate
+
+
+def test_compare_aggregates_surface_missing_and_error():
+    # #223: aggregates must count missing/error records explicitly
+    # instead of summing only over records with a gate (which made
+    # crashed boards lower the totals).
+    a = {'manifest': {'stack': {'name': 'A'}}, 'records': {
+        'b1': _rec('b1', 2, 0, 1, {'clearance': 1})}}
+    b = {'manifest': {'stack': {'name': 'B'}}, 'records': {
+        'b1': {'slug': 'b1', 'status': 'error',
+               'error': 'RuntimeError: boom'}}}
+    comp = cmp_mod.compare_runs(a, b)
+    agg = comp['aggregate']
+    assert agg['error_b'] == 1 and agg['missing_b'] == 1, agg
+    assert agg['error_a'] == 0 and agg['missing_a'] == 0, agg
+    md = cmp_mod.render_compare_markdown(comp)
+    assert 'error' in md.lower() and 'missing' in md.lower(), md
+
+
+def test_crashed_candidate_fails_compare_gate_from_disk():
+    # #223: the exact calls cmd_compare --gate makes, over run
+    # directories on disk: baseline complete, candidate crashed.
+    with tempfile.TemporaryDirectory() as tmp:
+        def _write_run(name, rec):
+            rd = os.path.join(tmp, name)
+            bd = os.path.join(rd, 'boards', rec['slug'])
+            os.makedirs(bd)
+            with open(os.path.join(rd, 'manifest.json'), 'w') as f:
+                json.dump({'stack': {'name': name}}, f)
+            with open(os.path.join(bd, 'record.json'), 'w') as f:
+                json.dump(rec, f)
+            return rd
+        good = _rec('b1', 2, 0, 1, {'clearance': 1})
+        crashed = {'slug': 'b1', 'status': 'error',
+                   'error': 'RuntimeError: boom'}
+        ra = cmp_mod.load_run(_write_run('base', good))
+        rb = cmp_mod.load_run(_write_run('cand', crashed))
+        gate = cmp_mod.nothing_worse(rb['records'], ra['records'])
+        assert not gate['ok'], gate
+
+
 if __name__ == '__main__':
     fns = [(n, f) for n, f in sorted(globals().items())
            if n.startswith('test_') and callable(f)]
