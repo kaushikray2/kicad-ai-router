@@ -240,6 +240,7 @@ def evaluate(entry, board):
     if any(not c['ground_return'] for c in caps):
         ok = False
     return {'name': cfg['name'], 'profile': cfg['profile'],
+            'materialise': bool(entry.get('materialise', False)),
             'isolation_mm': iso,
             'isolation_source': cfg['isolation_source'],
             'allow_nets': cfg['allow_nets'], 'own_nets': own_nets,

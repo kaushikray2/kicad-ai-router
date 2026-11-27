@@ -1971,7 +1971,16 @@ class Pipeline:
         # #147 (B22): supply nets from the power section, so a
         # component entry's quiet set is its signal nets only.
         ctx['power_nets'] = [e['net'] for e in mk.power if e.get('net')]
-        results = [_quietnets.evaluate(e, ctx) for e in mk.quiet]
+        results = []
+        for e in mk.quiet:
+            r = _quietnets.evaluate(e, ctx)
+            # #219: intent is not enforcement -- stamp whether this
+            # entry's keepout actually landed in the domains.json
+            # the finisher legs read (written by _domain_setup at
+            # construction when materialise entries produced rects).
+            r['enforced_in_domains'] = bool(
+                getattr(self, '_domains_path', None) and e.get('materialise'))
+            results.append(r)
         rep = {'limitation': 'geometric isolation only -- no coupling '
                              'simulation, no dB claims',
                'results': results}

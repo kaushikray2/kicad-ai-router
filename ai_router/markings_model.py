@@ -951,9 +951,8 @@ def summarize_report(rep, audit=None):
         qn = rep.get('quiet_nets') or {}
         for r in qn.get('results') or []:
             # quietnets.evaluate result shape: name / profile /
-            # isolation_mm / intrusions / pass (it does not echo
-            # the entry's materialise flag -- that state lives in
-            # the sidecar and the Screen 1 chip, not here).
+            # isolation_mm / intrusions / pass / materialise, plus
+            # the pipeline's enforced_in_domains stamp (#219).
             label = r.get('name') or r.get('net') or r.get('ref') or 'quiet net'
             intr = r.get('intrusions') or []
             verdict = 'FAIL' if (intr or r.get('pass') is False) else 'CONDITIONAL'
@@ -963,6 +962,10 @@ def summarize_report(rep, audit=None):
                 parts.append('%d intrusions inside the isolation' % len(intr))
             else:
                 parts.append('no intrusions')
+            if r.get('enforced_in_domains') or r.get('materialise'):
+                parts.append('keepout materialised')
+            else:
+                parts.append('report-only (not materialised)')
             at = None
             for it in intr:
                 if isinstance(it, dict) and it.get('at'):
