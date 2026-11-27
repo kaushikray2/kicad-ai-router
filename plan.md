@@ -108,6 +108,30 @@ standalone 100 passed with the same not-standalone-runnable
 set as before plus the three new xvfb smokes (each verified
 under xvfb-run). #200 remains parked, per the owner.
 
+**Round 8 audit fixes (branch `engineered-nets-gui`, 2026-11-26):**
+five branch claims from the round-8 review, all verified real
+and fixed in their own chains -- #215 the editor view/filter
+toggles now honour the pending-edits guard (Cancel restores
+the radios instead of stranding the active form); #216 the
+impedance schema validator checks model/gap_mm (bogus model,
+gap 0/negative, coplanar-without-gap all rejected at
+validate(), mirrored in the editor's entry construction);
+#217 length-group report rows read the post-meander member
+state ('after'), so a successfully tuned group reports PASS
+with its after delta and a '(tuned +X mm)' annotation instead
+of FAIL with the pre-meander delta; #218 Report -> Locate no
+longer calls the nonexistent pcbnew.FocusOnLocation -- it
+focuses the nearest board item (or a transient shape) via
+FocusOnItem + Refresh and claims the pan only on success;
+#219 quiet report rows state the keepout's materialise state
+(evaluate echoes materialise; the pipeline stamps
+enforced_in_domains). Record-only: a second #200
+discrepancy (conductor column used for pad rects, one-sided
+coating) appended to #200, still parked; #214 filed for the
+LLM-mode engineered-nets half-state (remedy = the #60+#141
+ruling, not implemented). Suites after round 8: pytest 379
+passed (367 + 12 new), standalone 102 passed (100 at round 7 + the 2 new stub-driven files, both headless-runnable); the not-standalone-runnable set is unchanged at 13 files, verified identical at 35219c3.
+
 ## Done
 
 ### Step 0 — v1.9.6 hotfix (3–5 h) — shipped 2026-11-23
