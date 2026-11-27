@@ -53,12 +53,14 @@ def _board(path, healed):
 
     def zone(layer, net, x0, x1):
         z = pcbnew.ZONE(b)
-        z.SetLayer(layer)
+        ls = pcbnew.LSET(); ls.AddLayer(layer)
+        z.SetLayerSet(ls)
         z.SetNetCode(nets[net].GetNetCode())
-        o = z.Outline()
-        o.NewOutline()
+        out = z.Outline()
+        out.NewOutline()
+        chain = out.Outline(0)
         for (x, y) in ((x0, 2), (x1, 2), (x1, 58), (x0, 58)):
-            o.Append(x, y, -1, -1, True)
+            chain.Append(_nm(x), _nm(y))
         z.SetLocalClearance(_nm(0.2))
         b.Add(z)
 
@@ -93,8 +95,12 @@ def _board(path, healed):
            layer=pcbnew.B_Cu)
     smd_fp('J2', [('1', 'RF_AUX', 50, 40)], layer=pcbnew.B_Cu)
     for p in u1.Pads():
-        if p.GetNumber() == '2' and not healed:
-            p.SetLocalZoneConnection(pcbnew.ZONE_CONNECTION_THERMAL)
+        if p.GetNumber() == '2':
+            # explicit either way: a zone's default pad connection
+            # is thermal relief, so "healed" must say FULL out loud
+            p.SetLocalZoneConnection(
+                pcbnew.ZONE_CONNECTION_FULL if healed
+                else pcbnew.ZONE_CONNECTION_THERMAL)
 
     def seg(layer, net, x1, y1, x2, y2):
         t = pcbnew.PCB_TRACK(b)
@@ -113,23 +119,32 @@ def _board(path, healed):
 
 
 def _report(tmp, healed):
+    # compose exactly as engineered_report does (pipeline spec ->
+    # rfgeom worker facts -> rfcheck.evaluate_net per marked net)
+    from ai_router import rfcheck
     from ai_router import pipeline as _pmod
     board = os.path.join(tmp, 'pour.kicad_pcb')
     _board(board, healed)
     mk = {'version': 1, 'impedance': [
-        {'net': 'RF_TX', 'z0_ohm': 50.0, 'components': ['U1', 'J1']},
-        {'net': 'RF_AUX', 'z0_ohm': 50.0, 'components': ['U2', 'J2']}]}
+        {'net': 'RF_TX', 'z0_ohm': 50.0, 'freq_hz': 2.44e9, 'components': ['U1', 'J1']},
+        {'net': 'RF_AUX', 'z0_ohm': 50.0, 'freq_hz': 2.44e9, 'components': ['U2', 'J2']}]}
     with open(os.path.join(tmp, 'pour.ai-router-markings.json'), 'w') as fh:
         json.dump(mk, fh)
-    pipe = _pmod.Pipeline(board, {})
-    return pipe.engineered_report(board)
-
-
-def _gates(rep, net):
-    for row in rep['nets']:
-        if row['net'] == net:
-            return {f['rule']: f['status'] for f in row['findings']}
-    raise AssertionError('no report row for ' + net)
+    pipe = _pmod.Pipeline({'strip_existing': False,
+                           'tracemaker_path': '/bin/true'},
+                          board, lambda m: None)
+    spec, ctxs = pipe._eng_rf_spec(board)
+    sp = os.path.join(tmp, 'rfgeom_spec.json')
+    with open(sp, 'w') as fh:
+        json.dump(spec, fh)
+    facts = pipe._worker('rfgeom', '--board', board, '--spec', sp)
+    out = {}
+    for e in mk['impedance']:
+        net = e['net']
+        out[net] = {f['rule']: f['severity']
+                    for f in rfcheck.evaluate_net(e, ctxs[net],
+                                                  facts[net])}
+    return out
 
 
 def test_pour_gates_fail_then_heal(tmp_path):
@@ -138,14 +153,15 @@ def test_pour_gates_fail_then_heal(tmp_path):
     os.makedirs(os.path.join(tmp, 'h'), exist_ok=True)
     broken = _report(os.path.join(tmp, 'b'), False)
     healed = _report(os.path.join(tmp, 'h'), True)
-    tx_b, tx_h = _gates(broken, 'RF_TX'), _gates(healed, 'RF_TX')
-    aux_b, aux_h = _gates(broken, 'RF_AUX'), _gates(healed, 'RF_AUX')
+    tx_b, tx_h = broken['RF_TX'], healed['RF_TX']
+    aux_b, aux_h = broken['RF_AUX'], healed['RF_AUX']
     assert tx_b.get('GATE-1') == 'fail', tx_b      # 2.5 mm In1 void
     assert tx_b.get('GATE-8') == 'fail', tx_b      # thermal GND pad
     assert aux_b.get('GATE-12') == 'fail', aux_b   # +3V3 reference
-    assert tx_h.get('GATE-1') == 'pass', tx_h
-    assert tx_h.get('GATE-8') == 'pass', tx_h
-    assert aux_h.get('GATE-12') == 'pass', aux_h
+    # these gates report only on failure: healed = no finding
+    assert tx_h.get('GATE-1') in (None, 'pass'), tx_h
+    assert tx_h.get('GATE-8') in (None, 'pass'), tx_h
+    assert aux_h.get('GATE-12') in (None, 'pass'), aux_h
 
 
 if __name__ == '__main__':
