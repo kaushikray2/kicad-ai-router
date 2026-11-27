@@ -965,6 +965,28 @@ definition comes from it.
    Independent of the A/B; placed last in the block, and
    pull-forwardable if a lost long run hurts first.
 
+**Diagnostic hardening (read-only; zero effect on routing
+decisions — protects benchmark integrity on #62 / #45 / #46 /
+#52):**
+
+- **`.kicad_dru` preflight integrity check.** Before copying
+  `.kicad_dru` into the workdir, scan for unbalanced
+  S-expressions, stray top-level tokens, or `;` comments
+  (KiCad's `.kicad_dru` parser only accepts `#` comments and
+  silently drops rules on `;`), logging a warning and a
+  ledger entry.
+- **Pour-reachability / thermal-gap starvation
+  diagnostics.** Extend #116 (`starved_thermal`) to verify
+  every pad inside a zone outline connects to an island
+  containing >= 2 pads of that net, reporting exact REF.PAD,
+  effective `thermal_gap_mm` and `zone_clearance_mm` when a
+  wide clearance (e.g. `AI-HV-*`) pinches off a pad.
+- **Pin-named & copper-anchored split reports.** Resolve
+  open ratsnest endpoints in `cmd_gate` (capped list) to
+  `REF.PAD (PIN_NAME)` or "copper of REF.PAD at (x, y)",
+  flagging same-XY cross-layer overlaps without a via;
+  surface in LLM tool payloads and ReportDialog.
+
 ### P2.7b — C/C++ A* kernel (6–10 h)
 A small ctypes 3D grid A* so the P2.2 / P2.3 searches are not
 interpreter-capped (expected 50–100× on the inner loop). Identical
@@ -1365,9 +1387,124 @@ engines produce no copper inside the generated keepout and
 unmarked nets do not regress. Stated limitation: geometric
 isolation only — no coupling simulation, no dB claims.
 
+#### Pre-merge closure before the Final Exam (#131)
+
+Owner's closure list for the engineered-nets block, recorded
+2026-11-27. These items land on the branch before the merge
+gate above is evaluated; the exam rules themselves are
+unchanged.
+
+- **P2.8 (#67) — `tol_pct` wiring + pour-gate fixture.**
+  Validate `0 < tol_pct <= 50` in
+  `markings._check_impedance_entry` (default 10% per
+  IPC-2141A / IPC-6012E) and surface it under ImpedanceForm
+  Advanced. GATE-10 stays the geometric neck-down/step
+  check; add per-layer stackup Z0(w_routed, layer) grading
+  against `z0_ohm * (1 ± tol_pct/100)`. Live-exercise the
+  pour-dependent rfcheck gates — GATE-1 (corridor
+  severance), GATE-8 (thermal-relief RF ground pads),
+  GATE-12 (power-vs-GND reference pour) — on a 4-layer
+  GND-pour acceptance fixture.
+- **P2.9 (#68) — UNKNOWN loads, `root.pin`, rail naming +
+  chained-chain fixture.** Saveable UNKNOWN loads
+  (`"unknown": true` in `loads.<ref>`, mutually exclusive
+  with `peak_a`/`kb`) route into powertree's existing
+  `unknown_loads` → `complete=False` resistances-only path.
+  Enforce `root.pin` in `powerplan._plan_rail` (emit
+  `declared_root_pin_not_on_net` when unmatched). Include
+  `'marked_nets'` in `tool_power()`'s early returns
+  (`netlist_unavailable`, `tree_failed`, `needs_stackup`) so
+  recorded-only rows name their rails instead of
+  "Power — rail". Live-exercise a chained buck regulator +
+  conduit (`r_mohm`/`rating_a`) + protective fuse floor
+  (#136) on a 3-rail board.
+- **P2.10 (#69) — meander upgrade + live fixture.** Upgrade
+  `worker.cmd_meander` before live acceptance: edge-to-edge
+  leg spacing `S >= max(3W, 3H_diel, 2*clr + 0.2)` against
+  ladder self-coupling speedup; lobe height cap <= 3.0 mm;
+  45° chamfers replacing 90° corners with closed-form
+  `(2 - sqrt(2))c` length compensation; probe unlocked
+  straight segments in descending length order on both sides
+  (+1/-1) against same-layer obstacles and Edge.Cuts. Then a
+  live meander acceptance fixture proving skew tunes into
+  tolerance at 0 added DRC faults, reporting PASS with the
+  post-meander delta (the #217 reporting fix is already
+  shipped; the fixture is the remaining work).
+- **P2.11 (#70) — #200 unparked + IEC creepage follow-up.**
+  #200 is unparked by the owner's 2026-11-27 ruling: fix it
+  with one shared `_hv_worst_pair_req_mm(...,
+  terminations=True)` helper across `_eng_patch_pro_hv` and
+  `_domain_setup`, including the implicit 0 V rest-of-board
+  domain (uncoated, max_alt) and symmetric
+  `max(req(d), req(other))`. Follow-up (pre-exam or right
+  after merge): IEC 62368-1 / IEC 60664-1 creepage — Tier 1:
+  optional `rms_v`, `insulation`
+  (functional|basic|supplementary|reinforced),
+  `material_group` (I|II|IIIa|IIIb), and explicit
+  `min_clearance_mm` / `min_creepage_mm` overrides feeding
+  `hvdomains.creepage_path` + netclasses; Tier 2: a built-in
+  estimator cross-verified from >= 3 independent published
+  vendor engineering references (TI, ADI, Würth) with linear
+  interpolation and 2x reinforced scaling, plus a warning
+  when an HV footprint's own pin pitch < required_mm.
+  Kill/pivot: stay at Tier 1 if any PD/CTI cell is ambiguous
+  across sources.
+- **Block-wide (#60 + #141 / #214) — Option (b) adopted.**
+  By the owner's 2026-11-27 ruling, markings in LLM mode
+  take Option (b): expose `pipe._eng_first_nets` in
+  `tool_board_summary()` / Pass 1 `tool_route`, and run the
+  exact deterministic `run_auto` epilogue
+  (`tool_fix_violations` → `_run_engineered_stages` →
+  `finalize` → `tool_gate` → `engineered_report` +
+  `placement_audit`) after the LLM tool loop exits. Option
+  (c) (TraceMaker session interface) stays deferred to
+  Phase 3.
+- **Already closed on the branch (recorded, not open
+  work):** `_pan_board_to` restricted to vias / segments
+  <= 4 mm (#220, fa4e2f6); `_list_sel` preserved across
+  `MarkingsEditorDialog.refresh_list()` (#221, 4628966),
+  including the net-view source-net follow-up (#228,
+  f0f0eb1).
+
 ### P2.5 — Push-and-shove spike (15–20 h, hard stop, gated behind P2.3)
 Runs only if P2.3 leaves a shove-shaped residual class behind. Default
 verdict NO unless it produces a closure nothing else has.
+
+### Parallel / Pre-Exam Polish
+
+Non-blocking items that may land alongside the sequence
+above (before the final exam unless noted); none of them
+changes an exam rule or an exit/kill gate.
+
+- **Two-tier target-keyed LLM RepeatGuard**
+  (`orchestrator.py` `run_llm`). Clean-room guard refusing
+  identical failing/no-progress calls after
+  `REPEAT_LIMIT = 2` AND consecutive failures on the same
+  target entity (`net`/`nets`/`ref`/`refs`, ignoring
+  parameter dithering) after `STREAK_LIMIT = 4`, returning an
+  explicit strategy-switch hint and resetting on progress.
+  Exit: unit tests verify stuck loops terminate in <= 6
+  calls.
+- **Deterministic Suggest-candidates detector**
+  (`markings_model.py` / `markings_dialog.py`). Read-only,
+  confidence-scored modal checklist (never auto-writes
+  sidecars, never invents currents/HV voltages) detecting
+  `_P`/`_N` diff pairs with >= 2 shared endpoints, powertree
+  rails + `"unknown": true` loads, crystal + pF load caps,
+  RF antenna-to-radio 2-hop chains + candidate pi refs,
+  indexed bus length groups (>= 3 bits), and conservative
+  HV name/isolation candidates (blank `peak_v`). Exit:
+  >= 90% precision on 5 real boards.
+- **Two-phase silkscreen- & inner-pour-safe GND stitching**
+  (`worker.cmd_stitch`; optional pre-exam or Phase 3).
+  Exclude foreign inner-layer pours and `F.SilkS`/`B.SilkS`
+  text/outlines on grid stitching passes, followed by
+  targeted island-saving vias (0.1 mm pour ring). Note:
+  affects AUTO deliverables — only land ahead of #131 if
+  validated on dev boards first; otherwise defer to Phase 3.
+- **GUI & lifecycle polish.** Modeless ReportDialog on
+  Windows for live canvas panning (consider); resolve #212
+  (`run_auto` orphaned caller `Pipeline`).
 
 ### Final exam
 The 49 held-out dataset-v3 boards have never been run. At the end of
@@ -1440,6 +1577,33 @@ earlier would mean sizing workstreams against numbers nobody has.
   source, and no router release fixes it. (Since moved into the
   engineered-nets branch lane — Phase 3 inherits its results
   rather than planning it fresh.)
+
+- **Automated component placement** (`autoplacement_plan.md`,
+  Stages 0–4 / Phases A0–A5). Share a
+  KiCad-version-independent JSON geometry IR (`place_ir.py`)
+  with the KiCad 11 IPC migration above, so board extraction
+  is written once for both routing and placement. Core
+  architecture: 3-layer collision model (`F.CrtYd`,
+  `B.CrtYd`, `through_board` PTH/NPTH drills + heights),
+  `PCB_GROUP` rigid macros, KiCad 9/10 native placement rule
+  areas (sheet/class/group), `held_by_locked_copper`
+  auto-anchoring, 10 nF–1 µF decoupling & structural
+  switcher hot-loop rules (`SW`/`BST`/`FB`,
+  smallest-cap-first, outward `away` inductor orientation,
+  4 mm `FB` keep-away), net-selective IC escape moats +
+  1.2 mm fine-pitch pad exit corridors, weighted
+  schematic-graph passive clustering (`isHelper` guard),
+  Python reference SA → C++17 `libair_place` (with optional
+  >= 400-part electrostatic seed), and Stage 4 closed-loop
+  TraceMaker routing-probe selection. Benchmarked on a
+  leak-free 3-arm re-placement protocol (Human vs.
+  Unclustered HPWL vs. Full Auto-Placer).
+- **Optional multimodal `look` tool** for vision-capable LLM
+  endpoints. Read-only cropped SVG/PNG region view paired
+  strictly with exact numeric open-connection/DRC lists
+  (<= 4 images/run; the LLM never emits geometry). Kill
+  criterion: skip unless benchmarks show measurable triage
+  reduction over pin-named text reports.
 
 ### How it gets written
 
