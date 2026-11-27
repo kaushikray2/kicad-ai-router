@@ -853,6 +853,52 @@ definition comes from it.
    contract. Discharges #52's reproducibility defect in the portfolio
    stage. Before the A/B, so the A/B measures engines rather than a
    timing race.
+   **LANDED 2026-11-27** on branch `phase2e-portfolio-racing`
+   (off bdfbfa1): `Pipeline.tool_portfolio` now races the
+   configured candidate list in heats of `portfolio_workers`
+   (new config key, default 4). Selection is a pure function of
+   the finished leg outcomes: the first COMPLETE candidate
+   (gate unconnected 0 and fault count 0) in the configured
+   order wins; if none completes, the pre-#66 best-`_accept_key`
+   fallback decides, ties to the earlier candidate -- a
+   deliberate semantics change per this item's text (previously
+   the best key always won). Parallel legs run as child
+   processes (`ai_router/race_leg.py`) on the shared stripped
+   base, each in its own workdir; a decided heat
+   group-terminates still-running legs (recorded `out-raced`),
+   later heats never start (`not-run`); workers=1 runs the same
+   scheduler in-process with early stop. No wall-clock input
+   to selection -- the only timer is a per-leg watchdog
+   backstop -- so deterministic mode stays deterministic. The
+   ledger's portfolio record gains a per-leg `termination`
+   (finished/failed/no_board/out-raced/not-run) and a `racing`
+   block. Suites: pytest 170 (158 + 12 new), standalone 59/59.
+   Proof on the #62 harness (train + fixtures; every per-board
+   record verified status=done with a real gate triple -- the
+   pre-#223 compare in this branch treated as advisory only):
+   single-set baseline vs raced trio vs sequential trio. The
+   stage winner key was never worse than the baseline's only
+   leg on any board; STM32-RF's winner improved (tm_global
+   (40,4) over tm_relax (42,6); delivered 0/0/37 vs 0/0/38, at
+   the cost of +1 caused starved_thermal, identical in the
+   sequential trio -- a property of the candidate set, not of
+   racing); fixtures reproduced (hbridge/mapone/blind-vias
+   0/0/0, juniper 1/0/33, Nomad 0/0/13 in two of three runs).
+   Leg keys reproduced component-for-component across
+   sequential and raced runs on STM32-RF and juniper, and
+   Nomad's raced winner board was byte-identical (sha256) to
+   the sequential run's; Nomad's legs and post-portfolio passes
+   vary run-to-run in default mode (the #52 property -- one
+   raced run delivered 1/0/13 from a byte-identical seed),
+   which is item 3's A/B to measure, not racing's to fix.
+   Delivered walls showed no racing win: the raced stack ran
+   under load 10-25 from parallel work on the box while the
+   baseline ran near-idle; the leg-second arithmetic (stage
+   wall = slowest leg, not the sum of legs) is the mechanism
+   evidence, and the fair wall verdict belongs to item 3.
+   The default `engine_portfolio` is unchanged ('tm_relax');
+   whether it grows now that racing makes the trio cheap is
+   the owner's call.
 3. **Fair engine A/B — #45, #46, #52.** The queued slot, now here:
    KRT design-invariance gate + `--keep-placement`; Freerouting
    `-mt 1` and power-type DSN layer export; tm_relax bounded by
