@@ -273,6 +273,56 @@ def test_crashed_candidate_fails_compare_gate_from_disk():
         assert not gate['ok'], gate
 
 
+
+def test_resume_guard_checks_engine_and_git_identity():
+    # #224: a complete record may only be skipped when the engine
+    # binary and the plugin code that produced it are the ones the
+    # resumed run would use.  The old guard matched prepared input
+    # + cfg fingerprint only, and the fingerprint hashes the
+    # tracemaker_path STRING -- an in-place engine rebuild or a
+    # plugin update silently mixed stale records into the run.
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = os.path.join(tmp, 'run')
+        board = inv.Board('b__0', 'train', 'A', '/x.kicad_pcb')
+        prep_file = os.path.join(tmp, 'prepared.kicad_pcb')
+        with open(prep_file, 'w') as f:
+            f.write('(kicad_pcb fake)')
+        meta = {'prepared_sha256': 'pp', 'source_pcb_sha256': 'ss',
+                'prepared_path': prep_file, 'cache_hit': True}
+        bdir = os.path.join(run_dir, 'boards', 'b__0')
+        os.makedirs(bdir)
+        old = {'slug': 'b__0', 'status': 'done',
+               'prepared_sha256': 'pp', 'cfg_fingerprint': 'fp',
+               'engine_sha256': 'ENG-A', 'git_sha': 'GIT-A',
+               'gate': {'unconnected': 0, 'splits': 0, 'copper': 0}}
+        def _restore():
+            with open(os.path.join(bdir, 'record.json'), 'w') as f:
+                json.dump(old, f)
+        _restore()
+        logs = []
+        got = runner.run_board(board, meta, 'stack', {}, 'fp',
+                               run_dir, logs.append,
+                               engine_sha256='ENG-A', git_sha='GIT-A')
+        assert got['status'] == 'done' and got['gate'] == old['gate'], got
+        assert any('skip' in m for m in logs), logs
+        # a rebuilt engine at the same path: NOT skipped -- the
+        # board re-runs (and errors on the fake board file, which
+        # proves the skip did not happen)
+        _restore()
+        got = runner.run_board(board, meta, 'stack', {}, 'fp',
+                               run_dir, logs.append,
+                               engine_sha256='ENG-B', git_sha='GIT-A')
+        assert got['status'] == 'error', got
+        assert got.get('engine_sha256') == 'ENG-B', got
+        # a plugin code update: NOT skipped either
+        _restore()
+        got = runner.run_board(board, meta, 'stack', {}, 'fp',
+                               run_dir, logs.append,
+                               engine_sha256='ENG-A', git_sha='GIT-B')
+        assert got['status'] == 'error', got
+        assert got.get('git_sha') == 'GIT-B', got
+
+
 if __name__ == '__main__':
     fns = [(n, f) for n, f in sorted(globals().items())
            if n.startswith('test_') and callable(f)]
