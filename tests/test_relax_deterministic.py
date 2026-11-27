@@ -53,9 +53,16 @@ def test_route_flags_relax_deterministic():
 def test_route_flags_other_shapes_unchanged():
     # non-relax deterministic: the pre-#184 line, exactly
     assert er.route_flags({'deterministic': True}, 40000000) == ['--work', '40000000', '--deterministic']
-    # relax without deterministic: --work + --time, as shipped and A/B-validated
-    assert er.route_flags({'deterministic': False}, 40000000, 1800, relax=True) == ['--work', '40000000', '--time', '1800']
-    assert er.route_flags({}, 40000000, 1800, relax=True) == ['--work', '40000000', '--time', '1800']
+    # AMENDED by #52 (Phase 2E item 3): this test used to pin the
+    # non-deterministic relax line at --work + --time -- the exact
+    # shape #52 reports as the defect (the engine budgets relax by
+    # rounds; --work does not limit it, --time does, so the
+    # default candidate's endpoint was the clock). Relax is now
+    # round-bounded in every mode; test_relax_round_budget.py
+    # pins the new shapes. An unusable budget keeps the old line.
+    assert er.route_flags({'deterministic': False}, 40000000, 1800, relax=True) == ['--work', '40000000', '--round-work', '20000000', '--rounds', '2']
+    assert er.route_flags({}, 40000000, 1800, relax=True) == ['--work', '40000000', '--round-work', '20000000', '--rounds', '2']
+    assert er.route_flags({}, 0, 1800, relax=True) == ['--work', '0', '--time', '1800']
     # route_open_only still composes, ahead of the round budget
     flags = er.route_flags({'deterministic': True, 'route_open_only': True}, 40000000, relax=True)
     assert flags == ['--work', '40000000', '--route-open-only', '--round-work', '20000000',
@@ -112,13 +119,18 @@ def test_variant_command_line_relax_deterministic():
 
 
 def test_variant_command_line_relax_plain_unchanged():
+    # AMENDED by #52: was 'plain relax line unchanged' (no rounds,
+    # --time present) -- that line WAS the #52 defect. A plain
+    # (default-mode) relax variant now carries the same round
+    # budget as a deterministic one and no --time.
     import json
     pipe, rec = _pipe({})
     outp = os.path.join(pipe.workdir, 'pf-tm-relax.kicad_pcb')
     pipe._route_variant('tm_relax', outp)
     argv = json.load(open(rec))
-    assert '--round-work' not in argv and '--rounds' not in argv, argv
-    assert argv[-2:] == ['--work', '40000000'] or '--time' in argv, argv
+    assert '--round-work' in argv and '--rounds' in argv, argv
+    assert argv[argv.index('--rounds') + 1] == '2', argv
+    assert '--time' not in argv, argv
 
 
 if __name__ == '__main__':

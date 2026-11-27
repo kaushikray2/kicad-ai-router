@@ -707,6 +707,16 @@ class Pipeline:
                           'copper': g.get('copper_violations'),
                           'banned': g.get('banned_layer_tracks'),
                           'seconds': oc.get('seconds')})
+                # #52: the leg's own run facts ride the record --
+                # for a tm_relax leg, the round budget it ran
+                # under and whether the engine's time limit was
+                # hit (with rounds bounding, time_limited should
+                # never be true; if it ever is, the record proves
+                # the clock decided something after all).
+                _rt = oc.get('route') or {}
+                for _k in ('stopped_by', 'time_limited', 'rounds'):
+                    if _rt.get(_k) is not None:
+                        e[_k] = _rt[_k]
             elif oc['status'] == 'failed':
                 e['error'] = oc.get('error')
             elif oc['status'] == 'no_board':
@@ -1025,8 +1035,16 @@ class Pipeline:
         _rec = {'engine': eng, 'board': outp,
                 'exit_code': _rj.get('exit_code', _rc),
                 'stopped_by': _rj.get('stopped_by'),
+                'time_limited': _rj.get('time_limited'),
                 'route_open_only': bool(_rj.get('route_open_only')),
                 'open_at_start': _rj.get('open_at_start')}
+        if eng == 'tm_relax':
+            # #52: record the round budget this leg ran under, so
+            # the ledger proves the leg was bounded by rounds, not
+            # by the clock (seconds + time_limited ride alongside).
+            _rb = engine_run.relax_round_budget(self.cfg.get('work', 40000000))
+            if _rb:
+                _rec['rounds'] = {'round_work': _rb[0], 'rounds': _rb[1]}
         return {'status': 'routed', 'seconds': _rj.get('seconds'), 'route': _rec}
 
     def _drc_measure(self, board):
