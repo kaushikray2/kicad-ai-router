@@ -4768,74 +4768,404 @@ def cmd_audit_zones(board_path, spec):
     return {'added': added, 'already_present': already}
 
 
+# ------------------------------------------------------------------
+# #69 meander geometry (module-level so the construction is
+# unit-testable without pcbnew boards where possible).
+
+def _mx_pt_seg(px, py, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    if L2 <= 0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / L2))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _mx_cross(ax, ay, bx, by, cx, cy):
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+
+def _mx_segs_cross(a, b, c, d):
+    d1 = _mx_cross(c[0], c[1], d[0], d[1], a[0], a[1])
+    d2 = _mx_cross(c[0], c[1], d[0], d[1], b[0], b[1])
+    d3 = _mx_cross(a[0], a[1], b[0], b[1], c[0], c[1])
+    d4 = _mx_cross(a[0], a[1], b[0], b[1], d[0], d[1])
+    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
+
+
+def _mx_seg_seg(a, b, c, d):
+    if _mx_segs_cross(a, b, c, d):
+        return 0.0
+    return min(_mx_pt_seg(a[0], a[1], c[0], c[1], d[0], d[1]),
+               _mx_pt_seg(b[0], b[1], c[0], c[1], d[0], d[1]),
+               _mx_pt_seg(c[0], c[1], a[0], a[1], b[0], b[1]),
+               _mx_pt_seg(d[0], d[1], a[0], a[1], b[0], b[1]))
+
+
+def _mx_in_poly(px, py, ring):
+    inside = False
+    n = len(ring)
+    for i in range(n):
+        x1, y1 = ring[i]
+        x2, y2 = ring[(i + 1) % n]
+        if (y1 > py) != (y2 > py):
+            xin = x1 + (py - y1) * (x2 - x1) / (y2 - y1)
+            if px < xin:
+                inside = not inside
+    return inside
+
+
+def _meander_plan(add_mm, span_avail, w, s_min):
+    """Lobe plan for the #69 chamfered meander: trapezoid lobes
+    with 45-degree legs.  Per lobe the drawn length exceeds the
+    along-axis footprint (2h + d) by exactly 2h(sqrt(2) - 1) --
+    the closed-form chamfer compensation: a rectangular bump of
+    the same height would add 2h; cutting each corner at 45
+    degrees replaces two h/sqrt(2) leg pieces... precisely, each
+    leg is h*sqrt(2) long for h of rise, and consumes h of
+    along-axis run, so lobe length = 2*h*sqrt(2) + d against a
+    footprint of 2h + d.  Amplitude is capped at H_CAP (more
+    lobes instead of one tall loop).  Returns (n, h, pitch,
+    d_top, footprint) or None when the span cannot hold the
+    plan at the spacing floor."""
+    H_CAP = 3.0
+    SQ2 = math.sqrt(2.0)
+    n = max(1, math.ceil(add_mm / (2.0 * H_CAP * (SQ2 - 1.0))))
+    h = add_mm / (2.0 * n * (SQ2 - 1.0))
+    d_top = max(0.3, w)
+    g_min = s_min + w            # baseline gap: valley endpoints
+    pitch_min = max(2.0 * h + d_top + g_min, SQ2 * (s_min + w))
+    footprint = (n - 1) * pitch_min + 2.0 * h + d_top
+    if footprint > span_avail:
+        return None
+    pitch = pitch_min
+    if n > 1:
+        # spread the lobes across the available span: wider pitch
+        # only improves the leg-to-leg spacing margins
+        pitch = max(pitch_min,
+                    (span_avail - (2.0 * h + d_top)) / (n - 1))
+        footprint = (n - 1) * pitch + 2.0 * h + d_top
+    return (n, h, pitch, d_top, footprint)
+
+
+def _meander_h_diel(b, board_path, layer_id):
+    """Dielectric thickness (mm) between the segment's layer and
+    the nearest pour-carrying copper layer -- the reference
+    plane the return current couples to.  0.0 (documented
+    fallback in the result) when the board file carries no
+    usable stackup or no other layer pours: the 3H term then
+    drops out of the spacing floor and 3W / clearance govern."""
+    entries = _stackup_entries(board_path)
+    if not entries:
+        return 0.0
+    stack = copper_stack(b)
+    file_coppers = [e for e in entries if e['type'] == 'copper']
+    if len(file_coppers) != len(stack):
+        return 0.0
+    lid2pos = {lid: k for k, lid in enumerate(stack)}
+    seg_pos = lid2pos.get(layer_id)
+    if seg_pos is None:
+        return 0.0
+    pour_pos = set()
+    for z in b.Zones():
+        if not (z.GetNetname() or ''):
+            continue
+        for lid in z.GetLayerSet().CuStack():
+            if lid in lid2pos:
+                pour_pos.add(lid2pos[lid])
+    if not pour_pos:
+        return 0.0
+    cu_idx = [k for k, e in enumerate(entries) if e['type'] == 'copper']
+    best = None
+    for pp in pour_pos:
+        if pp == seg_pos:
+            continue
+        lo, hi = sorted((cu_idx[seg_pos], cu_idx[pp]))
+        d = sum((entries[m].get('thickness_mm') or 0.0)
+                for m in range(lo + 1, hi) if _is_dielectric(entries[m]))
+        if best is None or d < best:
+            best = d
+    return best or 0.0
+
+
 def cmd_meander(board_path, net, add_mm):
-    # Length tuning (#69): replace the middle of the net's longest
-    # straight segment with an accordion of rectangular bumps on
-    # one side, adding ~add_mm of length.  Endpoints are preserved
-    # exactly, so connectivity cannot change; whether the result
-    # is legal is the exact checker's verdict (the pipeline rolls
-    # back on any regression).  Only the member net's own copper
-    # is touched -- marked/locked copper of other nets is never
-    # modified.
+    # Length tuning (#69, SI upgrade): replace part of one
+    # straight segment of the net with a run of 45-degree
+    # chamfered trapezoid lobes, adding ~add_mm of length.
+    # Leg-to-leg edge spacing S >= max(3W, 3H_diel, 2*clr + 0.2)
+    # (H_diel = dielectric thickness to the nearest pour plane;
+    # fallback 0 when no stackup/pour -- see _meander_h_diel);
+    # lobe amplitude capped at 3.0 mm with more lobes instead of
+    # one tall loop; the chamfer compensation is closed-form
+    # (_meander_plan), so the drawn length equals the commanded
+    # add_mm.  Candidates are the net's unlocked straight tracks,
+    # longest first, each tried on BOTH sides; a candidate is
+    # drawn only after an obstacle/outline test (same-layer
+    # copper, vias, pads, foreign pour fills, track rule areas,
+    # Edge.Cuts).  Endpoints are preserved exactly, so
+    # connectivity cannot change; the pipeline's exact checker
+    # still gates adoption.  Only the member net's own copper is
+    # touched -- locked copper is never modified (#100).
     b = pcbnew.LoadBoard(board_path)
     refill(b)
     tracks = [t for t in b.GetTracks()
               if t.GetNetname() == net and t.Type() == pcbnew.PCB_TRACE_T]
     if not tracks:
         return {'added_mm': 0.0, 'why': 'no straight tracks'}
-    # #100: locked copper is never modified -- a locked candidate
-    # is excluded, however long it is.
     tracks = [t for t in tracks if not t.IsLocked()]
     if not tracks:
         return {'added_mm': 0.0, 'why': 'all straight tracks are locked'}
-    def seg_len(t):
-        return math.hypot(mm(t.GetEnd().x) - mm(t.GetStart().x),
-                          mm(t.GetEnd().y) - mm(t.GetStart().y))
-    t = max(tracks, key=seg_len)
-    L = seg_len(t)
-    w = mm(t.GetWidth())
     try:
         clr = mm(b.GetDesignSettings().m_NetSettings
                  .GetEffectiveNetClass(net).GetClearance())
     except Exception:
         clr = 0.2
-    ax, ay = mm(t.GetStart().x), mm(t.GetStart().y)
-    bx, by = mm(t.GetEnd().x), mm(t.GetEnd().y)
-    ux, uy = (bx - ax) / L, (by - ay) / L
-    px, py = -uy, ux  # perpendicular
-    h_max = 6.0
-    n = max(1, math.ceil(add_mm / (2 * h_max)))
-    h = add_mm / (2 * n)
-    span = L * 0.7
-    d = span / n * 0.55  # bump width along the segment
-    if d < w + 2 * clr + 0.2 or span / n < w + 2 * clr + 0.4:
-        return {'added_mm': 0.0, 'why': 'segment too short for a legal bump'}
-    start0 = (L - span) / 2
-    pts = [(ax, ay)]
-    cur = start0
-    for i in range(n):
-        x0 = ax + ux * cur; y0 = ay + uy * cur
-        x1 = ax + ux * (cur + d); y1 = ay + uy * (cur + d)
-        pts += [(x0, y0), (x0 + px * h, y0 + py * h),
-                (x1 + px * h, y1 + py * h), (x1, y1)]
-        cur += span / n
-    pts.append((bx, by))
-    layer = t.GetLayer()
-    netcode = t.GetNetCode()
-    width_nm = t.GetWidth()
-    b.Remove(t)
-    for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
-        if math.hypot(x2 - x1, y2 - y1) < 1e-6:
+
+    def seg_len(t):
+        return math.hypot(mm(t.GetEnd().x) - mm(t.GetStart().x),
+                          mm(t.GetEnd().y) - mm(t.GetStart().y))
+
+    # ---- obstacle inventory (built once; positions in mm)
+    all_tracks = [(mm(t.GetStart().x), mm(t.GetStart().y),
+                   mm(t.GetEnd().x), mm(t.GetEnd().y),
+                   mm(t.GetWidth()), t.GetLayer(), t.GetNetname(), t)
+                  for t in b.GetTracks() if t.Type() == pcbnew.PCB_TRACE_T]
+    arcs = [(mm(t.GetStart().x), mm(t.GetStart().y),
+             mm(t.GetEnd().x), mm(t.GetEnd().y),
+             mm(t.GetWidth()), t.GetLayer(), t.GetNetname())
+            for t in b.GetTracks() if t.Type() == pcbnew.PCB_ARC_T]
+    vias = []
+    for t in b.GetTracks():
+        if t.Type() == pcbnew.PCB_VIA_T:
+            vias.append((mm(t.GetPosition().x), mm(t.GetPosition().y),
+                         t.GetLayerSet(), t.GetNetname(), t))
+    pads = []
+    for fp in b.GetFootprints():
+        for pd in fp.Pads():
+            sz = pd.GetSize()
+            pads.append((mm(pd.GetPosition().x), mm(pd.GetPosition().y),
+                         0.5 * math.hypot(mm(sz.x), mm(sz.y)),
+                         pd.GetLayerSet(), pd.GetNetname()))
+    outline = []          # Edge.Cuts segments, chained into loops
+    for dr in b.GetDrawings():
+        if dr.GetLayer() != pcbnew.Edge_Cuts:
             continue
-        nt = pcbnew.PCB_TRACK(b)
-        nt.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1)))
-        nt.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
-        nt.SetWidth(width_nm); nt.SetLayer(layer); nt.SetNetCode(netcode)
-        b.Add(nt)
-    refill(b)
-    pcbnew.SaveBoard(board_path, b)
-    return {'added_mm': round(2 * h * n, 3), 'bumps': n, 'bump_h_mm': round(h, 3),
-            'segment_length_mm': round(L, 3)}
+        try:
+            outline.append(((mm(dr.GetStart().x), mm(dr.GetStart().y)),
+                            (mm(dr.GetEnd().x), mm(dr.GetEnd().y))))
+        except Exception:
+            pass
+    outline_loop = None
+    if outline:
+        # chain the segments into the largest closed loop
+        segs_left = list(outline)
+        loops = []
+        while segs_left:
+            a0, b0 = segs_left.pop(0)
+            loop = [a0, b0]
+            grew = True
+            while grew and len(loop) > 2 and \
+                    math.hypot(loop[-1][0] - loop[0][0],
+                               loop[-1][1] - loop[0][1]) > 1e-6:
+                grew = False
+                for i, (p, q) in enumerate(segs_left):
+                    if math.hypot(p[0] - loop[-1][0], p[1] - loop[-1][1]) < 1e-6:
+                        loop.append(q); segs_left.pop(i); grew = True; break
+                    if math.hypot(q[0] - loop[-1][0], q[1] - loop[-1][1]) < 1e-6:
+                        loop.append(p); segs_left.pop(i); grew = True; break
+            if len(loop) > 2 and math.hypot(loop[-1][0] - loop[0][0],
+                                            loop[-1][1] - loop[0][1]) < 1e-6:
+                loops.append(loop[:-1])
+        if loops:
+            outline_loop = max(loops, key=lambda lp: len(lp))
+
+    def obstacles_for(layer):
+        trk = [(x1, y1, x2, y2, w2, nn) for (x1, y1, x2, y2, w2, lay, nn, _t)
+               in all_tracks if lay == layer]
+        trk += [(x1, y1, x2, y2, w2, nn) for (x1, y1, x2, y2, w2, lay, nn)
+                in arcs if lay == layer]
+        via = []
+        for (x, y, lset, nn, tobj) in vias:
+            try:
+                if not lset.Contains(layer):
+                    continue
+                r = mm(tobj.GetWidth(layer)) / 2.0
+            except Exception:
+                r = 0.3
+            via.append((x, y, r, nn))
+        pad = []
+        for (x, y, r, lset, nn) in pads:
+            try:
+                if lset.Contains(layer):
+                    pad.append((x, y, r, nn))
+            except Exception:
+                pass
+        fills = []        # foreign-net pour fills on this layer
+        rule = []         # track rule-area outlines on this layer
+        for z in b.Zones():
+            lays = list(z.GetLayerSet().CuStack())
+            if layer not in lays:
+                continue
+            if z.GetIsRuleArea() and z.GetDoNotAllowTracks():
+                try:
+                    o = z.Outline()
+                    for oi in range(o.OutlineCount()):
+                        ol = o.Outline(oi)
+                        ring = [(mm(ol.CPoint(k).x), mm(ol.CPoint(k).y))
+                                for k in range(ol.PointCount())]
+                        if len(ring) >= 3:
+                            rule.append(ring)
+                except Exception:
+                    pass
+            elif (z.GetNetname() or '') != net:
+                try:
+                    polys = z.GetFilledPolysList(layer)
+                    for oi in range(polys.OutlineCount()):
+                        o = polys.Outline(oi)
+                        ring = [(mm(o.CPoint(k).x), mm(o.CPoint(k).y))
+                                for k in range(o.PointCount())]
+                        if len(ring) >= 3:
+                            fills.append(ring)
+                except Exception:
+                    pass
+        return trk, via, pad, fills, rule
+
+    def site_ok(new_segs, cand, layer, w):
+        # new_segs: the off-baseline pieces (legs + tops) only;
+        # the head/tail and in-span baseline pieces lie on the
+        # original track line, whose clearances are unchanged.
+        trk, via, pad, fills, rule = obstacles_for(layer)
+        for (a, bq) in new_segs:
+            for (x1, y1, x2, y2, w2, nn) in trk:
+                if nn == net and (x1, y1, x2, y2) == \
+                        (cand[0], cand[1], cand[2], cand[3]):
+                    continue     # the candidate track itself
+                need = (w + w2) / 2.0 + (clr if nn != net else 0.0)
+                if _mx_seg_seg(a, bq, (x1, y1), (x2, y2)) < need - 1e-9:
+                    return False
+            for (x, y, r, nn) in via:
+                need = w / 2.0 + r + (clr if nn != net else 0.0)
+                if _mx_pt_seg(x, y, a[0], a[1], bq[0], bq[1]) < need - 1e-9:
+                    return False
+            for (x, y, r, nn) in pad:
+                need = w / 2.0 + r + (clr if nn != net else 0.0)
+                if _mx_pt_seg(x, y, a[0], a[1], bq[0], bq[1]) < need - 1e-9:
+                    return False
+            for ring in fills:
+                if _mx_in_poly(a[0], a[1], ring) or _mx_in_poly(bq[0], bq[1], ring):
+                    return False
+                for i in range(len(ring)):
+                    if _mx_seg_seg(a, bq, ring[i], ring[(i + 1) % len(ring)]) \
+                            < w / 2.0 + clr - 1e-9:
+                        return False
+            for ring in rule:
+                if _mx_in_poly(a[0], a[1], ring) or _mx_in_poly(bq[0], bq[1], ring):
+                    return False
+                for i in range(len(ring)):
+                    if _mx_segs_cross(a, bq, ring[i], ring[(i + 1) % len(ring)]):
+                        return False
+            if outline_loop:
+                if not _mx_in_poly(a[0], a[1], outline_loop) \
+                        or not _mx_in_poly(bq[0], bq[1], outline_loop):
+                    return False
+                mid = ((a[0] + bq[0]) / 2.0, (a[1] + bq[1]) / 2.0)
+                if not _mx_in_poly(mid[0], mid[1], outline_loop):
+                    return False
+                for i in range(len(outline_loop)):
+                    if _mx_segs_cross(a, bq, outline_loop[i],
+                                      outline_loop[(i + 1) % len(outline_loop)]):
+                        return False
+        return True
+
+    def self_ok(new_segs, w, s_min):
+        # exact self-check on the drawn chain: non-adjacent pieces
+        # must not fold onto themselves, and parallel leg pairs
+        # (the coupling case the spacing floor exists for) must
+        # hold S >= s_min edge-to-edge.
+        for i in range(len(new_segs)):
+            for j in range(i + 2, len(new_segs)):
+                a, bq = new_segs[i]
+                c, d = new_segs[j]
+                dist = _mx_seg_seg(a, bq, c, d)
+                ux1, uy1 = bq[0] - a[0], bq[1] - a[1]
+                ux2, uy2 = d[0] - c[0], d[1] - c[1]
+                l1 = math.hypot(ux1, uy1) or 1.0
+                l2 = math.hypot(ux2, uy2) or 1.0
+                parallel = abs((ux1 * ux2 + uy1 * uy2) / (l1 * l2)) > 0.9
+                need = (s_min + w) if parallel else 0.5 * w
+                if dist < need - 1e-9:
+                    return False
+        return True
+
+    last = {'added_mm': 0.0, 'why': 'no legal meander site'}
+    for t in sorted(tracks, key=seg_len, reverse=True):
+        L = seg_len(t)
+        if L < 2.0:
+            continue
+        w = mm(t.GetWidth())
+        layer = t.GetLayer()
+        h_diel = _meander_h_diel(b, board_path, layer)
+        s_min = max(3.0 * w, 3.0 * h_diel, 2.0 * clr + 0.2)
+        plan = _meander_plan(add_mm, 0.85 * L, w, s_min)
+        if plan is None:
+            last = {'added_mm': 0.0, 'why': 'span too short for the '
+                    'spacing floor at this add length',
+                    'spacing_mm': round(s_min, 3),
+                    'h_diel_mm': round(h_diel, 3)}
+            continue
+        n, h, pitch, d_top, footprint = plan
+        ax, ay = mm(t.GetStart().x), mm(t.GetStart().y)
+        bx, by = mm(t.GetEnd().x), mm(t.GetEnd().y)
+        ux, uy = (bx - ax) / L, (by - ay) / L
+        cand = (ax, ay, bx, by)
+        for side in (1, -1):
+            px, py = side * -uy, side * ux
+            start0 = (L - footprint) / 2.0
+            pts = [(ax, ay)]
+            new_segs = []
+            cur = start0
+            for i in range(n):
+                x0 = ax + ux * cur; y0 = ay + uy * cur
+                x1 = x0 + ux * h + px * h; y1 = y0 + uy * h + py * h
+                x2 = x1 + ux * d_top; y2 = y1 + uy * d_top
+                x3 = x2 + ux * h - px * h; y3 = y2 + uy * h - py * h
+                pts += [(x0, y0), (x1, y1), (x2, y2), (x3, y3)]
+                new_segs += [((x0, y0), (x1, y1)),
+                             ((x1, y1), (x2, y2)),
+                             ((x2, y2), (x3, y3))]
+                cur += pitch
+            pts.append((bx, by))
+            if not self_ok(new_segs, w, s_min):
+                continue
+            if not site_ok(new_segs, cand, layer, w):
+                continue
+            netcode = t.GetNetCode()
+            width_nm = t.GetWidth()
+            b.Remove(t)
+            drawn = 0.0
+            for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+                ln = math.hypot(x2 - x1, y2 - y1)
+                if ln < 1e-6:
+                    continue
+                drawn += ln
+                nt = pcbnew.PCB_TRACK(b)
+                nt.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1)))
+                nt.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
+                nt.SetWidth(width_nm); nt.SetLayer(layer)
+                nt.SetNetCode(netcode)
+                b.Add(nt)
+            refill(b)
+            pcbnew.SaveBoard(board_path, b)
+            return {'added_mm': round(drawn - L, 3), 'bumps': n,
+                    'bump_h_mm': round(h, 3),
+                    'segment_length_mm': round(L, 3), 'side': side,
+                    'spacing_mm': round(s_min, 3),
+                    'h_diel_mm': round(h_diel, 3)}
+        last = {'added_mm': 0.0, 'why': 'both sides obstructed',
+                'spacing_mm': round(s_min, 3),
+                'h_diel_mm': round(h_diel, 3)}
+    return last
+
 
 def cmd_powergeom(board_path, nets_csv):
     # Per-net copper facts for the power planner (#68 Step 2): tracks,

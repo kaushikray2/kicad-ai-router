@@ -1434,7 +1434,10 @@ class Pipeline:
             ev['assumptions'] = [
                 'delay from geometry + stackup eps_eff (microstrip form on '
                 'surface layers, eps_r on inner layers); no field solver',
-                'meander self-coupling is not modelled',
+                'meander legs are spaced >= max(3W, 3H_diel, 2*clr + 0.2) '
+                'against self-coupling (H_diel = dielectric to the nearest '
+                'pour plane, 0 when no stackup/pour); residual coupling '
+                'beyond the spacing rule is not modelled',
                 'via barrel length is not counted in member length']
             for net, m in ev['members'].items():
                 if m['within_tolerance']:
@@ -1451,6 +1454,11 @@ class Pipeline:
                     continue
                 r = self._eng_gate_try('meander', ['--net', net, '--add-mm', '%.3f' % need],
                                        'meander')
+                if r.get('added_mm') == 0:
+                    # a no-op meander (the worker found no legal
+                    # site) is not an adoption, whatever the gate
+                    # said about the unchanged board (#69 closure)
+                    r = dict(r); r['adopted'] = False
                 m['meander'] = r
                 self._record('length_meander', {'group': entry['name'], 'net': net,
                                                 'requested_mm': round(need, 3),
