@@ -99,6 +99,24 @@ w.add_via(b4, b4.GetNetsByName(), 'GND', 34, 25, 0.6, 0.3)
 sk2 = w.pour_skeletons(b4)
 check('skeleton cache: count-preserving via move is fresh (#186)', sk2 is not sk1 and any(abs(px - 34) < 0.01 and abs(py - 25) < 0.01 for s in sk2 for (px, py) in s['pads']) and not any(abs(px - 30) < 0.01 and abs(py - 25) < 0.01 for s in sk2 for (px, py) in s['pads']))
 
+# --- skeleton cache: span-only via change (#227) -------------------
+# via_sig carried (netcode, x, y) only, but the tree consumes each
+# via through IsOnLayer(lay), which depends on the via's layer
+# span (TopLayer/BottomLayer). Rework a through via as a blind
+# via that no longer reaches the pour layer -- same net, same
+# position, same count -- and the cache must not serve the
+# pre-change tree (in which the via is still a node).
+b5 = mk_board()
+b5.SetCopperLayerCount(4)
+v5 = w.add_via(b5, b5.GetNetsByName(), 'GND', 30, 25, 0.6, 0.3)
+sk1 = w.pour_skeletons(b5)
+check('cache setup: through via is a skeleton node', any(abs(px - 30) < 0.01 and abs(py - 25) < 0.01 for s in sk1 for (px, py) in s['pads']))
+v5.SetViaType(pcbnew.VIATYPE_BLIND)
+v5.SetLayerPair(pcbnew.In1_Cu, pcbnew.B_Cu)
+check('span change took effect (via off F.Cu)', not v5.IsOnLayer(pcbnew.F_Cu))
+sk2 = w.pour_skeletons(b5)
+check('skeleton cache: span-only via change is fresh (#227)', sk2 is not sk1 and not any(abs(px - 30) < 0.01 and abs(py - 25) < 0.01 for s in sk2 for (px, py) in s['pads']))
+
 # --- Grid stamp -------------------------------------------------------
 w.SKELETON_ON = True
 g = w.Grid(mk_board(), (5, 55, 5, 45))
