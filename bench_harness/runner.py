@@ -131,7 +131,8 @@ def _stem(path):
     return path[:-len('.kicad_pcb')] if path.endswith('.kicad_pcb') else path
 
 
-def run_board(board, prep_meta, stack_name, cfg, fingerprint, run_dir, log):
+def run_board(board, prep_meta, stack_name, cfg, fingerprint, run_dir, log,
+              engine_sha256=None, git_sha=None):
     """Run one board under one stack; returns its record dict."""
     bdir = os.path.join(run_dir, 'boards', board.slug)
     os.makedirs(bdir, exist_ok=True)
@@ -139,11 +140,18 @@ def run_board(board, prep_meta, stack_name, cfg, fingerprint, run_dir, log):
     if os.path.exists(rec_path):
         with open(rec_path) as f:
             old = json.load(f)
+        # #224: the skip must also match WHO produced the record --
+        # the engine binary (by sha256, not the path string the cfg
+        # fingerprint hashes) and the plugin git SHA.  An in-place
+        # engine rebuild or a code update otherwise resumes over
+        # stale records under a manifest claiming the new identity.
         if (old.get('status') == 'done'
                 and old.get('prepared_sha256') == prep_meta['prepared_sha256']
-                and old.get('cfg_fingerprint') == fingerprint):
-            log('skip %s (complete record, same input + config)'
-                % board.slug)
+                and old.get('cfg_fingerprint') == fingerprint
+                and old.get('engine_sha256') == engine_sha256
+                and old.get('git_sha') == git_sha):
+            log('skip %s (complete record, same input + config + '
+                'engine + code)' % board.slug)
             return old
     staged = os.path.join(bdir, 'board.kicad_pcb')
     shutil.copy2(prep_meta['prepared_path'], staged)
@@ -157,6 +165,8 @@ def run_board(board, prep_meta, stack_name, cfg, fingerprint, run_dir, log):
            'source_pcb_sha256': prep_meta['source_pcb_sha256'],
            'prepared_sha256': prep_meta['prepared_sha256'],
            'prep_cache_hit': prep_meta.get('cache_hit', False),
+           'engine_sha256': engine_sha256,
+           'git_sha': git_sha,
            'status': 'running'}
     lines = []
 
@@ -277,10 +287,12 @@ def run_set(boards, stack_name, overrides, home, run_id, exam=False,
     with open(os.path.join(run_dir, 'manifest.json'), 'w') as f:
         json.dump(manifest, f, indent=1)
     records = {}
+    eng_sha = engine_identity(cfg)['sha256']
+    g_sha = git_sha()
     for b, meta in boards_prep:
         log('run %s under stack %s' % (b.slug, stack_name))
         rec = run_board(b, meta, stack_name, cfg, fingerprint, run_dir,
-                        log)
+                        log, engine_sha256=eng_sha, git_sha=g_sha)
         records[b.slug] = rec
         log('done %s: %s gate=%s wall=%ss' % (
             b.slug, rec['status'], rec.get('gate'), rec.get('wall_s')))
