@@ -688,6 +688,11 @@ def hv_form(entry):
             'coating': entry.get('coating') or '',
             'pollution_degree': entry.get('pollution_degree'),
             'altitude_m': entry.get('altitude_m'),
+            'insulation': entry.get('insulation') or '',
+            'material_group': entry.get('material_group') or '',
+            'rms_v': entry.get('rms_v'),
+            'min_clearance_mm': entry.get('min_clearance_mm'),
+            'min_creepage_mm': entry.get('min_creepage_mm'),
             'materialise': bool(entry.get('materialise'))}
 
 
@@ -711,6 +716,19 @@ def hv_entry(form):
     alt = _opt_float(form, 'altitude_m', 'Altitude')
     if alt is not None:
         e['altitude_m'] = alt
+    # IEC Tier 1 fields (#70 follow-up): round-tripped so an
+    # editor save never deletes them; range/enum validation
+    # lives in markings._check_hv_domain.
+    if form.get('insulation'):
+        e['insulation'] = form['insulation']
+    if form.get('material_group'):
+        e['material_group'] = form['material_group']
+    for key, label in (('rms_v', 'RMS voltage'),
+                       ('min_clearance_mm', 'Min clearance'),
+                       ('min_creepage_mm', 'Min creepage')):
+        v = _opt_float(form, key, label)
+        if v is not None:
+            e[key] = v
     return e
 
 

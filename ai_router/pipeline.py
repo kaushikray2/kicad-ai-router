@@ -874,7 +874,8 @@ class Pipeline:
         # every pair + the implicit 0 V rest-of-board domain),
         # shared with _domain_setup so the netclass path and the
         # finisher-rect path can never disagree again.
-        reqs = [_hv_worst_pair_req_mm(d, doms, terminations=True)
+        reqs = [max(_hv_worst_pair_req_mm(d, doms, terminations=True),
+                    d.get('min_clearance_mm') or 0.0)
                 for d in doms]
         pro_path = os.path.join(self.workdir, 'input.kicad_pro')
         data = None
@@ -1797,10 +1798,33 @@ class Pipeline:
                     # _hv_worst_pair_req_mm).
                     req, col, cond_col = H.pair_required_symmetric_mm(
                         dv, surf, da, db, term)
+                    # Tier 1 explicit overrides (#70 follow-up):
+                    # a declared min_clearance_mm /
+                    # min_creepage_mm on EITHER side governs its
+                    # comparison in place of the table value --
+                    # the override is the design's own IEC
+                    # 62368-1/60664-1 determination.  Creepage
+                    # never requires less than the (possibly
+                    # overridden) clearance in this single-table
+                    # model.
+                    clr_ov = max([v for v in (da.get('min_clearance_mm'),
+                                              db.get('min_clearance_mm'))
+                                  if v], default=None)
+                    crp_ov = max([v for v in (da.get('min_creepage_mm'),
+                                              db.get('min_creepage_mm'))
+                                  if v], default=None)
+                    if clr_ov is not None:
+                        req, col = clr_ov, 'explicit override'
+                    req_crp = crp_ov if crp_ov is not None else req
                     entry = {'layer': layer, 'column': col,
                              'conductor_column': cond_col,
                              'termination': term,
-                             'required_mm': round(req, 3)}
+                             'required_mm': round(req, 3),
+                             'creepage_required_mm': round(req_crp, 3),
+                             'requirement_source':
+                                 'explicit override' if (clr_ov is not None
+                                                         or crp_ov is not None)
+                                 else 'IPC-2221B Table 6-1'}
                     if dv > 500:
                         # #128 (B2): disclose the whole-voltage
                         # reading alongside the primary one
@@ -1832,11 +1856,11 @@ class Pipeline:
                             entry['creepage_status'] = 'ok'
                             # one-pitch margin: the grid result
                             # is only as fine as its pitch
-                            if cr < req + cpitch - 1e-9:
+                            if cr < req_crp + cpitch - 1e-9:
                                 entry['creepage_status'] = 'violation'
                                 pair['violations'].append(
                                     {'kind': 'creepage', 'layer': layer,
-                                     'required_mm': round(req, 3),
+                                     'required_mm': round(req_crp, 3),
                                      'actual_mm': round(cr, 2),
                                      'pitch_margin_mm': cpitch,
                                      'at': entry['clearance_at']})
@@ -1860,6 +1884,13 @@ class Pipeline:
                  'ac': bool(d.get('ac')),
                  'coating': d.get('coating', 'uncoated'),
                  'altitude_m': d.get('altitude_m', 0),
+                 'rms_v': round(H.effective_rms_v(d), 3),
+                 'rms_v_source': ('declared' if d.get('rms_v') else
+                                  'derived_ac_peak' if d.get('ac')
+                                  else 'peak_dc'),
+                 'insulation': d.get('insulation'),
+                 'min_clearance_mm': d.get('min_clearance_mm'),
+                 'min_creepage_mm': d.get('min_creepage_mm'),
                  'pollution_degree': d.get('pollution_degree'),
                  'pollution_degree_applied': False,
                  'material_group': d.get('material_group'),

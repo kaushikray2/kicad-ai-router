@@ -752,6 +752,11 @@ class HVForm(_FormBase):
         self.coating = self.row('Coating', _choice(self, ['', 'uncoated', 'polymer', 'conformal']))
         self.pollution = self.row('Pollution degree', _choice(self, ['', '1', '2', '3']))
         self.altitude = self.row('Altitude (m)', _text(self))
+        self.insulation = self.row('Insulation (IEC)', _choice(self, ['', 'functional', 'basic', 'supplementary', 'reinforced']))
+        self.matgroup = self.row('Material group (CTI)', _choice(self, ['', 'I', 'II', 'IIIa', 'IIIb']))
+        self.rms = self.row('RMS voltage (V)', _text(self))
+        self.minclr = self.row('Min clearance (mm)', _text(self))
+        self.mincrp = self.row('Min creepage (mm)', _text(self))
         self.materialise = self.row('Materialise', wx.CheckBox(self, label='Stamp keepouts for this domain'))
         self.members = wx.CheckListBox(self, choices=self.nets(), size=(-1, 110))
         self.row('Member nets', self.members)
@@ -800,7 +805,11 @@ class HVForm(_FormBase):
                 'peak_v': _num(self.peak), 'ac': self.ac.GetValue(),
                 'coating': self.coating.GetStringSelection(),
                 'pollution_degree': self.pollution.GetStringSelection(),
-                'altitude_m': _num(self.altitude), 'materialise': self.materialise.GetValue()}
+                'altitude_m': _num(self.altitude), 'materialise': self.materialise.GetValue(),
+                'insulation': self.insulation.GetStringSelection(),
+                'material_group': self.matgroup.GetStringSelection(),
+                'rms_v': _num(self.rms), 'min_clearance_mm': _num(self.minclr),
+                'min_creepage_mm': _num(self.mincrp)}
 
     def set_entry(self, entry):
         f = mm.hv_form(entry)
@@ -811,6 +820,11 @@ class HVForm(_FormBase):
         self.pollution.SetStringSelection('' if f['pollution_degree'] is None else str(f['pollution_degree']))
         self.altitude.SetValue('' if f['altitude_m'] is None else str(f['altitude_m']))
         self.materialise.SetValue(f['materialise'])
+        self.insulation.SetStringSelection(f.get('insulation') or '')
+        self.matgroup.SetStringSelection(f.get('material_group') or '')
+        self.rms.SetValue('' if f.get('rms_v') is None else str(f['rms_v']))
+        self.minclr.SetValue('' if f.get('min_clearance_mm') is None else str(f['min_clearance_mm']))
+        self.mincrp.SetValue('' if f.get('min_creepage_mm') is None else str(f['min_creepage_mm']))
         for i in range(self.members.GetCount()):
             self.members.Check(i, self.members.GetString(i) in f['nets'])
         self.refresh_pairs()

@@ -369,11 +369,28 @@ def _check_hv_domain(entry, idx):
         raise MarkingsError('%s: "altitude_m" must be a number >= 0' % p)
     if 'pollution_degree' in e and e['pollution_degree'] not in (1, 2, 3):
         raise MarkingsError('%s: "pollution_degree" must be 1|2|3' % p)
+    # IEC 62368-1 / 60664-1 Tier 1 fields (#70 follow-up): carried
+    # and validated now; rms_v and the explicit overrides are
+    # consumed by the checker, insulation/material_group are
+    # recorded for the Tier 2 estimator (not yet applied).
+    if 'insulation' in e and e['insulation'] not in (
+            'functional', 'basic', 'supplementary', 'reinforced'):
+        raise MarkingsError('%s: "insulation" must be functional|basic|supplementary|reinforced' % p)
+    if 'material_group' in e and e['material_group'] not in ('I', 'II', 'IIIa', 'IIIb'):
+        raise MarkingsError('%s: "material_group" must be I|II|IIIa|IIIb (CTI group)' % p)
+    if 'rms_v' in e and (not _num(e['rms_v']) or e['rms_v'] <= 0):
+        raise MarkingsError('%s: "rms_v" must be a positive number' % p)
+    for _k in ('min_clearance_mm', 'min_creepage_mm'):
+        if _k in e and (not _num(e[_k]) or e[_k] <= 0):
+            raise MarkingsError('%s: "%s" must be a positive number' % (p, _k))
     if 'materialise' in e and not isinstance(e['materialise'], bool):
         raise MarkingsError('%s: "materialise" must be a boolean' % p)
     out = dict(e)
     out['peak_v'] = float(_v)
     out['voltage_v'] = float(_v)
+    for _k in ('rms_v', 'min_clearance_mm', 'min_creepage_mm'):
+        if _k in e:
+            out[_k] = float(e[_k])
     return out
 
 

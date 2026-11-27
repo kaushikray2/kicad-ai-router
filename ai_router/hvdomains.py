@@ -144,6 +144,17 @@ def pair_required_alt_mm(delta_v, surface, coating='uncoated',
                           termination, required_spacing_alt_mm)
 
 
+def effective_rms_v(domain):
+    """The RMS working voltage of a domain for IEC 62368-1 /
+    60664-1 purposes (Tier 1, #70 follow-up): the declared
+    rms_v when present; else |peak_v| / sqrt(2) for an AC domain
+    (the peak of a sine), else |peak_v| (DC)."""
+    if domain.get('rms_v'):
+        return float(domain['rms_v'])
+    pk = abs(float(domain.get('peak_v') or 0.0))
+    return pk / math.sqrt(2.0) if domain.get('ac') else pk
+
+
 def pair_required_symmetric_mm(delta_v, surface, dom_a, dom_b,
                                termination=False):
     """(required_mm, effective_column, conductor_column) for a
