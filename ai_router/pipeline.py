@@ -632,9 +632,10 @@ class Pipeline:
                     excluded_roo.append(eng)
                     self.log('portfolio: %s excluded -- route_open_only keeps existing copper; %s re-routes from scratch (#174)' % (eng, eng))
         # v1.12.2 (#176): deterministic mode excludes the same two
-        # engines for its own reason -- freerouting runs -mt 2
-        # (multithreaded, run-variant) and krt has no determinism
-        # contract, so neither may win a Reproducible run.
+        # engines for its own reason -- freerouting's optimisation
+        # passes are time-bounded (run-variant even at -mt 1, #46)
+        # and krt has no determinism contract, so neither may win
+        # a Reproducible run.
         if self.cfg.get('deterministic'):
             for eng in ('freerouting', 'krt'):
                 if eng in engines:
@@ -763,9 +764,17 @@ class Pipeline:
         outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
         try:
             if eng == 'freerouting':
-                r = self._worker('freeroute', '--board', self.base, '--out', outp, timeout=3900)
+                # #46: the external engines receive the same layer
+                # law the TraceMaker legs run under (freerouting:
+                # banned layers exported as DSN power layers; krt:
+                # rule-area keepouts) -- until now they were told
+                # nothing and their banned-layer tracks counted as
+                # faults at the gate, so they lost by construction.
+                r = self._worker('freeroute', '--board', self.base, '--out', outp,
+                                 '--no-tracks-on', ','.join(self._banned_for(self.base)), timeout=3900)
             elif eng == 'krt':
-                r = self._worker('krt_route', '--board', self.base, '--out', outp, timeout=3900)
+                r = self._worker('krt_route', '--board', self.base, '--out', outp,
+                                 '--no-tracks-on', ','.join(self._banned_for(self.base)), timeout=3900)
             else:
                 r = self._route_variant(eng, outp)
         except Exception as e:
