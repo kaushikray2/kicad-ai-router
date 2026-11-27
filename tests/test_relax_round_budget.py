@@ -27,12 +27,18 @@ candidate was whatever the clock allowed -- a function of
 machine speed and load.
 
 Fix pinned here: route_flags bounds a relax leg by explicit
---round-work/--rounds in EVERY mode (the #184 translation of
-the configured work budget into rounds of the engine's 20M
-quantum) and never passes --time for it; the leg's route record
-carries the round budget, and the portfolio ledger record
-carries rounds + seconds + time_limited per finished leg, so a
-run proves from its own ledger that the clock decided nothing.
+--round-work/--rounds in EVERY mode (the #184 translation,
+with the item-3 sizing correction: the budget is floored at
+50 rounds -- the configured work number never bounded relax,
+and the probes showed a 2-round budget binds and degrades
+the candidate, while 50 saturates every bench board) and
+keeps --time as the backstop limit in default mode (with
+--time absent the engine caps the tournament itself at
+~120 s, which is worse and still a clock). The leg's route
+record carries the round budget, and the portfolio ledger
+record carries rounds + seconds + time_limited per finished
+leg, so a run proves from its own ledger which bound ended
+each leg -- at the floored budget, neither: the natural stop.
 Run: python3 tests/test_relax_round_budget.py"""
 import json, os, stat, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ai_router'))
@@ -41,10 +47,11 @@ import pipeline as pl
 
 
 def test_round_budget_translation():
-    assert er.relax_round_budget(40000000) == (20000000, 2)
-    assert er.relax_round_budget(20000000) == (20000000, 1)
-    assert er.relax_round_budget(50000000) == (16666666, 3)
-    assert er.relax_round_budget(1) == (1, 1)
+    assert er.relax_round_budget(40000000) == (20000000, 50)
+    assert er.relax_round_budget(20000000) == (20000000, 50)
+    assert er.relax_round_budget(50000000) == (20000000, 50)
+    assert er.relax_round_budget(1) == (20000000, 50)
+    assert er.relax_round_budget(10 ** 10) == (20000000, 200)
     assert er.relax_round_budget(0) is None
     assert er.relax_round_budget(-5) is None
     assert er.relax_round_budget('junk') is None
@@ -52,22 +59,22 @@ def test_round_budget_translation():
 
 
 def test_route_flags_relax_default_mode():
-    # the shipped default leg: rounds, no clock
+    # the shipped default leg: the floored rounds budget, with
+    # --time kept as the backstop limit it finishes well inside
     flags = er.route_flags({}, 40000000, 1800, relax=True)
     assert flags == ['--work', '40000000', '--round-work', '20000000',
-                     '--rounds', '2'], flags
-    assert '--time' not in flags
+                     '--rounds', '50', '--time', '1800'], flags
     # route_open_only still composes ahead of the budget
     flags = er.route_flags({'route_open_only': True}, 40000000, 1800, relax=True)
     assert flags == ['--work', '40000000', '--route-open-only',
-                     '--round-work', '20000000', '--rounds', '2'], flags
+                     '--round-work', '20000000', '--rounds', '50', '--time', '1800'], flags
     # an unusable budget keeps the historical line (loud via the
     # engine's own behaviour, never a silent unbounded relax)
     assert er.route_flags({}, 0, 1800, relax=True) == ['--work', '0', '--time', '1800']
     # non-relax lines are byte-identical to before #52
     assert er.route_flags({}, 40000000, 1800) == ['--work', '40000000', '--time', '1800']
     assert er.route_flags({'deterministic': True}, 40000000, relax=True) == \
-        ['--work', '40000000', '--round-work', '20000000', '--rounds', '2', '--deterministic']
+        ['--work', '40000000', '--round-work', '20000000', '--rounds', '50', '--deterministic']
 
 
 # ------------------------------------------------- leg + ledger record
@@ -125,11 +132,11 @@ def test_leg_record_carries_rounds_and_time_limited():
     oc = pipe._run_leg('tm_relax')
     assert oc['status'] == 'finished', oc
     rt = oc['route']
-    assert rt['rounds'] == {'round_work': 20000000, 'rounds': 2}, rt
+    assert rt['rounds'] == {'round_work': 20000000, 'rounds': 50}, rt
     assert rt['time_limited'] is False, rt
     assert oc['seconds'] == 12.5, oc
     argv = json.load(open(rec))
-    assert '--time' not in argv and '--rounds' in argv, argv
+    assert '--rounds' in argv and argv[argv.index('--time') + 1] == '1800', argv
 
 
 def test_portfolio_record_carries_leg_run_facts():
@@ -140,7 +147,7 @@ def test_portfolio_record_carries_leg_run_facts():
     assert len(recs) == 1, pipe.ledger
     (entry,) = recs[0]['data']['results']
     assert entry['engine'] == 'tm_relax' and entry['termination'] == 'finished'
-    assert entry['rounds'] == {'round_work': 20000000, 'rounds': 2}, entry
+    assert entry['rounds'] == {'round_work': 20000000, 'rounds': 50}, entry
     assert entry['time_limited'] is False, entry
     assert entry['seconds'] == 12.5, entry
 

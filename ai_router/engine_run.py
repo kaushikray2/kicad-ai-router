@@ -61,12 +61,20 @@ def route_flags(cfg, work, time_s=3600, open_only=True, relax=False):
     rounds of the engine's own 20M round quantum (the split its
     rescue path derives from a work budget), keeping the same
     total budget. #184 applied the translation under deterministic
-    only; #52 extends it to every mode and drops --time for relax
-    legs: with --time the leg's endpoint was whatever the clock
-    allowed, so the default portfolio candidate depended on
-    machine speed and load. An unusable budget keeps the
-    historical --work + --time line in default mode (and the
-    engine's refusal under deterministic).
+    only; #52 extends it to every mode. Default mode keeps
+    --time as the backstop limit the rounds are chosen to finish
+    well inside: the item-3 probes (2026-11-27) found that with
+    --time absent the engine caps the tournament itself
+    (~120 s on Nomad whatever the work flags say -- the leg
+    stops at ~52% completion), while at the floored budget a
+    relax leg reaches its natural stop well inside the limit
+    (Nomad 627 s of 1800 s, time_limited False, work identical
+    to the unbounded run). The leg's ledger record carries the
+    rounds budget, the seconds and the engine's time_limited
+    flag, so which bound ended a leg is provable per run. An
+    unusable budget keeps the historical --work + --time line
+    in default mode (and the engine's refusal under
+    deterministic).
     """
     flags = ['--work', str(work)]
     if open_only and cfg.get('route_open_only'):
@@ -76,28 +84,36 @@ def route_flags(cfg, work, time_s=3600, open_only=True, relax=False):
         flags += ['--round-work', str(_rb[0]), '--rounds', str(_rb[1])]
     if cfg.get('deterministic'):
         flags.append('--deterministic')
-    elif not _rb:
+    else:
         flags += ['--time', str(time_s)]
     return flags
 
 
 def relax_round_budget(work):
-    """The round budget a --relax leg runs under (#52): the
-    configured work budget translated into rounds of the engine's
-    20M round quantum -- ceil(work / 20M) rounds, the round-work
-    split evenly so rounds x round-work <= work. Returns
-    (round_work, rounds), or None for an unusable budget (zero,
-    negative, non-numeric), where route_flags keeps the
-    historical line. One translation for every mode, so a leg's
-    budget reads the same in the ledger whichever mode ran it."""
+    """The round budget a --relax leg runs under (#52): rounds of
+    the engine's 20M round quantum, floored at 50 and capped at
+    the engine's 200 maximum. The configured work budget never
+    bounded a relax leg (the engine ignores --work for relax), so
+    the floor -- not the work number -- is the operative size;
+    it is set from measured saturation (Phase 2E item-3 probes,
+    2026-11-27): juniper's tournament reaches its natural stop
+    by 10 rounds, STM32's by 50, and on Nomad a 50-round budget
+    consumes exactly the unbounded run's work (94,830,888
+    expansions, time_limited False) while a 2-round budget
+    binds and degrades the candidate (juniper completion
+    80.85%, time_limited True). Returns (round_work, rounds),
+    or None for an unusable budget (zero, negative,
+    non-numeric), where route_flags keeps the historical line.
+    One budget for every mode, so a leg's budget reads the
+    same in the ledger whichever mode ran it."""
     try:
         _w = int(work)
     except (TypeError, ValueError):
         return None
     if _w <= 0:
         return None
-    _rounds = max(1, -(-_w // 20000000))
-    return (max(1, _w // _rounds), _rounds)
+    _rounds = max(50, min(200, -(-_w // 20000000)))
+    return (20000000, _rounds)
 
 
 def scaled_timeout(base_seconds, work, ref_work=20000000):
