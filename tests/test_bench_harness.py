@@ -429,6 +429,29 @@ def test_worker_op_never_reads_stale_result():
             runner.subprocess.run = old_run
 
 
+
+def test_inventory_project_stem_sidecars():
+    # #226: a board whose filename differs from the project stem
+    # (renamed board, directory holding exactly one .kicad_pro)
+    # must still pick up the project sidecars -- the #182/#198
+    # resolution ai_router.naming.sidecar_paths single-sources.
+    # The old stem-only _siblings returned pro=None and prep
+    # staged the board without its netclasses / DRC rules.
+    with tempfile.TemporaryDirectory() as tmp:
+        d = os.path.join(tmp, 'proj')
+        os.makedirs(d)
+        for name, data in (('renamed.kicad_pcb', '(kicad_pcb)'),
+                           ('myproj.kicad_pro', '{}'),
+                           ('renamed.kicad_dru', '(dru)')):
+            with open(os.path.join(d, name), 'w') as f:
+                f.write(data)
+        boards = inv.load_fixtures([d])
+        assert len(boards) == 1
+        b = boards[0]
+        assert b.pro and b.pro.endswith('myproj.kicad_pro'), b.pro
+        assert b.dru and b.dru.endswith('renamed.kicad_dru'), b.dru
+
+
 if __name__ == '__main__':
     fns = [(n, f) for n, f in sorted(globals().items())
            if n.startswith('test_') and callable(f)]
