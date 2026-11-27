@@ -1106,6 +1106,7 @@ class MarkingsEditorDialog(wx.Dialog):
                           {'kind': 'corners'})
             self._add_row('Library rules (#42)', '%d rule footprints' % len(self.model.rule_footprints()),
                           'read-only', {'kind': 'rules'})
+            self._restore_selection()
             return
         if self.filter == 'issues':
             for iss in issues:
@@ -1113,6 +1114,7 @@ class MarkingsEditorDialog(wx.Dialog):
                     self._add_row(missing, mm.SECTION_TITLES[iss['section']], 'Unmatched',
                                   {'kind': 'entry', 'section': iss['section'], 'index': iss['index'],
                                    'missing': missing})
+            self._restore_selection()
             return
         if self.filter == 'marked':
             nets = sorted(marked)
@@ -1125,6 +1127,46 @@ class MarkingsEditorDialog(wx.Dialog):
             status = '' if n in have else 'Not on board'
             self._add_row(n, self._badges(n), status,
                           {'kind': 'net', 'net': n})
+        self._restore_selection()
+
+    def _restore_selection(self):
+        # #221: refresh_list rebuilds the rows on every search
+        # keystroke (and on view/filter changes); without this,
+        # _list_sel stayed -1 while the form kept showing, so the
+        # list highlight desynced from the form and a later Cancel
+        # in _confirm_pending restored the selection to nowhere.
+        # Re-match the shown selection against the rebuilt rows
+        # and restore its highlight.  Non-modal by design -- this
+        # runs per keystroke.  A selection whose row was filtered
+        # out is NOT resurrected: _list_sel stays -1.
+        sel = self.selection
+        if not sel:
+            return
+        marked = self.model.marked_nets()
+        for idx, desc in enumerate(self._rows):
+            if self._row_matches(desc, sel, marked):
+                self._list_sel = idx
+                self._sel_guard = True
+                try:
+                    self.list.Select(idx)
+                    self.list.Focus(idx)
+                finally:
+                    self._sel_guard = False
+                return
+
+    @staticmethod
+    def _row_matches(desc, sel, marked):
+        if desc.get('kind') == sel.get('kind'):
+            if sel.get('kind') == 'entry':
+                return (desc.get('section') == sel.get('section')
+                        and desc.get('index') == sel.get('index')
+                        and desc.get('missing') == sel.get('missing'))
+            return True      # corners / rules: the kind is the row
+        # A net row stands for the markings picked on it: the
+        # shown entry restores onto its own net's row.
+        if desc.get('kind') == 'net' and sel.get('kind') == 'entry':
+            return (sel.get('section'), sel.get('index')) in                 marked.get(desc.get('net'), [])
+        return False
 
     def _add_row(self, c0, c1, c2, desc):
         i = self.list.InsertItem(self.list.GetItemCount(), c0)
