@@ -647,7 +647,12 @@ def pour_skeletons(b):
     zone_nets = set()
     for z in b.Zones():
         if not z.GetIsRuleArea() and z.GetNetname(): zone_nets.add(z.GetNetname())
-    via_sig = tuple(sorted((t.GetNetCode(), t.GetPosition().x, t.GetPosition().y)
+    # #227: the span rides the signature too -- the tree consumes
+    # each via through IsOnLayer(lay), which the span decides, so
+    # a span-only rework (through -> blind, same net/position/
+    # count) changes the tree while the #186 tuple stood still.
+    via_sig = tuple(sorted((t.GetNetCode(), t.GetPosition().x, t.GetPosition().y,
+                            t.TopLayer(), t.BottomLayer())
                            for t in b.GetTracks()
                            if t.Type() == pcbnew.PCB_VIA_T and t.GetNetname() in zone_nets))
     hit = _SKEL_CACHE.get(key)
