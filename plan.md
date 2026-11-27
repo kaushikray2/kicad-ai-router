@@ -759,6 +759,53 @@ the 1.12.4 zip retired; the shipped zip registers
 exactly one AIRouterPlugin under KiCad
 pcbnew.LoadPlugins.
 
+### Off-plan -- external audit round 10 fix pass, main (2026-11-26)
+The auditor attested rounds 5-8 and the P2.7a cache clean
+and found five defects in the just-landed #62 bench
+harness and one #186 residual; all verified real against
+bdfbfa1 and fixed in their own chains. #223 [HIGH]: the
+nothing-worse gate passed crashed candidate boards --
+run_board recorded status=done with no caused/gate when
+the pipeline produced no final board, and nothing_worse
+read a missing caused as {} and skipped None gate values;
+a fully crashed candidate passed compare --gate (exit 0)
+and ramp advanced past crashed tiers, while aggregates
+summed only over gated records so crashes lowered the
+totals. Now: no final board = error record; status !=
+done, missing caused, or any None gate value is an
+immediate regression on either side; aggregates count
+missing/error records explicitly and the markdown shows
+them (CLI proof: synthetic crashed candidate -> gate
+FAIL, exit 3). #224: the resume guard matched prepared
+input + cfg fingerprint only -- the fingerprint hashes
+the tracemaker_path STRING, so an in-place engine rebuild
+or a plugin update mixed stale records under a new
+manifest identity; records now persist engine_sha256 +
+git_sha and the guard checks both. #225 (bundle): the
+README/test cfg key tm_work was not a real key ('work'
+is) and silently changed only the fingerprint -- docs
+and test fixed, effective_cfg warns loudly on unknown
+override keys; effective_cfg takes machine tool paths
+(tracemaker_path, kicad_cli) from config.load() instead
+of the stale DEFAULTS path; kicad_drc uses the configured
+kicad_cli; worker_op unlinks a stale .result.json before
+invoking the worker (return code deliberately not gated:
+the worker writes its result before exit and pcbnew can
+segfault at exit after successful work). #226:
+inventory._siblings delegated to naming.sidecar_paths
+(#182/#198) -- renamed boards no longer lose their
+project .kicad_pro/.kicad_dru in prep. #227: worker
+_SKEL_CACHE via_sig now carries (TopLayer(), BottomLayer())
+-- the skeleton consumes vias via IsOnLayer, so a
+span-only via rework (through -> blind) changed the tree
+while the #186 signature stood still; the #186 test
+gains a span-only leg. The two branch-side round 10
+items (#228, #229) are recorded on the engineered-nets-gui
+branch's plan.md. Suites: pytest 158 + new bench tests,
+standalone per the fix pass report. No version bump
+(harness/tooling + one worker cache-key fix; rides the
+next release).
+
 ## In progress
 
 - Phase 2E is under way. Its first item, **#62 (bench
