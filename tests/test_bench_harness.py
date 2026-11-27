@@ -21,6 +21,7 @@
 the prepared-input cache (byte-stability), DRC caused deltas, the
 A/B comparison and the nothing-worse gate, manifest identity.
 Pure stdlib: no pcbnew, no pipeline runs."""
+import io
 import json
 import os
 import sys
@@ -321,6 +322,111 @@ def test_resume_guard_checks_engine_and_git_identity():
                                engine_sha256='ENG-A', git_sha='GIT-B')
         assert got['status'] == 'error', got
         assert got.get('git_sha') == 'GIT-B', got
+
+
+
+def test_effective_cfg_work_key_and_unknown_key_warning():
+    # #225(a): the documented budget key is 'work' (config.DEFAULTS);
+    # an unknown override key like the old README's 'tm_work' must
+    # warn loudly instead of silently changing only the fingerprint.
+    cfg = runner.effective_cfg({'work': 123})
+    assert cfg['work'] == 123
+    err = io.StringIO()
+    old_err = sys.stderr
+    sys.stderr = err
+    try:
+        runner.effective_cfg({'tm_work': 40000000})
+    finally:
+        sys.stderr = old_err
+    assert 'tm_work' in err.getvalue(), err.getvalue()
+
+
+def test_effective_cfg_tool_paths_from_load():
+    # #225(b): machine tool paths come from config.load() when not
+    # overridden -- DEFAULTS' tracemaker_path is a stale path from
+    # 2026-11-12.  Other values stay at DEFAULTS (only the tool
+    # paths are machine state).
+    from ai_router import config as cfgmod
+    with tempfile.TemporaryDirectory() as tmp:
+        cpath = os.path.join(tmp, 'config.json')
+        with open(cpath, 'w') as f:
+            json.dump({'tracemaker_path': '/machine/tm',
+                       'kicad_cli': '/machine/kicad-cli',
+                       'work': 7}, f)
+        old_path = cfgmod.CONFIG_PATH
+        cfgmod.CONFIG_PATH = cpath
+        try:
+            cfg = runner.effective_cfg()
+            assert cfg['tracemaker_path'] == '/machine/tm', cfg
+            assert cfg['kicad_cli'] == '/machine/kicad-cli', cfg
+            assert cfg['work'] == cfgmod.DEFAULTS['work'], cfg
+            cfg = runner.effective_cfg({'tracemaker_path': '/ovr/tm'})
+            assert cfg['tracemaker_path'] == '/ovr/tm', cfg
+        finally:
+            cfgmod.CONFIG_PATH = old_path
+
+
+def test_kicad_drc_uses_cfg_kicad_cli():
+    # #225(c): the DRC yardstick must use the configured kicad_cli,
+    # not a hardcoded 'kicad-cli'.
+    with tempfile.TemporaryDirectory() as tmp:
+        calls = []
+        class _P(object):
+            returncode = 0
+            stdout = ''
+            stderr = ''
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            with open(cmd[cmd.index('--output') + 1], 'w') as f:
+                f.write('{}')
+            return _P()
+        old_run = runner.subprocess.run
+        runner.subprocess.run = fake_run
+        try:
+            runner.kicad_drc('b.kicad_pcb',
+                             os.path.join(tmp, 'o.json'),
+                             kicad_cli='/machine/kicad-cli')
+        finally:
+            runner.subprocess.run = old_run
+        assert calls and calls[0][0] == '/machine/kicad-cli', calls
+
+
+def test_worker_op_never_reads_stale_result():
+    # #225(d): a .result.json left by an earlier invocation must
+    # never be read as this invocation's result.  A result written
+    # by THIS invocation is trusted even when the worker exits
+    # non-zero afterwards (pcbnew can segfault at interpreter exit
+    # after successful work -- Pipeline._worker ignores rc too).
+    with tempfile.TemporaryDirectory() as tmp:
+        board = os.path.join(tmp, 'b.kicad_pcb')
+        with open(board, 'w') as f:
+            f.write('(kicad_pcb fake)')
+        with open(board + '.result.json', 'w') as f:
+            json.dump({'stale': True}, f)
+        class _P(object):
+            def __init__(self, rc):
+                self.returncode = rc
+                self.stdout = ''
+                self.stderr = 'boom'
+        old_run = runner.subprocess.run
+        runner.subprocess.run = lambda cmd, **kw: _P(1)
+        try:
+            try:
+                got = runner.worker_op('strip', board)
+                raise AssertionError('stale result was trusted: %r'
+                                     % (got,))
+            except RuntimeError:
+                pass
+            def fake_fresh(cmd, **kw):
+                res = cmd[cmd.index('--result') + 1]
+                with open(res, 'w') as f:
+                    json.dump({'fresh': 1}, f)
+                return _P(1)
+            runner.subprocess.run = fake_fresh
+            got = runner.worker_op('strip', board)
+            assert got == {'fresh': 1}, got
+        finally:
+            runner.subprocess.run = old_run
 
 
 if __name__ == '__main__':
