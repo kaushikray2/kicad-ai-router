@@ -824,12 +824,6 @@ next release).
 ## Remaining (in sequence)
 
 ### P2.7a — Performance quick wins (4–8 h)
-Remove verified double-gating (the base is gated twice per run; the
-final is gated by finalize and again by both callers; the portfolio
-winner is re-gated — ~2 gate cycles saved per run, ~4 on escalation);
-a persistent worker process or batched gate calls; profile one AUTO run
-end to end and attack the top fixed cost.
-
 **Landed on main (#190).** The
 profile was worse than the estimate: a mapone AUTO run made 12 gate
 calls for 2 distinct board states — 85.1 s of gate wall in a 174.6 s
