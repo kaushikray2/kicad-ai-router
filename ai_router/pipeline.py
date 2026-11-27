@@ -356,6 +356,41 @@ def _router_added(cur, base):
     return [f for i, f in enumerate(cur) if i not in matched]
 
 
+def _hv_worst_pair_req_mm(d, doms, terminations=True):
+    """#200: the worst IPC-2221B spacing (mm) domain `d` must keep
+    against the whole declared domain set -- every other declared
+    domain AND the implicit rest-of-board domain at 0 V (coating
+    'uncoated', altitude the max over the declared set) -- with
+    each pair evaluated from BOTH sides (hvdomains'
+    pair_required_symmetric_mm) so the governing side's coating /
+    altitude wins.  terminations=True (the default) applies the
+    A6/A7 termination columns alongside the conductor columns:
+    the materialise paths stamp around PADS, and pads are
+    terminations, not conductors (at 30 V uncoated the conductor
+    column B2 reads 0.10 mm where terminations require 0.25 mm).
+    Shared by _domain_setup, _eng_patch_pro_hv and (through the
+    symmetric primitive) the tool_hv_domains check path, so all
+    three HV paths agree on the domain set and the requirement."""
+    if _hvdomains is None:
+        return 0.0
+    def _v(x):
+        return float(x.get('peak_v', x.get('voltage_v')) or 0.0)
+    implicit = {'peak_v': 0.0, 'voltage_v': 0.0,
+                'coating': 'uncoated',
+                'altitude_m': max([float(x.get('altitude_m') or 0)
+                                   for x in doms] or [0])}
+    req = 0.0
+    for o in list(doms) + [implicit]:
+        if o is d:
+            continue
+        dv = abs(_v(d) - _v(o))
+        if dv <= 0:
+            continue
+        req = max(req, _hvdomains.pair_required_symmetric_mm(
+            dv, True, d, o, terminations)[0])
+    return req
+
+
 class Pipeline:
     def __init__(self, cfg, board_path, log):
         self.cfg = dict(cfg)  # #189: the run coerces keys (route_open_only forces strip_existing off); that write belongs to the run, not to the caller's dict
@@ -820,22 +855,12 @@ class Pipeline:
         doms = list(mk.hv_domains or [])
         if not doms:
             return {}
-        volts = [d.get('peak_v', d.get('voltage_v')) or 0.0 for d in doms]
-        reqs = []
-        for i, d in enumerate(doms):
-            req = 0.0
-            for j, e in enumerate(doms):
-                if i == j:
-                    continue
-                req = max(req, _hvdomains.pair_required_mm(
-                    abs(volts[i] - volts[j]), True,
-                    d.get('coating', 'uncoated'), d.get('altitude_m', 0),
-                    True)[0])
-            # the rest of the board sits at 0 V
-            req = max(req, _hvdomains.pair_required_mm(
-                abs(volts[i]), True, d.get('coating', 'uncoated'),
-                d.get('altitude_m', 0), True)[0])
-            reqs.append(req)
+        # #200: one shared worst-pair computation (both sides of
+        # every pair + the implicit 0 V rest-of-board domain),
+        # shared with _domain_setup so the netclass path and the
+        # finisher-rect path can never disagree again.
+        reqs = [_hv_worst_pair_req_mm(d, doms, terminations=True)
+                for d in doms]
         pro_path = os.path.join(self.workdir, 'input.kicad_pro')
         data = None
         if os.path.exists(pro_path):
@@ -1710,16 +1735,14 @@ class Pipeline:
                         if pads_b:
                             cand.append(H.min_clearance(ia, pads_b)[0])
                         term = bool(cand) and abs(min(cand) - gap) < 1e-9
-                    req_a, col_a, cond_a = H.pair_required_mm(
-                        dv, surf, da.get('coating', 'uncoated'),
-                        da.get('altitude_m', 0), term)
-                    req_b, col_b, cond_b = H.pair_required_mm(
-                        dv, surf, db.get('coating', 'uncoated'),
-                        db.get('altitude_m', 0), term)
-                    if req_a >= req_b:
-                        req, col, cond_col = req_a, col_a, cond_a
-                    else:
-                        req, col, cond_col = req_b, col_b, cond_b
+                    # #200: the shared symmetric primitive --
+                    # both sides evaluated, the larger governs
+                    # (identical semantics to the open-coded pair
+                    # this replaces; the materialise paths now
+                    # use the same primitive via
+                    # _hv_worst_pair_req_mm).
+                    req, col, cond_col = H.pair_required_symmetric_mm(
+                        dv, surf, da, db, term)
                     entry = {'layer': layer, 'column': col,
                              'conductor_column': cond_col,
                              'termination': term,
@@ -1727,13 +1750,8 @@ class Pipeline:
                     if dv > 500:
                         # #128 (B2): disclose the whole-voltage
                         # reading alongside the primary one
-                        alt = max(
-                            H.pair_required_alt_mm(
-                                dv, surf, da.get('coating', 'uncoated'),
-                                da.get('altitude_m', 0), term)[0],
-                            H.pair_required_alt_mm(
-                                dv, surf, db.get('coating', 'uncoated'),
-                                db.get('altitude_m', 0), term)[0])
+                        alt = H.pair_required_alt_symmetric_mm(
+                            dv, surf, da, db, term)
                         entry['required_mm_whole_voltage_reading'] = round(alt, 3)
                     entry['clearance_mm'] = round(gap, 3)
                     entry['clearance_at'] = [round(pa[0], 2),
@@ -1856,16 +1874,16 @@ class Pipeline:
         if _hvdomains is not None:
             H = _hvdomains
             for d in [d for d in mk.hv_domains if d.get('materialise')]:
-                req = 0.0
-                for o in mk.hv_domains:
-                    if o is d:
-                        continue
-                    dv = abs(d['voltage_v'] - o['voltage_v'])
-                    if dv > 0:
-                        req = max(req, H.required_spacing_mm(
-                            dv, H.column_for(
-                                True, d.get('coating', 'uncoated'),
-                                d.get('altitude_m', 0))))
+                # #200: the rects are stamped around PADS, so the
+                # requirement is the shared worst-pair value WITH
+                # termination columns and WITH the implicit 0 V
+                # rest-of-board domain -- the old loop maximised
+                # over declared domains only, with the conductor
+                # column (B2), so a single materialise domain got
+                # req 0 (zero keepouts) and every other board got
+                # a radius understated by the B2-vs-A6 difference.
+                req = _hv_worst_pair_req_mm(d, mk.hv_domains,
+                                            terminations=True)
                 if req <= 0:
                     continue
                 rects = []

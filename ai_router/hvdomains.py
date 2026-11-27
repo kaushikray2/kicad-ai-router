@@ -144,6 +144,39 @@ def pair_required_alt_mm(delta_v, surface, coating='uncoated',
                           termination, required_spacing_alt_mm)
 
 
+def pair_required_symmetric_mm(delta_v, surface, dom_a, dom_b,
+                               termination=False):
+    """(required_mm, effective_column, conductor_column) for a
+    domain PAIR, evaluated from BOTH sides -- each side's own
+    coating/altitude -- with the larger requirement governing
+    (#200: the materialise path used to consult only one side,
+    so an uncoated neighbour never dominated a coated domain).
+    dom_a/dom_b are markings-style dicts with optional 'coating'
+    and 'altitude_m'.  Ties go to side A, matching the check
+    path's historic pick."""
+    ra = pair_required_mm(delta_v, surface,
+                          dom_a.get('coating', 'uncoated'),
+                          dom_a.get('altitude_m', 0), termination)
+    rb = pair_required_mm(delta_v, surface,
+                          dom_b.get('coating', 'uncoated'),
+                          dom_b.get('altitude_m', 0), termination)
+    return ra if ra[0] >= rb[0] else rb
+
+
+def pair_required_alt_symmetric_mm(delta_v, surface, dom_a, dom_b,
+                                   termination=False):
+    """The whole-voltage above-500 V reading (#128 (B2)) of
+    pair_required_symmetric_mm -- the larger of the two sides'
+    alt readings, for disclosure alongside the primary value."""
+    ra = pair_required_alt_mm(delta_v, surface,
+                              dom_a.get('coating', 'uncoated'),
+                              dom_a.get('altitude_m', 0), termination)
+    rb = pair_required_alt_mm(delta_v, surface,
+                              dom_b.get('coating', 'uncoated'),
+                              dom_b.get('altitude_m', 0), termination)
+    return max(ra[0], rb[0])
+
+
 # ------------------------------------------------------------ geometry
 def _pt_seg(px, py, ax, ay, bx, by):
     dx, dy = bx - ax, by - ay
