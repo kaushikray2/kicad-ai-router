@@ -409,12 +409,12 @@ def impedance_entry(form):
         e['model'] = form['model']
         if form['model'] == 'coplanar':
             gap = _opt_float(form, 'gap_mm', 'Coplanar gap')
-            if gap is None:
+            if gap is None or gap <= 0:
                 # The pipeline refuses a coplanar marking without
                 # gap_mm (it cannot solve the geometry); refuse it
                 # at entry construction instead of at run time
                 # (#201).
-                raise ValueError('coplanar topology needs a gap (mm)')
+                raise ValueError('coplanar topology needs a positive gap (mm)')
             e['gap_mm'] = gap
     if form.get('dk_basis'):
         e['dk_basis'] = form['dk_basis']

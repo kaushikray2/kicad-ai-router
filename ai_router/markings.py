@@ -84,6 +84,16 @@ def _check_impedance_entry(entry, idx):
         raise MarkingsError('%s: "dk_basis" must be design|process|1mhz|stackup' % where)
     if entry.get('mask') is not None and entry['mask'] not in ('covered', 'open'):
         raise MarkingsError('%s: "mask" must be covered|open' % where)
+    if entry.get('model') is not None and entry['model'] not in (
+            'microstrip', 'stripline', 'coplanar'):
+        raise MarkingsError('%s: "model" must be microstrip|stripline|coplanar' % where)
+    if entry.get('gap_mm') is not None:
+        g = entry['gap_mm']
+        if not _num(g) or g <= 0:
+            raise MarkingsError('%s: "gap_mm" must be a positive number' % where)
+        out['gap_mm'] = float(g)
+    if entry.get('model') == 'coplanar' and out.get('gap_mm') is None:
+        raise MarkingsError('%s: model="coplanar" requires a positive "gap_mm"' % where)
     if entry.get('layers') is not None:
         layers = entry['layers']
         if (not isinstance(layers, list)
