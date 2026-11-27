@@ -189,25 +189,33 @@ def run_board(board, prep_meta, stack_name, cfg, fingerprint, run_dir, log):
             'vias', 'wirelength_mm')}
         final = res.get('final_board')
         rec['final_board'] = final
-        if final and os.path.exists(final):
-            out_copy = os.path.join(bdir, 'result.kicad_pcb')
-            shutil.copy2(final, out_copy)
-            pro = os.path.join(pipe.workdir, 'input.kicad_pro')
-            if os.path.exists(pro):
-                shutil.copy2(pro, os.path.join(bdir, 'result.kicad_pro'))
-            dru = os.path.join(pipe.workdir, 'input.kicad_dru')
-            if os.path.exists(dru):
-                shutil.copy2(dru, os.path.join(bdir, 'result.kicad_dru'))
-            out_doc = kicad_drc(out_copy,
-                                os.path.join(bdir, 'output.drc.json'))
-            rec['output_drc'] = drc_mod.parse_drc_report(out_doc)
-            rec['caused'] = drc_mod.caused_deltas(
-                rec['output_drc']['kinds'], rec['input_drc']['kinds'])
-            rec['drift'] = {
-                'gate_violations': g.get('violations_total'),
-                'kicad_violations': rec['output_drc']['total'],
-                'gate_unconnected': g.get('unconnected_total'),
-                'kicad_unconnected': rec['output_drc']['unconnected']}
+        # #223: a run that produced no final board measured
+        # nothing -- it is an error record, not a 'done' record
+        # with the measurement blocks silently absent (the
+        # nothing-worse gate reads a missing caused/gate as a
+        # failed board, but the record must not claim success).
+        if not (final and os.path.exists(final)):
+            raise RuntimeError(
+                'pipeline produced no final board (final_board=%r)'
+                % (final,))
+        out_copy = os.path.join(bdir, 'result.kicad_pcb')
+        shutil.copy2(final, out_copy)
+        pro = os.path.join(pipe.workdir, 'input.kicad_pro')
+        if os.path.exists(pro):
+            shutil.copy2(pro, os.path.join(bdir, 'result.kicad_pro'))
+        dru = os.path.join(pipe.workdir, 'input.kicad_dru')
+        if os.path.exists(dru):
+            shutil.copy2(dru, os.path.join(bdir, 'result.kicad_dru'))
+        out_doc = kicad_drc(out_copy,
+                            os.path.join(bdir, 'output.drc.json'))
+        rec['output_drc'] = drc_mod.parse_drc_report(out_doc)
+        rec['caused'] = drc_mod.caused_deltas(
+            rec['output_drc']['kinds'], rec['input_drc']['kinds'])
+        rec['drift'] = {
+            'gate_violations': g.get('violations_total'),
+            'kicad_violations': rec['output_drc']['total'],
+            'gate_unconnected': g.get('unconnected_total'),
+            'kicad_unconnected': rec['output_drc']['unconnected']}
         led = os.path.join(pipe.workdir, 'ledger.json')
         if os.path.exists(led):
             shutil.copy2(led, os.path.join(bdir, 'ledger.json'))

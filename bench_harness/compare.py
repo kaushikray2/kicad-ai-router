@@ -101,6 +101,19 @@ def compare_runs(a, b):
         'b_better': sum(1 for r in rows if r['verdict'] == 'b_better'),
         'b_worse': sum(1 for r in rows if r['verdict'] == 'b_worse'),
         'ties': sum(1 for r in rows if r['verdict'] == 'tie'),
+        # #223: incomplete records are counted, never silently
+        # dropped from the sums above (a crashed board used to
+        # lower the aggregates by vanishing from them).
+        'missing_a': sum(1 for r in ra.values()
+                         if r.get('status') != 'done'
+                         or not r.get('gate')),
+        'missing_b': sum(1 for r in rb.values()
+                         if r.get('status') != 'done'
+                         or not r.get('gate')),
+        'error_a': sum(1 for r in ra.values()
+                       if r.get('status') == 'error'),
+        'error_b': sum(1 for r in rb.values()
+                       if r.get('status') == 'error'),
     }
     return {'rows': rows, 'aggregate': agg,
             'a_stack': (a['manifest'] or {}).get('stack'),
@@ -132,10 +145,14 @@ def render_compare_markdown(comp, title='A/B comparison'):
     lines += ['', 'Aggregate over %d boards: unconnected A %d vs B %d; '
               'splits A %d vs B %d; copper A %d vs B %d; caused A %d vs '
               'B %d; B better on %d, worse on %d, tied on %d boards '
-              '(by unconnected).' % (a['boards'], a['unconnected_a'],
+              '(by unconnected); missing/error records: A %d missing '
+              '(%d error), B %d missing (%d error) -- incomplete '
+              'boards are excluded from the sums and fail the '
+              'nothing-worse gate.' % (a['boards'], a['unconnected_a'],
               a['unconnected_b'], a['splits_a'], a['splits_b'],
               a['copper_a'], a['copper_b'], a['caused_a'], a['caused_b'],
-              a['b_better'], a['b_worse'], a['ties'])]
+              a['b_better'], a['b_worse'], a['ties'], a['missing_a'],
+              a['error_a'], a['missing_b'], a['error_b'])]
     return '\n'.join(lines) + '\n'
 
 
@@ -156,6 +173,32 @@ def nothing_worse(candidate_records, baseline_records):
                                 'baseline': None, 'candidate': 'present',
                                 'detail': 'no baseline record'})
             continue
+        # #223: a record that did not complete a measured run is a
+        # regression, never a pass -- a crashed candidate used to
+        # sail through here because its missing caused read as {}
+        # (all zeros) and its missing gate values skipped every
+        # triple check.
+        if crec.get('status') != 'done':
+            regressions.append({'board': slug, 'kind': 'status',
+                                'baseline': brec.get('status'),
+                                'candidate': crec.get('status'),
+                                'detail': 'candidate run did not '
+                                          'complete'})
+            continue
+        if brec.get('status') != 'done':
+            regressions.append({'board': slug, 'kind': 'status',
+                                'baseline': brec.get('status'),
+                                'candidate': crec.get('status'),
+                                'detail': 'baseline run did not '
+                                          'complete'})
+            continue
+        if 'caused' not in crec or 'caused' not in brec:
+            regressions.append({'board': slug, 'kind': 'caused',
+                                'baseline': 'caused' in brec,
+                                'candidate': 'caused' in crec,
+                                'detail': 'caused DRC missing -- the '
+                                          'board was not measured'})
+            continue
         c_caused = crec.get('caused') or {}
         b_caused = brec.get('caused') or {}
         for kind in sorted(set(c_caused) | set(b_caused)):
@@ -166,7 +209,14 @@ def nothing_worse(candidate_records, baseline_records):
         cg, bg = crec.get('gate') or {}, brec.get('gate') or {}
         for f in TRIPLE_FIELDS:
             cv, bv = cg.get(f), bg.get(f)
-            if cv is not None and bv is not None and cv > bv:
+            if cv is None or bv is None:
+                regressions.append({'board': slug,
+                                    'kind': 'gate.' + f,
+                                    'baseline': bv, 'candidate': cv,
+                                    'detail': 'gate value missing -- '
+                                              'the board was not '
+                                              'measured'})
+            elif cv > bv:
                 regressions.append({'board': slug, 'kind': 'gate.' + f,
                                     'baseline': bv, 'candidate': cv})
     return {'ok': not regressions, 'regressions': regressions}
