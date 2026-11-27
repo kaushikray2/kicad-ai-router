@@ -315,3 +315,35 @@ def test_impedance_gap_must_be_positive():
     e = mm.impedance_entry({'net': 'RF_IN', 'z0': 50,
                             'model': 'coplanar', 'gap_mm': 0.2})
     assert e['gap_mm'] == 0.2
+
+
+def test_summarize_length_group_reads_post_meander_state():
+    # #217: tool_length_match leaves the top-level grade/delta at
+    # their PRE-meander values and stores the post-meander grade
+    # under 'after'.  A group tuned back into tolerance must
+    # report PASS with the after delta and a tuned annotation;
+    # a group still out after tuning stays FAIL with the AFTER
+    # delta; a member with no 'after' reads its top level.
+    rep = {'length_groups': {'groups': [
+        {'name': 'TUNED', 'members': {
+            'NET_A': {'within_tolerance': False, 'delta_mm': 8.0, 'delta_ps': 52.0,
+                      'meander': {'adopted': True, 'added_mm': 7.6},
+                      'after': {'within_tolerance': True, 'delta_mm': 0.4, 'delta_ps': 2.6}},
+            'NET_B': {'within_tolerance': True, 'delta_mm': 0.1, 'delta_ps': 0.7}}},
+        {'name': 'STILL_OUT', 'members': {
+            'NET_C': {'within_tolerance': False, 'delta_mm': 9.0, 'delta_ps': 58.0,
+                      'meander': {'adopted': True, 'added_mm': 5.0},
+                      'after': {'within_tolerance': False, 'delta_mm': 3.5, 'delta_ps': 22.0},
+                      'failed': True}}},
+        {'name': 'PLAIN', 'members': {
+            'NET_D': {'within_tolerance': False, 'delta_mm': 4.0, 'delta_ps': 26.0}}},
+    ]}}
+    rows = {r['marking']: r for r in mm.summarize_report(rep)['rows']}
+    tuned = rows['Length group — TUNED']
+    assert tuned['verdict'] == 'PASS', tuned
+    assert '\u03940.40 mm' in tuned['detail'] and '(tuned +7.60 mm)' in tuned['detail'], tuned['detail']
+    out = rows['Length group — STILL_OUT']
+    assert out['verdict'] == 'FAIL', out
+    assert '\u03943.50 mm' in out['detail'] and 'outside tolerance' in out['detail'], out['detail']
+    plain = rows['Length group — PLAIN']
+    assert plain['verdict'] == 'FAIL' and '\u03944.00 mm' in plain['detail'], plain
