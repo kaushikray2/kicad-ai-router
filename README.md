@@ -2,7 +2,7 @@
 
 Developed by [SiliconBrane Inc](https://www.siliconbrane.com)
 
-![version](https://img.shields.io/badge/version-v1.11.6-blue)
+![version](https://img.shields.io/badge/version-v1.12.5-blue)
 ![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 
 KiCad AI Router is a routing and routing-repair system for KiCad 10.
@@ -164,7 +164,7 @@ or download the package zip from this repository and install it
 from the Plugin and Content Manager via "Install from File...":
 
 ```
-pcm-repo/ai-router-1.11.6.zip
+pcm-repo/ai-router-1.12.5.zip
 ```
 
 Configure the backend connection in:
