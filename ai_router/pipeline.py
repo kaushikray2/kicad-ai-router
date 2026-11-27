@@ -27,6 +27,7 @@ from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(HERE, 'worker.py')
+RACE_LEG = os.path.join(HERE, 'race_leg.py')  # Phase 2E (#66): one portfolio leg, run as a child process
 
 class PipelineError(Exception):
     pass
@@ -237,6 +238,41 @@ def _accept_key(g):
     _intr = int((g or {}).get('skeleton_intrusions') or 0)
     return (fault_count(g), 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
             len((g or {}).get('split_nets') or []), starved_delta(g), _intr, cost_tail(g))
+
+_PORTFOLIO_ENGINES = ('freerouting', 'krt', 'tm_relax', 'tm_global', 'tm_escape')
+
+
+def _portfolio_complete(g):
+    # Phase 2E (#66): a portfolio candidate is COMPLETE when it
+    # connected everything and added no faults -- the two zero
+    # counts WeaveEngine's first_accepted accepts on (its key's
+    # open-connection and violation counts; _accept_key here keys
+    # faults first, so both counts are named explicitly). A
+    # missing unconnected_total is not 0: not complete.
+    return (g or {}).get('unconnected_total') == 0 and fault_count(g) == 0
+
+
+def _race_winner(outcomes):
+    # Phase 2E (#66): portfolio selection, a pure function of the
+    # outcomes IN FIXED CANDIDATE ORDER -- the first COMPLETE
+    # finished candidate wins; failing that, the best _accept_key
+    # among finished candidates, ties keeping the earlier
+    # candidate (the pre-#66 strict-< scan). Failed, no-board,
+    # out-raced and not-run legs can never win. Nothing here reads
+    # a clock or a finish order, so the winner is the same for any
+    # worker count: legs after a complete one may or may not have
+    # finished when the decision lands, and this scan has already
+    # passed the complete leg before their keys could matter.
+    best = None
+    for i, oc in enumerate(outcomes):
+        if oc.get('status') != 'finished':
+            continue
+        if _portfolio_complete(oc.get('gate')):
+            return i
+        if best is None or tuple(oc['key']) < tuple(outcomes[best]['key']):
+            best = i
+    return best
+
 
 def fault_count(g):
     c = (g or {}).get('classes') or {}
@@ -551,6 +587,23 @@ class Pipeline:
         # that violates the layer law keys worse (banned tracks are
         # faults), so selection cannot prefer a law-breaking board
         # over a clean one at the same connectivity.
+        # Phase 2E (#66): the candidates are RACED, in heats, and
+        # selection keeps the first COMPLETE candidate in the list's
+        # fixed priority order -- never the first to finish
+        # (WeaveEngine's first_accepted discipline, adapted; the
+        # selection itself is _race_winner). Complete = no
+        # unconnected items and no faults. When no candidate
+        # completes, the winner is the best _accept_key over the
+        # candidates that finished -- the pre-#66 selection over
+        # the same set -- so the only boards whose winner changes
+        # are boards a candidate completed. The outcome never
+        # depends on worker count or finish order: with one worker
+        # the legs run in-process, in order, stopping after the
+        # first complete one. No wall-clock deadline decides
+        # anything (deadlines are #61's, and are labelled
+        # non-deterministic there); every leg stays bounded by its
+        # work budget alone, so deterministic runs stay
+        # deterministic.
         engines = list(engines)
         # v1.11.3 (#109): freerouting/krt cannot honour layer_cost --
         # they take no layer-law arguments, and priced layers leave
@@ -588,63 +641,330 @@ class Pipeline:
                     engines.remove(eng)
                     excluded_det.append(eng)
                     self.log('portfolio: %s excluded -- deterministic mode requires the reproducible engine only (#176)' % eng)
-        results = []
-        route_recs = {}
-        winner = None
+        # Fixed priority order = list order. Unknown names keep
+        # their historical behaviour: logged, never run, and still
+        # listed in the record's 'engines'.
+        candidates = []
         for eng in engines:
-            outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
-            try:
-                if eng == 'freerouting':
-                    r = self._worker('freeroute', '--board', self.base, '--out', outp, timeout=3900)
-                elif eng == 'krt':
-                    r = self._worker('krt_route', '--board', self.base, '--out', outp, timeout=3900)
-                elif eng in ('tm_relax', 'tm_global', 'tm_escape'):
-                    r = self._route_variant(eng, outp)
-                else:
-                    self.log('portfolio: unknown engine %r skipped' % eng)
-                    continue
-            except Exception as e:
-                self.log('portfolio: %s failed (%s)' % (eng, e))
-                continue
-            if not os.path.exists(outp):
-                self.log('portfolio: %s produced no board (%s)' % (eng, (r or {}).get('status')))
-                continue
-            g = self.tool_gate(outp)
-            # v1.9.6 (#37 note): candidate selection is FAULTS-first by
-            # design, while pass selection in the orchestrator is
-            # connectivity-first. The layering is deliberate: faults-
-            # first here is what kept KRT's 0-unconnected / 430-1142-
-            # copper candidates from winning the Phase 1 A/B. Do not
-            # 'unify' the keys without re-running that A/B.
-            key = _accept_key(g)
-            results.append({'engine': eng, 'key': list(key), 'board': outp,
-                            'unconnected': g.get('unconnected_total'),
-                            'copper': g.get('copper_violations'),
-                            'banned': g.get('banned_layer_tracks'),
-                            'seconds': (r or {}).get('seconds')})
-            self.log('portfolio: %s key %s (unc %s, copper %s, banned %s)' %
-                     (eng, key, g.get('unconnected_total'), g.get('copper_violations'), g.get('banned_layer_tracks')))
-            if (r or {}).get('route'): route_recs[eng] = r['route']
-            if winner is None or key < winner[0]:
-                winner = (key, outp, g, eng)
+            if eng in _PORTFOLIO_ENGINES:
+                candidates.append(eng)
+            else:
+                self.log('portfolio: unknown engine %r skipped' % eng)
+        try:
+            workers = int(self.cfg.get('portfolio_workers', 4) or 1)
+        except (TypeError, ValueError):
+            workers = 1
+        if workers < 1:
+            workers = 1
+        raced = workers > 1 and len(candidates) > 1
+        outcomes = []
+        if raced:
+            outcomes = self._race_portfolio(candidates, workers)
+        else:
+            for eng in candidates:
+                oc = self._run_leg(eng)
+                outcomes.append(oc)
+                self._log_leg_outcome(oc)
+                if oc['status'] == 'finished' and _portfolio_complete(oc['gate']):
+                    break
+            for eng in candidates[len(outcomes):]:
+                oc = {'engine': eng, 'status': 'not-run'}
+                outcomes.append(oc)
+                self._log_leg_outcome(oc)
+        wi = _race_winner(outcomes)
+        winner = outcomes[wi] if wi is not None else None
+        adopted = None
+        if winner is not None:
+            adopted = winner['board']
+            if raced:
+                # The winning leg ran in its own workdir; adopt its
+                # board into this one, under the name the sequential
+                # path would have produced for it.
+                dst = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', winner['engine']))
+                shutil.copy(adopted, dst)
+                adopted = dst
+                self._sidecars(adopted)
+        if raced:
+            # The legs gated in their own processes; record their
+            # verdicts in this ledger, in candidate order -- the
+            # same shape the sequential path's in-process gates
+            # produce. The winner's record names the adopted board.
+            for oc in outcomes:
+                if oc['status'] == 'finished':
+                    rec = oc['gate']
+                    if oc is winner:
+                        rec = copy.deepcopy(rec)
+                        rec['board'] = adopted
+                    self._record('gate', rec)
+        results = []
+        for oc in outcomes:
+            e = {'engine': oc['engine'], 'termination': oc['status']}
+            if oc['status'] == 'finished':
+                g = oc['gate']
+                e.update({'key': list(oc['key']),
+                          'board': adopted if oc is winner else oc['board'],
+                          'unconnected': g.get('unconnected_total'),
+                          'copper': g.get('copper_violations'),
+                          'banned': g.get('banned_layer_tracks'),
+                          'seconds': oc.get('seconds')})
+            elif oc['status'] == 'failed':
+                e['error'] = oc.get('error')
+            elif oc['status'] == 'no_board':
+                e['seconds'] = oc.get('seconds')
+            results.append(e)
         _rec = {'engines': list(engines), 'results': results,
-                'winner': winner[1] if winner else None}
+                'winner': adopted}
         if excluded: _rec['excluded_layer_cost'] = excluded
         if excluded_roo: _rec['excluded_route_open_only'] = excluded_roo
         if excluded_det: _rec['excluded_deterministic'] = excluded_det
+        _rec['racing'] = {'workers': workers,
+                          'mode': 'parallel' if raced else 'sequential',
+                          'selection': ('first-complete' if winner is not None and _portfolio_complete(winner['gate'])
+                                        else 'best-key' if winner is not None else 'none'),
+                          'winner_engine': winner['engine'] if winner is not None else None}
         self._record('portfolio', _rec)
-        if winner:
-            self.current = winner[1]
+        if winner is not None:
+            self.current = adopted
+            wg = winner['gate']
+            if raced:
+                wg = copy.deepcopy(wg)
+                wg['board'] = adopted
+                self.last_gate = wg
             # v1.12.2 (#177): a TraceMaker win seeds the job route
             # record from the winning variant's route JSON -- with
             # the main passes skipped on a clean win, nothing else
             # would ever populate it.
-            _wr = route_recs.get(winner[3])
+            _wr = winner.get('route')
             if _wr:
-                self.last_route = dict(_wr, source='portfolio:' + winner[3])
+                self.last_route = dict(_wr, source='portfolio:' + winner['engine'])
                 self._record('route', self.last_route)
-            return winner[2]
+            return wg
         return None
+
+    def _run_leg(self, eng):
+        # #66: one portfolio candidate, run from the base and gated.
+        # Returns an outcome dict and never raises -- a failed leg
+        # is data, exactly as it was when this body ran inline in
+        # tool_portfolio's loop -- and never touches self.current
+        # or self.last_route: selection and adoption live in
+        # tool_portfolio. Runs identically in this process
+        # (sequential mode) and in a race child (race_leg.py), which
+        # is what makes the two modes' outcomes comparable.
+        outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
+        try:
+            if eng == 'freerouting':
+                r = self._worker('freeroute', '--board', self.base, '--out', outp, timeout=3900)
+            elif eng == 'krt':
+                r = self._worker('krt_route', '--board', self.base, '--out', outp, timeout=3900)
+            else:
+                r = self._route_variant(eng, outp)
+        except Exception as e:
+            return {'engine': eng, 'status': 'failed', 'board': None,
+                    'error': str(e)}
+        if not os.path.exists(outp):
+            return {'engine': eng, 'status': 'no_board', 'board': None,
+                    'seconds': (r or {}).get('seconds'),
+                    'detail': (r or {}).get('status')}
+        try:
+            g = self.tool_gate(outp)
+        except Exception as e:
+            # A leg whose board cannot be gated has produced no
+            # usable candidate: a failed leg, in both modes (the
+            # pre-#66 loop let a gate exception abort the whole
+            # stage; with legs isolated per process that asymmetry
+            # would make the outcome depend on the worker count).
+            return {'engine': eng, 'status': 'failed', 'board': None,
+                    'error': 'gate failed: %s' % e}
+        oc = {'engine': eng, 'status': 'finished', 'board': outp,
+              'gate': g, 'key': list(_accept_key(g)),
+              'seconds': (r or {}).get('seconds')}
+        if (r or {}).get('route'):
+            oc['route'] = r['route']
+        return oc
+
+    def _log_leg_outcome(self, oc):
+        # The per-leg log lines, emitted at resolution time: in
+        # sequential mode that is immediately after the leg (the
+        # pre-#66 points); in raced mode it is in candidate order
+        # as each heat resolves, so the run log is deterministic
+        # even though the legs were not.
+        eng = oc['engine']
+        if oc['status'] == 'finished':
+            g = oc['gate']
+            self.log('portfolio: %s key %s (unc %s, copper %s, banned %s)' %
+                     (eng, tuple(oc['key']), g.get('unconnected_total'),
+                      g.get('copper_violations'), g.get('banned_layer_tracks')))
+        elif oc['status'] == 'failed':
+            self.log('portfolio: %s failed (%s)' % (eng, oc.get('error')))
+        elif oc['status'] == 'no_board':
+            self.log('portfolio: %s produced no board (%s)' % (eng, oc.get('detail')))
+        elif oc['status'] == 'out-raced':
+            self.log('portfolio: %s out-raced -- terminated once the outcome was decided' % eng)
+        elif oc['status'] == 'not-run':
+            self.log('portfolio: %s not run -- an earlier candidate completed' % eng)
+
+    def _race_portfolio(self, candidates, workers):
+        # #66: heats of up to `workers` leg processes, in fixed
+        # priority order. A heat resolves in candidate order (see
+        # _race_heat): once its resolved prefix ends in a complete
+        # leg, later heats never start. Returns one outcome per
+        # candidate, in candidate order.
+        outcomes = [None] * len(candidates)
+        heats = 0
+        for start in range(0, len(candidates), workers):
+            heat = candidates[start:start + workers]
+            heats += 1
+            self.log('portfolio: racing heat %d -- %s (%d workers)' % (heats, ', '.join(heat), workers))
+            heat_outcomes = self._race_heat(heat, start)
+            for j, oc in enumerate(heat_outcomes):
+                outcomes[start + j] = oc
+                self._log_leg_outcome(oc)
+            if any(oc['status'] == 'finished' and _portfolio_complete(oc['gate']) for oc in heat_outcomes):
+                break
+        for i, oc in enumerate(outcomes):
+            if oc is None:
+                outcomes[i] = {'engine': candidates[i], 'status': 'not-run'}
+                self._log_leg_outcome(outcomes[i])
+        return outcomes
+
+    def _race_heat(self, heat, start_index):
+        # One heat: every leg starts together; results are taken
+        # in candidate order, never finish order (first_accepted).
+        # The heat is decided the moment the resolved prefix ends
+        # in a complete leg -- legs still running are terminated
+        # and recorded out-raced; a leg that wrote its result
+        # before the kill lands keeps it.
+        handles = [self._spawn_leg(start_index + j, eng) for j, eng in enumerate(heat)]
+        outcomes = [None] * len(heat)
+        deadline = time.time() + self._leg_watchdog_s()
+        try:
+            pending = set(range(len(heat)))
+            while pending:
+                progressed = False
+                for j in sorted(pending):
+                    oc = self._poll_leg(handles[j])
+                    if oc is not None:
+                        outcomes[j] = oc
+                        pending.discard(j)
+                        progressed = True
+                decided = False
+                for j in range(len(heat)):
+                    if outcomes[j] is None:
+                        break
+                    if outcomes[j]['status'] == 'finished' and _portfolio_complete(outcomes[j]['gate']):
+                        decided = True
+                if decided or time.time() > deadline:
+                    for j in sorted(pending):
+                        oc = self._poll_leg(handles[j])
+                        if oc is not None:
+                            outcomes[j] = oc
+                        else:
+                            self._kill_leg(handles[j])
+                            if decided:
+                                outcomes[j] = {'engine': heat[j], 'status': 'out-raced'}
+                            else:
+                                outcomes[j] = {'engine': heat[j], 'status': 'failed',
+                                               'error': 'leg watchdog: no result within %d s' % self._leg_watchdog_s()}
+                    pending.clear()
+                    break
+                if not progressed:
+                    time.sleep(0.2)
+        finally:
+            for h in handles:
+                if h['proc'].poll() is None:
+                    self._kill_leg(h)
+        return outcomes
+
+    def _leg_watchdog_s(self):
+        # Backstop only: every leg's own subprocess calls already
+        # carry timeouts (worker legs 3900 s; engine legs scaled by
+        # the work budget). A leg alive past the largest of those
+        # plus margin is wedged, not slow; the watchdog reaps it
+        # and the leg records as failed. It never decides a winner.
+        return max(3900, engine_run.scaled_timeout(2400, self.cfg.get('work', 40000000))) + 1800
+
+    def _spawn_leg(self, idx, eng):
+        # Start one leg in its own process (race_leg.py), in its
+        # own session so the whole tree can be terminated as a
+        # group. The job JSON carries everything the child needs to
+        # rebuild the leg's Pipeline state, including this run's
+        # base-gate references (the #175 discipline: deltas key
+        # against the base board's own first-gate counts).
+        slug = re.sub(r'[^A-Za-z0-9]+', '-', eng)
+        legdir = os.path.join(self.workdir, 'race-%d-%s' % (idx, slug))
+        os.makedirs(legdir, exist_ok=True)
+        job = {'engine': eng, 'workdir': legdir,
+               'parent_workdir': self.workdir, 'base': self.base,
+               'cfg': self.cfg,
+               'base_starved': getattr(self, '_base_starved', None),
+               'base_banned': getattr(self, '_base_banned', None),
+               'base_sha': getattr(self, '_base_sha', None),
+               'copper_layers': getattr(self, '_copper_layers', None),
+               'locks_protected': bool(getattr(self, '_locks_protected', False))}
+        job_path = os.path.join(legdir, 'job.json')
+        with open(job_path, 'w') as f:
+            json.dump(job, f, default=str)
+        out_path = os.path.join(legdir, 'child.out')
+        with open(out_path, 'ab') as out:
+            proc = subprocess.Popen([sys.executable, RACE_LEG, job_path],
+                                    stdout=out, stderr=subprocess.STDOUT,
+                                    start_new_session=True)
+        return {'engine': eng, 'dir': legdir, 'proc': proc, 'stdout_path': out_path}
+
+    def _poll_leg(self, h):
+        # A leg's outcome once it is knowable: its result file
+        # (written atomically by the child), or a failure if the
+        # child exited without one. None while it is still running.
+        rp = os.path.join(h['dir'], 'leg-result.json')
+        if os.path.exists(rp):
+            try:
+                with open(rp) as f:
+                    oc = json.load(f)
+                oc['engine'] = h['engine']
+                return oc
+            except Exception:
+                pass  # mid-replace; read again on the next poll
+        if h['proc'].poll() is not None:
+            return {'engine': h['engine'], 'status': 'failed',
+                    'error': 'leg runner exited %s without a result (see %s)' % (h['proc'].returncode, h['stdout_path'])}
+        return None
+
+    def _kill_leg(self, h):
+        # Terminate a leg whose result is no longer needed (or
+        # that outlived the watchdog). The child runs in its own
+        # session: a group TERM reaches the child and the
+        # engine/worker processes it spawned; a group KILL follows
+        # after a grace period for anything still alive. (The
+        # timeout kill in worker._kill_group is the twin pattern;
+        # it cannot be imported here -- worker.py is a subprocess
+        # script that imports pcbnew.)
+        p = h['proc']
+        if p.poll() is not None:
+            return
+        if os.name == 'nt':
+            try:
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], capture_output=True, timeout=30)
+            except Exception:
+                try: p.kill()
+                except Exception: pass
+            return
+        import signal as _signal
+        try:
+            os.killpg(os.getpgid(p.pid), _signal.SIGTERM)
+        except Exception:
+            try: p.terminate()
+            except Exception: pass
+        try:
+            p.wait(timeout=5)
+            return
+        except Exception:
+            pass
+        try:
+            os.killpg(os.getpgid(p.pid), _signal.SIGKILL)
+        except Exception:
+            pass
+        try: p.wait(timeout=10)
+        except Exception: pass
 
     def _route_variant(self, eng, outp):
         # TraceMaker with a portfolio flag set and no advice -- the
