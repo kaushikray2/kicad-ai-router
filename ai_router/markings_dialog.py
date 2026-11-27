@@ -1165,7 +1165,16 @@ class MarkingsEditorDialog(wx.Dialog):
         # A net row stands for the markings picked on it: the
         # shown entry restores onto its own net's row.
         if desc.get('kind') == 'net' and sel.get('kind') == 'entry':
-            return (sel.get('section'), sel.get('index')) in                 marked.get(desc.get('net'), [])
+            if sel.get('net') is not None:
+                # #228: the entry was shown from a specific net
+                # row -- restore to THAT row.  A multi-net entry
+                # (pair / group / domain) sits in every one of
+                # its nets' marked lists, so matching on the
+                # entry alone lands on the first of its rows.
+                return (desc.get('net') == sel.get('net')
+                        and (sel.get('section'), sel.get('index'))
+                        in marked.get(desc.get('net'), []))
+            return (sel.get('section'), sel.get('index')) in marked.get(desc.get('net'), [])
         return False
 
     def _add_row(self, c0, c1, c2, desc):
@@ -1267,6 +1276,10 @@ class MarkingsEditorDialog(wx.Dialog):
                 self.Layout()
             s, i = marks[0]
             self._show_entry(s, i)
+            if self.selection:
+                # #228: remember which net row the entry was
+                # shown from, so a list refresh restores there.
+                self.selection['net'] = desc['net']
         elif desc['kind'] == 'entry':
             self._show_entry(desc['section'], desc['index'], desc.get('missing'))
         elif desc['kind'] == 'corners':
@@ -1300,6 +1313,8 @@ class MarkingsEditorDialog(wx.Dialog):
         if 0 <= k < len(marks):
             s, i = marks[k]
             self._show_entry(s, i)
+            if self.selection:
+                self.selection['net'] = desc['net']
 
     # ---------------------------------------------------------- actions
     def _on_apply(self, _evt):
@@ -1326,7 +1341,10 @@ class MarkingsEditorDialog(wx.Dialog):
         err = self.model.validate_working()
         self.set_form_note('Applied \u2713 (unsaved until Save)' if not err
                            else 'Applied, but the sidecar does not validate yet: %s' % err)
+        _net = self.selection.get('net')
         self.selection = {'kind': 'entry', 'section': section, 'index': index}
+        if _net is not None:
+            self.selection['net'] = _net
         self.refresh_list()
         self._show_entry(section, index)
         return True
