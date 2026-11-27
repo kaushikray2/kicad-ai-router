@@ -119,6 +119,40 @@ def test_pan_falls_back_to_transient_shape():
     assert (c.x, c.y) == (10_000_000, 20_000_000)
 
 
+def test_pan_long_track_falls_back_to_shape_at_target():
+    # #220: a 40 mm track whose end is 0.5 mm from the target must
+    # NOT be focused -- FocusOnItem centres on the item, i.e. the
+    # track midpoint ~20 mm away.  The point falls through to the
+    # transient shape centred exactly on the target.
+    md = _load()
+    if md is None:
+        return
+    board = _Board(tracks=[_Track(10_000_000, 20_000_000, 50_000_000, 20_000_000)])
+    fake = _fake_pcbnew(board)
+    assert md._pan_board_to(fake, board, 10.5, 20.0) is True
+    assert len(fake.focused) == 1 and isinstance(fake.focused[0], _Shape), fake.focused
+    c = fake.focused[0].center
+    assert (c.x, c.y) == (10_500_000, 20_000_000), (c.x, c.y)
+
+
+def test_pan_via_and_short_segment_still_focused():
+    # #220 guard legs: vias (start == end) and short segments stay
+    # eligible -- the fix must not over-exclude point-like items.
+    md = _load()
+    if md is None:
+        return
+    via = _Track(10_400_000, 20_000_000, 10_400_000, 20_000_000)
+    board = _Board(tracks=[via])
+    fake = _fake_pcbnew(board)
+    assert md._pan_board_to(fake, board, 10.5, 20.0) is True
+    assert fake.focused == [via], fake.focused
+    seg = _Track(9_000_000, 20_000_000, 12_000_000, 20_000_000)   # 3 mm
+    board = _Board(tracks=[seg])
+    fake = _fake_pcbnew(board)
+    assert md._pan_board_to(fake, board, 10.5, 20.0) is True
+    assert fake.focused == [seg], fake.focused
+
+
 class _Note:
     def __init__(self): self.text = ''
     def SetLabel(self, t): self.text = t
