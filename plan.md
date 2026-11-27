@@ -761,11 +761,14 @@ pcbnew.LoadPlugins.
 
 ## In progress
 
-- Nothing in flight. v1.12.5 (P2.7a #190 + round 7
-  fixes #207-#211) is released and recorded in Done
-  above; production backends stay on 1.10.2 until the
-  owner calls a deploy.
-  Next in sequence: **Phase 2E** (below). Open owner
+- Phase 2E is under way. Its first item, **#62 (bench
+  harness), has landed** on branch
+  `phase2e-bench-harness` (see the Phase 2E section);
+  next in the block is #66 (portfolio racing).
+  v1.12.5 (P2.7a #190 + round 7 fixes #207-#211) is
+  released and recorded in Done above; production
+  backends stay on 1.10.2 until the owner calls a
+  deploy. Open owner
   items: the #164/#165/#166 design rulings; #212
   (run_auto's orphaned Pipeline) with its design
   sketch; #172 (route-batch) stays open with its
@@ -825,6 +828,24 @@ definition comes from it.
    on raw counts. Committing the harness this way also discharges
    #54's remainder. First because every later verdict in this block,
    and the final exam, rides on it.
+   **LANDED 2026-11-26** (branch `phase2e-bench-harness`):
+   `bench_harness/` in the repo -- inventory with the
+   train/held-out split and a hard exam guard (held-out boards
+   refused outside `--exam`), prepared-input cache keyed by
+   source-file hash with byte-stability verified on every hit
+   (strip via the pipeline's own worker), single-stack runs
+   recording the gate triple + wall + ledger + a manifest
+   (git SHA, version, engine sha256, config fingerprint),
+   KiCad-DRC caused deltas per board per kind, A/B compare
+   tables, the nothing-worse gate, and a tiered ramp that
+   stops at the first regressing tier. Proof (train + fixture
+   boards only): selftest fixtures reproduced (hbridge 0/0/0,
+   mapone 0/0/0, Nomad 0/0/13), three dataset-v3 train boards
+   (one per stratum) ran end-to-end, a stack-vs-itself A/B
+   returned identical triples with the gate passing, and a
+   held-out selection was refused. This discharges #54's
+   remainder (comment posted there; #54 itself stays open
+   for the owner's closure call).
 2. **#66 — portfolio racing, fixed-order selection.** Race
    whole engine passes at varied parameter sets, in heats; selection
    keeps the first COMPLETE variant in a fixed priority order, never
