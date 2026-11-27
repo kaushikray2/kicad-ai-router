@@ -1045,10 +1045,27 @@ class MarkingsEditorDialog(wx.Dialog):
         self.form_note.Wrap(430)
 
     def _set_view(self, view):
+        if view == self.view:
+            return
+        if not self._confirm_pending():
+            # #215: refresh_list resets _list_sel, which would
+            # strand the active form (a later Cancel could no
+            # longer restore the list selection to its row).
+            # Put the radios back and stay.
+            self.view_net.SetValue(self.view == 'net')
+            self.view_group.SetValue(self.view == 'group')
+            return
         self.view = view
         self.refresh_list()
 
     def _set_filter(self, f):
+        if f == self.filter:
+            return
+        if not self._confirm_pending():
+            self.pill_marked.SetValue(self.filter == 'marked')
+            self.pill_all.SetValue(self.filter == 'all')
+            self.pill_issues.SetValue(self.filter == 'issues')
+            return
         self.filter = f
         self.refresh_list()
 
