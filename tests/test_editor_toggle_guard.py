@@ -248,3 +248,37 @@ if __name__ == '__main__':
     for fn in fns:
         fn()
     print('test_editor_toggle_guard: %d tests passed' % len(fns))
+
+
+# ------------------------------------------------- #228: clicked net row
+class _MultiNetModel:
+    # One length-group entry spanning two nets: the same
+    # (section, index) appears in both nets' marked lists.
+    def marked_nets(self):
+        return {'AAA': [('length_groups', 0)],
+                'ZZZ': [('length_groups', 0)]}
+    def issues(self): return []
+    def board_nets(self): return ['AAA', 'ZZZ']
+    def entries(self, s):
+        return [{'nets': ['AAA', 'ZZZ']}] if s == 'length_groups' else []
+    def entry_label(self, s, e): return 'LG1'
+    def entry_nets(self, s, e): return list(e['nets'])
+    def power_corners(self): return []
+    def rule_footprints(self): return []
+
+
+def test_search_restores_clicked_net_row_for_multi_net_entry():
+    # #228: the selection shown from the ZZZ row must restore to
+    # the ZZZ row after a refresh, not to AAA's row (the first
+    # row whose marked list contains the entry).
+    md = _load()
+    if md is None:
+        return
+    d = _search_dialog(md)
+    d.model = _MultiNetModel()
+    d.selection = {'kind': 'entry', 'section': 'length_groups',
+                   'index': 0, 'missing': None, 'net': 'ZZZ'}
+    d.refresh_list()
+    assert [r.get('net') for r in d._rows] == ['AAA', 'ZZZ']
+    assert d._list_sel == 1, d._list_sel
+    assert d.list.selected == [1] and d.list.focused == [1]
