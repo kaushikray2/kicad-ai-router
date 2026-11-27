@@ -102,6 +102,99 @@ def test_filter_toggle_confirmed_switches():
     assert d.filter == 'issues' and d.refreshed == 1
 
 
+# ------------------------------------------------- #221: search restore
+class _List:
+    def __init__(self):
+        self.items = []; self.selected = []; self.focused = []
+    def DeleteAllItems(self): self.items = []
+    def GetItemCount(self): return len(self.items)
+    def InsertItem(self, i, label):
+        self.items.append(label); return len(self.items) - 1
+    def SetItem(self, i, col, text): pass
+    def SetColumn(self, col, item): pass
+    def Select(self, i): self.selected.append(i)
+    def Focus(self, i): self.focused.append(i)
+
+
+class _Pill(_Radio):
+    def SetLabel(self, t): self.label = t
+
+
+class _Search:
+    def __init__(self): self.q = ''
+    def GetValue(self): return self.q
+
+
+class _Model:
+    def marked_nets(self): return {'RF_IN': [('impedance', 0)]}
+    def issues(self): return []
+    def board_nets(self): return ['CLK', 'GND', 'RF_IN']
+    def entries(self, s):
+        return [{'net': 'RF_IN', 'z0_ohm': 50}] if s == 'impedance' else []
+    def entry_label(self, s, e): return e.get('net', '?')
+    def entry_nets(self, s, e): return [e.get('net')]
+    def power_corners(self): return []
+    def rule_footprints(self): return []
+
+
+def _search_dialog(md):
+    # Real refresh_list / _on_search on stubbed controls + model.
+    d = md.MarkingsEditorDialog.__new__(md.MarkingsEditorDialog)
+    d.view = 'net'; d.filter = 'all'
+    d.view_net = _Radio(True); d.view_group = _Radio(False)
+    d.pill_marked = _Pill(False); d.pill_all = _Pill(True); d.pill_issues = _Pill(False)
+    d.search = _Search()
+    d.list = _List()
+    d.model = _Model()
+    d._rows = []; d._list_sel = -1; d._sel_guard = False
+    d.selection = {'kind': 'entry', 'section': 'impedance', 'index': 0, 'missing': None}
+    d.form = None
+    return d
+
+
+def test_search_keeps_visible_selection():
+    md = _load()
+    if md is None:
+        return
+    d = _search_dialog(md)
+    d.refresh_list()
+    assert [r.get('net') for r in d._rows] == ['CLK', 'GND', 'RF_IN']
+    d._list_sel = 2                     # RF_IN row, as _on_select left it
+    d.list.selected = []; d.list.focused = []
+    d.search.q = 'RF'
+    d._on_search(None)
+    assert [r.get('net') for r in d._rows] == ['RF_IN']
+    assert d._list_sel == 0, d._list_sel
+    assert d.list.selected == [0] and d.list.focused == [0]
+
+
+def test_search_filtered_out_selection_not_resurrected():
+    md = _load()
+    if md is None:
+        return
+    d = _search_dialog(md)
+    d.refresh_list()
+    d._list_sel = 2
+    d.list.selected = []; d.list.focused = []
+    d.search.q = 'CLK'
+    d._on_search(None)
+    assert [r.get('net') for r in d._rows] == ['CLK']
+    assert d._list_sel == -1, d._list_sel
+    assert d.list.selected == [] and d.list.focused == []
+
+
+def test_refresh_restores_corners_row_in_group_view():
+    md = _load()
+    if md is None:
+        return
+    d = _search_dialog(md)
+    d.view = 'group'
+    d.selection = {'kind': 'corners'}
+    d.refresh_list()
+    assert [r['kind'] for r in d._rows] == ['corners', 'rules']
+    assert d._list_sel == 0, d._list_sel
+
+
 if __name__ == '__main__':
     fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for fn in fns:
