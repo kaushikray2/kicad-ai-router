@@ -1456,7 +1456,20 @@ def _pan_board_to(pcbnew, board, x_mm, y_mm):
         if d2 < best[1]:
             best[0], best[1] = item, d2
 
+    arc_t = getattr(pcbnew, 'PCB_ARC_T', None)
     for t in board.GetTracks():
+        if arc_t is not None and hasattr(t, 'Type'):
+            try:
+                if t.Type() == arc_t:
+                    # #229: an arc is not its chord -- a
+                    # near-closed arc's endpoints can sit <4 mm
+                    # apart while FocusOnItem centres on the
+                    # arc, far from the marked point (the #220
+                    # class, curved).  Arcs fall through to the
+                    # pads / transient shape like long tracks do.
+                    continue
+            except Exception:
+                pass
         st, en = t.GetStart(), t.GetEnd()
         if st.x == en.x and st.y == en.y:
             consider(t, st)      # via: the item IS the point
