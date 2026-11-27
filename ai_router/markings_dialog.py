@@ -549,7 +549,7 @@ class PowerForm(_FormBase):
         if col == 'State':
             try:
                 _ref, spec = mm._load_entry(row)
-                return 'UNKNOWN \u2014 needs a peak current or a KB ref' if mm.load_is_unknown(spec) else ''
+                return 'UNKNOWN \u2014 resistances only' if mm.load_is_unknown(spec) else ''
             except Exception:
                 return ''
         if col == 'KB ref':

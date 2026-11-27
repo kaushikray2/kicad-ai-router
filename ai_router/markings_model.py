@@ -523,6 +523,12 @@ def _load_entry(row):
         kb['datasheet_rev'] = row['datasheet_rev'].strip()
     if kb:
         ld['kb'] = kb
+    if 'peak_a' not in ld and 'kb' not in ld:
+        # No peak and no KB ref: the declared-UNKNOWN load (#68
+        # closure) -- serialised explicitly so the sidecar states
+        # the fact instead of implying it by absence; the rail
+        # then sizes resistances-only.
+        ld['unknown'] = True
     modes = _csv_list(row.get('modes'))
     if modes:
         ld['modes'] = modes
@@ -530,11 +536,13 @@ def _load_entry(row):
 
 
 def load_is_unknown(load_spec):
-    # The wireframe's UNKNOWN state: no measured current and no
-    # datasheet (KB) ref.  markings.validate rejects such a load,
-    # so the editor flags it and saving stays blocked until it is
-    # resolved or the row is removed.
-    return 'peak_a' not in load_spec and 'kb' not in load_spec
+    # The UNKNOWN state: no measured current and no datasheet
+    # (KB) ref.  Since the #68 closure ruling the state is a
+    # first-class declaration ({"unknown": true}): the editor
+    # badges it "UNKNOWN -- resistances only" and the marking
+    # SAVES; the rail plans resistances-only at run time.
+    return (bool(load_spec.get('unknown'))
+            or ('peak_a' not in load_spec and 'kb' not in load_spec))
 
 
 def power_form(entry):
@@ -565,7 +573,7 @@ def power_entry(form):
     if (form.get('root_ref') or '').strip():
         root = {'ref': form['root_ref'].strip()}
         if (form.get('root_pin') or '').strip():
-            root['pin'] = form['root_pin'].strip()  # carried, read nowhere (powerplan reads ref only)
+            root['pin'] = form['root_pin'].strip()  # honoured by powerplan: only that pad sources the rail (#68 closure)
         e['root'] = root
     drop = _opt_float(form, 'drop_budget_v', 'Drop budget')
     if drop is not None:
@@ -949,6 +957,10 @@ def summarize_report(rep, audit=None):
             else:
                 detail = str(pw.get('note') or pw.get('error') or st)
             rail_names = ', '.join(sorted((pw.get('rails') or {}).keys()))
+            if not rail_names:
+                # recorded-only statuses carry no rails dict; name
+                # the marked nets instead of a bare "Power -- rail"
+                rail_names = ', '.join(sorted(pw.get('marked_nets') or []))
             rows.append({'section': 'power', 'marking': 'Power \u2014 %s' % (rail_names or pw.get('net') or 'rail'),
                          'verdict': verdict, 'detail': detail, 'at': None})
         qn = rep.get('quiet_nets') or {}

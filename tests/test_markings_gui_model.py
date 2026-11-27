@@ -128,13 +128,20 @@ def test_length_tolerance_unit_follows_mode():
     assert 'tolerance_mm' in e2 and 'tolerance_ps' not in e2
 
 
-def test_power_unknown_load_blocks_validation():
+def test_power_unknown_load_serialises_and_validates():
+    # Amended under the owner's #68 closure ruling (2026-11-27):
+    # a declared-UNKNOWN load is a first-class state, not a
+    # validation failure -- it serialises as {"unknown": true},
+    # the marking saves, and the rail plans resistances-only.
+    # (Was test_power_unknown_load_blocks_validation, which
+    # asserted the pre-ruling blocking behaviour.)
     m = mm.MarkingsEditorModel({}, copy.deepcopy(INDEX))
     e = mm.power_entry({'net': 'VCC5', 'loads': [{'ref': 'U18', 'kind': ''}],
                         'regulators': [], 'conduits': [], 'protective': []})
+    assert e['loads']['U18'] == {'unknown': True}
     assert mm.load_is_unknown(e['loads']['U18'])
     m.add_entry('power', e)
-    assert m.validate_working() is not None  # the pipeline would reject it too
+    assert m.validate_working() is None
 
 
 def test_conditions(tmp_path):

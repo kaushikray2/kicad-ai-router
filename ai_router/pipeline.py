@@ -1510,9 +1510,11 @@ class Pipeline:
             return {'status': 'markings_error', 'error': str(e)}
         if mk is None or not mk.power:
             return {'status': 'no_power_markings'}
+        marked_nets = [e.get('net') for e in mk.power]
         netlist = self._eng_power_netlist()
         if netlist is None:
             self._eng_power_plan = {'status': 'netlist_unavailable',
+                                    'marked_nets': marked_nets,
                                     'note': 'no schematic netlist found beside '
                                             'the board and kicad-cli export '
                                             'unavailable; power analysis skipped'}
@@ -1538,7 +1540,8 @@ class Pipeline:
             tree = _powertree.compute_currents(
                 _powertree.build_tree(parsed, entries))
         except Exception as e:
-            self._eng_power_plan = {'status': 'tree_failed', 'error': str(e)}
+            self._eng_power_plan = {'status': 'tree_failed', 'error': str(e),
+                                    'marked_nets': marked_nets}
             self._record('power', {'status': 'tree_failed', 'error': str(e)})
             return self._eng_power_plan
         su = self._worker('stackup', '--board', self.current)
@@ -1548,6 +1551,7 @@ class Pipeline:
             # set and dying downstream with KeyError 'F.Cu'.
             self._eng_power_plan = {
                 'status': 'needs_stackup',
+                'marked_nets': marked_nets,
                 'note': 'board file carries no stackup (worker '
                         'reasons: %s); power sizing skipped rather '
                         'than sized against an invented stackup'

@@ -435,6 +435,12 @@ def _check_power_entry(entry, idx):
     out = dict(entry)
     if entry.get('root') is not None and not isinstance(entry['root'], dict):
         raise MarkingsError('%s: "root" must be an object (declared rail root)' % where)
+    if entry.get('root') is not None:
+        _r = entry['root']
+        if not isinstance(_r.get('ref'), str) or not _r.get('ref'):
+            raise MarkingsError('%s: "root.ref" must be a non-empty string' % where)
+        if _r.get('pin') is not None and not isinstance(_r.get('pin'), str):
+            raise MarkingsError('%s: "root.pin" must be a string' % where)
     if entry.get('voltage') is not None:
         v = entry['voltage']
         if not isinstance(v, dict) or not _num(v.get('nominal_v')) or v['nominal_v'] <= 0:
@@ -467,9 +473,14 @@ def _check_power_entry(entry, idx):
                 raise MarkingsError('%s: "%s.%s" must be an object' % (where, sect, ref))
             s = dict(spec)
             for f in fields:
-                if f not in s and not (sect == 'loads' and f == 'peak_a' and 'kb' in s):
+                if f not in s and not (sect == 'loads' and f == 'peak_a'
+                                       and ('kb' in s or s.get('unknown') is True)):
                     raise MarkingsError('%s: "%s.%s" needs "%s"' % (where, sect, ref, f))
             if sect == 'loads':
+                if 'unknown' in s and s['unknown'] is not True:
+                    raise MarkingsError('%s: loads.%s."unknown" must be true when present' % (where, ref))
+                if s.get('unknown') is True and ('peak_a' in s or 'kb' in s):
+                    raise MarkingsError('%s: loads.%s: "unknown" is mutually exclusive with "peak_a" and "kb"' % (where, ref))
                 if 'peak_a' in s:
                     if not _num(s['peak_a']) or s['peak_a'] < 0:
                         raise MarkingsError('%s: loads.%s.peak_a must be a number >= 0' % (where, ref))
@@ -480,6 +491,13 @@ def _check_power_entry(entry, idx):
                         s['sustained_a'] = float(s['sustained_a'])
                     else:
                         s['sustained_a'] = s['peak_a']  # conservative default, stated
+                elif s.get('unknown') is True:
+                    # Declared-UNKNOWN load (#68 closure): the user
+                    # states the current is not known.  powertree
+                    # treats it exactly like an undeclared load --
+                    # unknown_loads, rail incomplete, resistances-
+                    # only sizing; no current is invented.
+                    s['unknown'] = True
                 else:
                     # KB-referenced load (#68 Step 3): currents arrive
                     # only via a confirmed KB estimate at run time.

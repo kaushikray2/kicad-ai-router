@@ -274,9 +274,26 @@ def _plan_rail(net, rail, entry, facts, tree, parsed, copper, surface,
     # silently attributes 0 A.
     _root = rail.get('root') or {}
     if _root.get('ref'):
-        for (r, _p), ns in pad_nodes.items():
-            if r == _root['ref']:
-                sources += ns
+        if _root.get('pin'):
+            # root.pin (#68 closure): only the named pad sources
+            # the rail.  A pin that is not on this net is a
+            # marking error the user must see -- never a silent
+            # all-pads fallback.
+            pinned = [ns for (r, _p), ns in pad_nodes.items()
+                      if r == _root['ref']
+                      and str(_p) == str(_root['pin'])]
+            if pinned:
+                for ns in pinned:
+                    sources += ns
+            else:
+                rep['flags'].append({
+                    'kind': 'declared_root_pin_not_on_net',
+                    'net': net, 'ref': _root['ref'],
+                    'pin': str(_root['pin'])})
+        else:
+            for (r, _p), ns in pad_nodes.items():
+                if r == _root['ref']:
+                    sources += ns
     for e in tree['edges']:
         if e.get('to') == net:
             for (r, p) in e.get('out_pins', []):

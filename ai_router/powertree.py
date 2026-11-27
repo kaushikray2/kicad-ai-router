@@ -226,7 +226,10 @@ def build_tree(parsed, power_entries, return_net='GND'):
         for ref in load_refs:
             spec = declared_loads.get(ref)
             comp = parsed['components'].get(ref) or {}
-            if spec is None:
+            if spec is None or spec.get('unknown'):
+                # a declared {"unknown": true} load is exactly an
+                # undeclared one (#68 closure): listed, never
+                # estimated, rail incomplete.
                 unknown.append(ref)
             else:
                 loads[ref] = {'peak_a': spec['peak_a'],
