@@ -72,11 +72,14 @@ class Board(object):
 
 
 def _siblings(pcb):
-    stem = pcb[:-len('.kicad_pcb')] if pcb.endswith('.kicad_pcb') else pcb
-    pro = stem + '.kicad_pro'
-    dru = stem + '.kicad_dru'
-    return (pro if os.path.exists(pro) else None,
-            dru if os.path.exists(dru) else None)
+    # #226: delegate to the single-sourced resolver (#182/#198) --
+    # a board whose filename differs from the project stem still
+    # owns the directory's sole .kicad_pro (and a board-stem
+    # .kicad_dru wins over the project-stem one).  The stem-only
+    # check here silently dropped those sidecars in prep, so the
+    # staged board routed without its netclasses / DRC rules.
+    from ai_router.naming import sidecar_paths
+    return sidecar_paths(pcb)
 
 
 def _resolve_board_file(boards_root, stratum, slug):
