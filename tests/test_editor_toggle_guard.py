@@ -243,13 +243,6 @@ def test_loader_never_executes_package_init():
     assert r.stdout.strip().endswith(('OK', 'SKIP')), r.stdout
 
 
-if __name__ == '__main__':
-    fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
-    for fn in fns:
-        fn()
-    print('test_editor_toggle_guard: %d tests passed' % len(fns))
-
-
 # ------------------------------------------------- #228: clicked net row
 class _MultiNetModel:
     # One length-group entry spanning two nets: the same
@@ -282,3 +275,12 @@ def test_search_restores_clicked_net_row_for_multi_net_entry():
     assert [r.get('net') for r in d._rows] == ['AAA', 'ZZZ']
     assert d._list_sel == 1, d._list_sel
     assert d.list.selected == [1] and d.list.focused == [1]
+
+
+if __name__ == '__main__':
+    fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
+    for fn in fns:
+        fn()
+    print('test_editor_toggle_guard: %d tests passed' % len(fns))
+
+

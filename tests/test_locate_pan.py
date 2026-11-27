@@ -215,13 +215,6 @@ def test_locate_claims_pan_only_on_success():
                 sys.modules['pcbnew'] = old
 
 
-if __name__ == '__main__':
-    fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
-    for fn in fns:
-        fn()
-    print('test_locate_pan: %d tests passed' % len(fns))
-
-
 class _Arc:
     # A near-closed large arc: endpoints 1 mm apart (a <4 mm
     # chord), while the arc itself sweeps ~350 degrees around a
@@ -250,3 +243,12 @@ def test_pan_near_closed_arc_falls_back_to_shape_at_target():
     assert len(fake.focused) == 1 and isinstance(fake.focused[0], _Shape), fake.focused
     c = fake.focused[0].center
     assert (c.x, c.y) == (10_500_000, 20_000_000), (c.x, c.y)
+
+
+if __name__ == '__main__':
+    fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
+    for fn in fns:
+        fn()
+    print('test_locate_pan: %d tests passed' % len(fns))
+
+
