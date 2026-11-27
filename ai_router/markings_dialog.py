@@ -1380,6 +1380,38 @@ class MarkingsEditorDialog(wx.Dialog):
 
 
 # ------------------------------------------------------------ report dialog
+def _pan_board_to(pcbnew, board, x_mm, y_mm):
+    """Focus the editor view on (x_mm, y_mm) of the open board.
+    KiCad 10's pcbnew has no FocusOnLocation (#218) -- focus the
+    nearest board item instead (track endpoints, footprint pads),
+    or a transient shape at the point when nothing is within
+    2 mm.  Returns True only when the focus calls succeed; the
+    caller must not claim a pan otherwise."""
+    target = pcbnew.VECTOR2I(int(x_mm * 1e6), int(y_mm * 1e6))
+    best = [None, (2.0e6) ** 2]  # 2 mm catchment, board units (nm)
+
+    def consider(item, pt):
+        d2 = (pt.x - target.x) ** 2 + (pt.y - target.y) ** 2
+        if d2 < best[1]:
+            best[0], best[1] = item, d2
+
+    for t in board.GetTracks():
+        consider(t, t.GetStart())
+        consider(t, t.GetEnd())
+    for fp in board.GetFootprints():
+        for pad in fp.Pads():
+            consider(pad, pad.GetPosition())
+    item = best[0]
+    if item is None:
+        item = pcbnew.PCB_SHAPE(board)
+        item.SetShape(pcbnew.SHAPE_T_CIRCLE)
+        item.SetCenter(target)
+        item.SetRadius(int(0.5e6))
+    pcbnew.FocusOnItem(item)
+    pcbnew.Refresh()
+    return True
+
+
 class ReportDialog(wx.Dialog):
     def __init__(self, parent, summary, board_path, result_board, ledger_path):
         super().__init__(parent, title='Engineered nets \u2014 run report',
@@ -1449,21 +1481,31 @@ class ReportDialog(wx.Dialog):
             return
         x, y = r['at']
         open_name = ''
+        panned = False
         try:
             import pcbnew
             b = pcbnew.GetBoard()
             if b is not None:
                 open_name = b.GetFileName() or ''
                 try:
-                    pcbnew.FocusOnLocation(pcbnew.VECTOR2I(int(x * 1e6), int(y * 1e6)))
+                    # #218: FocusOnLocation does not exist in
+                    # KiCad 10 -- pan via the nearest item, and
+                    # claim the pan only when it actually happened.
+                    panned = _pan_board_to(pcbnew, b, x, y)
                 except Exception:
-                    pass
+                    panned = False
         except Exception:
             open_name = ''
-        if open_name and self.result_board and os.path.abspath(open_name) == os.path.abspath(self.result_board):
+        is_result = bool(open_name and self.result_board
+                         and os.path.abspath(open_name) == os.path.abspath(self.result_board))
+        is_input = bool(open_name
+                        and os.path.abspath(open_name) == os.path.abspath(self.board_path))
+        if panned and is_result:
             self.note.SetLabel('Panned open board to (%.1f, %.1f)' % (x, y))
-        elif open_name and os.path.abspath(open_name) == os.path.abspath(self.board_path):
+        elif panned and is_input:
             self.note.SetLabel('Panned open board to (%.1f, %.1f) \u2014 open the result board to inspect routed copper' % (x, y))
+        elif is_result or is_input:
+            self.note.SetLabel('Could not pan the open board to (%.1f, %.1f) \u2014 the coordinates are in the row above; Copy (x, y) puts them on the clipboard.' % (x, y))
         else:
             self.note.SetLabel('No matching board open in the editor \u2014 coordinates (%.1f, %.1f) are in the row above; Copy (x, y) puts them on the clipboard.' % (x, y))
         self.note.Wrap(620)
