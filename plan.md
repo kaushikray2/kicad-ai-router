@@ -132,6 +132,27 @@ LLM-mode engineered-nets half-state (remedy = the #60+#141
 ruling, not implemented). Suites after round 8: pytest 379
 passed (367 + 12 new), standalone 102 passed (100 at round 7 + the 2 new stub-driven files, both headless-runnable); the not-standalone-runnable set is unchanged at 13 files, verified identical at 35219c3.
 
+**Round 9 audit fixes (branch `engineered-nets-gui`, 2026-11-26):**
+the round-8 audit's three polish notes, all verified real and
+fixed in their own chains -- #220 Report -> Locate no longer
+focuses a long track whose end is near the marked point
+(FocusOnItem centres on the item, i.e. the track midpoint);
+GetTracks() now contributes only vias and segments <= 4 mm,
+and a point near a long track falls through to the transient
+shape centred exactly on the point; #221 the markings editor
+search no longer desyncs the list from the shown form --
+refresh_list re-matches the active selection at every exit
+and restores _list_sel + highlight when the entry survives
+the filter (a filtered-out selection is not resurrected;
+no modal per keystroke); #222 the editor/locate tests load
+markings_dialog.py via SourceFileLoader instead of importing
+the ai_router package, whose __init__ runs plugin
+registration and hangs under Windows KiCad standalone
+python -- a subprocess proof test blocks any package import
+behind the loader. Suites after round 9: pytest 385 passed
+(379 + 6 new), standalone 102 passed with the
+not-standalone-runnable set unchanged at the same 13 files.
+
 ## Done
 
 ### Step 0 — v1.9.6 hotfix (3–5 h) — shipped 2026-11-23
