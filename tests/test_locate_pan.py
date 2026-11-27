@@ -25,7 +25,9 @@ claimed 'Panned open board' anyway.  Locate now focuses the
 nearest board item (or a transient shape) via FocusOnItem +
 Refresh and claims the pan only on success.  The helper is
 driven here with a fake pcbnew; the dialog handler with a fake
-pcbnew injected into sys.modules.
+pcbnew injected into sys.modules.  #222: the dialog module is
+loaded from its file (SourceFileLoader), never via the
+ai_router package -- see _load().
 Run: python3 tests/test_locate_pan.py"""
 import os, sys, types
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
@@ -90,7 +92,23 @@ def _load():
         import pytest
         pytest.importorskip('wx')
         return None
-    from ai_router import markings_dialog as md
+    # #222: load markings_dialog.py from its file, never via the
+    # ai_router package -- the package __init__ runs plugin
+    # registration whenever wx+pcbnew are both importable, which
+    # hangs under Windows KiCad standalone python.exe (outside
+    # pcbnew.exe).  The module's own dual-import guard resolves
+    # its siblings as top-level modules with the ai_router dir
+    # on sys.path (the dlg_uut pattern used for dialog.py).
+    import importlib.machinery, importlib.util
+    pkg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           '..', 'ai_router')
+    if pkg_dir not in sys.path:
+        sys.path.insert(0, pkg_dir)
+    ld = importlib.machinery.SourceFileLoader(
+        'markings_dialog_uut_r9', os.path.join(pkg_dir, 'markings_dialog.py'))
+    sp = importlib.util.spec_from_loader('markings_dialog_uut_r9', ld)
+    md = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(md)
     return md
 
 

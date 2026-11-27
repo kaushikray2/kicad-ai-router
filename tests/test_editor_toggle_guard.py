@@ -26,6 +26,9 @@ desynced.  The toggles now confirm first and restore the radio
 buttons when the user cancels.  Drives the real handler methods
 on a stubbed dialog (the notice-refresh pattern); needs wx
 importable, runs under the pytest env and xvfb standalone.
+#222: the dialog module is loaded from its file
+(SourceFileLoader), never via the ai_router package, whose
+__init__ runs plugin registration -- see _load().
 Run: python3 tests/test_editor_toggle_guard.py"""
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
@@ -56,7 +59,23 @@ def _load():
         import pytest
         pytest.importorskip('wx')
         return None
-    from ai_router import markings_dialog as md
+    # #222: load markings_dialog.py from its file, never via the
+    # ai_router package -- the package __init__ runs plugin
+    # registration whenever wx+pcbnew are both importable, which
+    # hangs under Windows KiCad standalone python.exe (outside
+    # pcbnew.exe).  The module's own dual-import guard resolves
+    # its siblings as top-level modules with the ai_router dir
+    # on sys.path (the dlg_uut pattern used for dialog.py).
+    import importlib.machinery, importlib.util
+    pkg_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           '..', 'ai_router')
+    if pkg_dir not in sys.path:
+        sys.path.insert(0, pkg_dir)
+    ld = importlib.machinery.SourceFileLoader(
+        'markings_dialog_uut_r9', os.path.join(pkg_dir, 'markings_dialog.py'))
+    sp = importlib.util.spec_from_loader('markings_dialog_uut_r9', ld)
+    md = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(md)
     return md
 
 
@@ -193,6 +212,35 @@ def test_refresh_restores_corners_row_in_group_view():
     d.refresh_list()
     assert [r['kind'] for r in d._rows] == ['corners', 'rules']
     assert d._list_sel == 0, d._list_sel
+
+
+def test_loader_never_executes_package_init():
+    # #222 proof: in a fresh interpreter, an import blocker that
+    # raises on ANY ai_router package import must not trip when
+    # this file _load() runs -- the dialog module comes from its
+    # file, so ai_router/__init__.py (plugin registration, the
+    # Windows KiCad standalone-python hang) never executes.
+    # Prints SKIP instead of OK only where wx is absent, where
+    # the registration could not run anyway.
+    import subprocess, textwrap
+    child = textwrap.dedent("""
+        import sys
+        class _Block:
+            def find_spec(self, name, path=None, target=None):
+                if name == 'ai_router' or name.startswith('ai_router.'):
+                    raise AssertionError('package import attempted: %s' % name)
+                return None
+        sys.meta_path.insert(0, _Block())
+        sys.path.insert(0, __TESTDIR__)
+        import test_editor_toggle_guard as t
+        md = t._load()
+        print('SKIP' if md is None else 'OK')
+        """).replace('__TESTDIR__',
+                     repr(os.path.dirname(os.path.abspath(__file__))))
+    r = subprocess.run([sys.executable, '-c', child],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, (r.stdout, r.stderr[-500:])
+    assert r.stdout.strip().endswith(('OK', 'SKIP')), r.stdout
 
 
 if __name__ == '__main__':
