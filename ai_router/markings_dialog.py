@@ -337,6 +337,8 @@ class ImpedanceForm(_FormBase):
         self.pi_antenna = _text(pwin, size=(200, -1)); pg.Add(self.pi_antenna, 0, wx.EXPAND)
         pg.Add(_label(pwin, 'Radio ref (single)'), 0)
         self.pi_radio_ref = _text(pwin, size=(200, -1)); pg.Add(self.pi_radio_ref, 0, wx.EXPAND)
+        pg.Add(_label(pwin, 'Tolerance (%)'), 0)
+        self.tol = _text(pwin, size=(200, -1)); pg.Add(self.tol, 0, wx.EXPAND)
         pwin.SetSizer(pg)
         self.grid.Add(wx.StaticText(self, label=''), 0)
         self.grid.Add(pane, 0, wx.EXPAND)
@@ -361,7 +363,8 @@ class ImpedanceForm(_FormBase):
                 'layers': [self.layers.GetString(i) for i in self.layers.GetCheckedItems()],
                 'fence': self.fence.GetValue(), 'smooth': self.smooth.GetValue(),
                 'pi_radio': self.pi_radio.GetValue(), 'pi_antenna': self.pi_antenna.GetValue(),
-                'pi_radio_ref': self.pi_radio_ref.GetValue()}
+                'pi_radio_ref': self.pi_radio_ref.GetValue(),
+                'tol_pct': _num(self.tol)}
 
     def refresh_preview(self):
         try:
@@ -390,6 +393,7 @@ class ImpedanceForm(_FormBase):
         self.pi_radio.SetValue(', '.join(f['pi_radio']))
         self.pi_antenna.SetValue(', '.join(f['pi_antenna']))
         self.pi_radio_ref.SetValue(f['pi_radio_ref'])
+        self.tol.SetValue('' if f.get('tol_pct') is None else str(f['tol_pct']))
         n = sum(1 for v in (f['pi_radio'], f['pi_antenna'], f['pi_radio_ref']) if v)
         self.pi_pane.SetLabel('Optional / EMC \u2014 \u03c0-match (%d set)' % n)
         self._on_topo()

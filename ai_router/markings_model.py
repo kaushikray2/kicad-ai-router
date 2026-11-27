@@ -429,11 +429,14 @@ def impedance_entry(form):
     loss = _opt_float(form, 'loss_budget_db', 'Loss budget')
     if loss is not None:
         e['loss_budget_db'] = loss
-    if form.get('tol_pct') is not None:
-        # Declared in the markings.py schema header but consumed
-        # nowhere yet: carried verbatim so an edit never deletes
-        # it (#201).  Deliberately not surfaced in the form.
-        e['tol_pct'] = form['tol_pct']
+    tol = _opt_float(form, 'tol_pct', 'Tolerance (%)')
+    if tol is not None:
+        # #67 tol_pct wiring (was a dead schema field, carried
+        # verbatim since #201): the editor surfaces it under
+        # Advanced and the value now feeds the per-layer Z0 band
+        # check (rfcheck GATE-13).  Range validation lives in
+        # markings._check_impedance_entry.
+        e['tol_pct'] = tol
     mhz = _opt_float(form, 'freq_mhz', 'Frequency')
     if mhz is not None:
         e['freq_hz'] = _freq_mhz_to_hz(mhz)

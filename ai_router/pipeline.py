@@ -700,7 +700,14 @@ class Pipeline:
         self.log('Engineered nets: sized %s'
                  % {n: r['width_mm'] for n, r in sized.items()})
 
-    def _eng_layer_width(self, entry, cu, ncu):
+    def _eng_layer_model(self, entry, cu, ncu):
+        """Build the tlcalc model for ONE copper layer of an
+        impedance marking: {'fn': w -> TLResult, 'model': name,
+        'flags': [...]} or an {'error': ...} dict (with model/
+        flags where the original solver path carried them).
+        Extracted verbatim from _eng_layer_width so the width
+        solver and the per-layer Z0 band check (#67 tol_pct,
+        rfcheck GATE-13) share ONE model and can never drift."""
         target = entry['z0_ohm']
         f = entry.get('freq_hz') or 0.0
         t = cu.get('thickness_mm')
@@ -763,6 +770,14 @@ class Pipeline:
             model = 'stripline'
         else:
             return {'error': 'unknown layer class %r' % (cls,)}
+        return {'fn': fn, 'model': model, 'flags': flags}
+
+    def _eng_layer_width(self, entry, cu, ncu):
+        m = self._eng_layer_model(entry, cu, ncu)
+        if m.get('error'):
+            return m
+        fn, model, flags = m['fn'], m['model'], m['flags']
+        target = entry['z0_ohm']
         try:
             w = _tlcalc.solve_width(lambda ww: fn(ww).z0, target)
         except ValueError as e:
@@ -1055,7 +1070,7 @@ class Pipeline:
             gnd = entry.get('gnd_net') or (
                 'GND' if 'GND' in all_pours else
                 (next(iter(all_pours)) if len(all_pours) == 1 else 'GND'))
-            refs = {}
+            refs, refs_any = {}, {}
             for lname in routed:
                 if lname not in by_name:
                     continue
@@ -1079,6 +1094,18 @@ class Pipeline:
                 refs[lname] = [{'ref_layer': a, 'h_mm': h}
                                for (a, h) in cand if h
                                and gnd in (by_name[a].get('pour_nets') or [])]
+                # The rfcheck reference map (ctx['refs']) is the
+                # PHYSICAL plane: the first candidate that pours
+                # ANY net.  #145 row 3 still holds -- a layer with
+                # no pour is not a plane -- but a layer pouring a
+                # DIFFERENT net (+3V3 under B.Cu) is a real plane
+                # and exactly what GATE-12 must catch; filtering
+                # ctx refs to GND pours made GATE-12 unreachable
+                # for the case it exists for.  The corridor spec
+                # keeps the GND-only refs above.
+                refs_any[lname] = [{'ref_layer': a, 'h_mm': h}
+                                   for (a, h) in cand if h
+                                   and (by_name[a].get('pour_nets') or [])]
             band = _tlcalc.band_of(entry.get('freq_hz') or 0)
             if band not in self._BAND_TOP_HZ:
                 # #145 (B20 row 5): tlcalc's band contract says
@@ -1100,6 +1127,14 @@ class Pipeline:
             pi_refs = list(pi.get('radio') or []) + list(pi.get('antenna') or [])
             spec['nets'][net] = {'gnd_net': gnd, 'ceiling_mm': ceiling,
                                  'refs': refs, 'pi_refs': pi_refs}
+            layer_z0 = {}
+            for lname, lw in (sized.get('per_layer') or {}).items():
+                if not lw.get('width_mm') or lname not in by_name:
+                    continue
+                lm = self._eng_layer_model(entry, by_name[lname],
+                                            len(copper))
+                if lm.get('fn'):
+                    layer_z0[lname] = lm['fn']
             ctxs[net] = {
                 'band': band, 'freq_hz': entry.get('freq_hz'),
                 'stub_limit_mm': (lam_top / 20.0) if lam_top else None,
@@ -1118,7 +1153,14 @@ class Pipeline:
                 'loss_budget_db': entry.get('loss_budget_db'),
                 'refs': {ln: {'ref_layer': rl[0]['ref_layer'],
                               'pour_nets': by_name[rl[0]['ref_layer']].get('pour_nets') or []}
-                         for ln, rl in refs.items() if rl}}
+                         for ln, rl in refs_any.items() if rl},
+                # #67 tol_pct band (rfcheck GATE-13): the target,
+                # the tolerance (marking's own, else the markings
+                # default) and the per-layer stackup models.
+                'z0_ohm': entry.get('z0_ohm'),
+                'tol_pct': entry.get('tol_pct') or
+                    (_markings.DEFAULT_TOL_PCT if _markings else 10.0),
+                'layer_z0': layer_z0}
         return spec, ctxs
 
     def _eng_gate_try(self, cmd, args, label, extra_ok=None):

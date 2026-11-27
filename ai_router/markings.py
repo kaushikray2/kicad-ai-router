@@ -42,6 +42,15 @@ except ImportError:
     import naming as _naming
 
 SCHEMA_VERSION = 1
+
+# Evaluation default for the impedance tolerance band when a
+# marking declares no "tol_pct": +/-10 % is the standard impedance
+# tolerance grade in the sources cited in the #67 design record
+# (IPC-2141A design guidance; IPC-6012E cl. 3.8 impedance
+# requirements, verified by TDR coupon per IPC-TM-650 2.5.5.7;
+# +/-5 % is the tight grade).  The value is a default for the
+# band CHECK only -- the fab note's TDR disclaimer stands.
+DEFAULT_TOL_PCT = 10.0
 SIDECAR_SUFFIX = '.ai-router-markings.json'
 SECTIONS = ('impedance', 'differential', 'power', 'length_groups', 'hv_domains', 'quiet')
 
@@ -94,6 +103,13 @@ def _check_impedance_entry(entry, idx):
         out['gap_mm'] = float(g)
     if entry.get('model') == 'coplanar' and out.get('gap_mm') is None:
         raise MarkingsError('%s: model="coplanar" requires a positive "gap_mm"' % where)
+    if entry.get('tol_pct') is not None:
+        tp = entry['tol_pct']
+        if not _num(tp) or not (0 < tp <= 50):
+            raise MarkingsError('%s: "tol_pct" must be a number in (0, 50] '
+                                '(percent; evaluation default is %g when '
+                                'undeclared)' % (where, DEFAULT_TOL_PCT))
+        out['tol_pct'] = float(tp)
     if entry.get('layers') is not None:
         layers = entry['layers']
         if (not isinstance(layers, list)

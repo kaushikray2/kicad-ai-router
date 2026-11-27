@@ -248,6 +248,8 @@ def pad_component_map(graph):
 #   width_mm (applied width), w_over_lambda_g, est_loss_db, length_mm,
 #   loss_budget_db, role, finish, mask {'intent','correction_applied','h_mm'},
 #   refs {layer: {'ref_layer', 'pour_nets'}} 
+#   z0_ohm, tol_pct, layer_z0 {layer: tlcalc callable w -> result}
+#   (the #67 tolerance band; GATE-13)
 # facts keys (worker rfgeom): segments, arcs, vias, pads, return_vias
 #   [{'nearest_mm', 'within'}] aligned with vias, corridor {layer:
 #   {'severed': [...], 'centre_gaps': [...]}}, foreign_under,
@@ -356,6 +358,35 @@ def evaluate_net(marking, ctx, facts):
                 out.append(_f('GATE-1', 'warn',
                               'centreline reference gap of %.2f mm on %s (single-antipad scale; corridor edges intact)'
                               % (run['len_mm'], layer), (run['x'], run['y'])))
+    # --- GATE-13: per-layer Z0 tolerance band (tol_pct, #67).
+    # GATE-10 above is a pure geometric width check; the band
+    # check is physical: the same width is a different impedance
+    # on a different layer (microstrip vs stripline), so a net
+    # that transitions layers at the primary width can pass
+    # GATE-10 and still be out of band where it actually runs.
+    z0t, tolp = ctx.get('z0_ohm'), ctx.get('tol_pct')
+    fns = ctx.get('layer_z0') or {}
+    if z0t and tolp and fns:
+        lo = z0t * (1.0 - tolp / 100.0)
+        hi = z0t * (1.0 + tolp / 100.0)
+        seen = {}
+        for it in segs + arcs:
+            if it.get('layer') in fns and it.get('w'):
+                seen.setdefault((it['layer'], round(it['w'], 4)), it)
+        for (layer, w), it in sorted(seen.items()):
+            try:
+                z = fns[layer](w).z0
+            except Exception:
+                continue
+            if z < lo - 1e-9 or z > hi + 1e-9:
+                out.append(_f('GATE-13', 'fail',
+                              'on %s the routed width %.3f mm gives '
+                              'Z0 %.1f ohm, outside the %.1f ohm '
+                              '+/-%.4g%% band [%.1f, %.1f]'
+                              % (layer, w, z, z0t, tolp, lo, hi),
+                              (it.get('x1', it.get('sx')),
+                               it.get('y1', it.get('sy')))))
+
     # --- GATE-11: aggressors under the corridor / vias in the RF area
     for fu in (facts.get('foreign_under') or [])[:8]:
         out.append(_f('GATE-11', 'fail',
