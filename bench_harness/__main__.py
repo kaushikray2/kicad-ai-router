@@ -77,13 +77,18 @@ def _select(args):
     if want_dataset:
         boards += inv.load_dataset_inventory(args.dataset_dir,
                                              args.boards_root)
-    split = args.split
-    if split is None:
-        split = 'all' if args.fixtures_dir else 'train'
-    if split != 'all':
-        boards = [b for b in boards
-                  if b.split == split or b.split == inv.SPLIT_FIXTURE]
     slugs = args.slugs.split(',') if args.slugs else None
+    if slugs is None:
+        # Bulk selection is split-scoped. Explicit slugs are NOT
+        # pre-filtered: the held-out guard in select_boards must see
+        # a named held-out board so it can refuse it by name (and so
+        # --exam can select it deliberately).
+        split = args.split
+        if split is None:
+            split = 'all' if args.fixtures_dir else 'train'
+        if split != 'all':
+            boards = [b for b in boards
+                      if b.split == split or b.split == inv.SPLIT_FIXTURE]
     return inv.select_boards(boards, slugs, exam=args.exam)
 
 
