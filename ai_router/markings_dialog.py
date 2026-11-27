@@ -1383,7 +1383,8 @@ class MarkingsEditorDialog(wx.Dialog):
 def _pan_board_to(pcbnew, board, x_mm, y_mm):
     """Focus the editor view on (x_mm, y_mm) of the open board.
     KiCad 10's pcbnew has no FocusOnLocation (#218) -- focus the
-    nearest board item instead (track endpoints, footprint pads),
+    nearest board item instead (vias / short track endpoints,
+    footprint pads),
     or a transient shape at the point when nothing is within
     2 mm.  Returns True only when the focus calls succeed; the
     caller must not claim a pan otherwise."""
@@ -1396,8 +1397,16 @@ def _pan_board_to(pcbnew, board, x_mm, y_mm):
             best[0], best[1] = item, d2
 
     for t in board.GetTracks():
-        consider(t, t.GetStart())
-        consider(t, t.GetEnd())
+        st, en = t.GetStart(), t.GetEnd()
+        if st.x == en.x and st.y == en.y:
+            consider(t, st)      # via: the item IS the point
+        elif (st.x - en.x) ** 2 + (st.y - en.y) ** 2 <= (4.0e6) ** 2:
+            consider(t, st)
+            consider(t, en)
+        # A longer track is not a point (#220): FocusOnItem
+        # centres on the item, so focusing it would pan to its
+        # midpoint -- a marked point near one end falls through
+        # to the transient shape centred on the point instead.
     for fp in board.GetFootprints():
         for pad in fp.Pads():
             consider(pad, pad.GetPosition())
