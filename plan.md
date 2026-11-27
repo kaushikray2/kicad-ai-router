@@ -762,8 +762,7 @@ pcbnew.LoadPlugins.
 ## In progress
 
 - Phase 2E is under way. Its first item, **#62 (bench
-  harness), has landed** on branch
-  `phase2e-bench-harness` (see the Phase 2E section);
+  harness), has landed** on `main` (see the Phase 2E section);
   next in the block is #66 (portfolio racing).
   v1.12.5 (P2.7a #190 + round 7 fixes #207-#211) is
   released and recorded in Done above; production
@@ -828,7 +827,7 @@ definition comes from it.
    on raw counts. Committing the harness this way also discharges
    #54's remainder. First because every later verdict in this block,
    and the final exam, rides on it.
-   **LANDED 2026-11-26** (branch `phase2e-bench-harness`):
+   **LANDED 2026-11-26** on `main` (merged from branch `phase2e-bench-harness`, merge 29ebf85):
    `bench_harness/` in the repo -- inventory with the
    train/held-out split and a hard exam guard (held-out boards
    refused outside `--exam`), prepared-input cache keyed by
