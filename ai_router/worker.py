@@ -3556,8 +3556,16 @@ def cmd_krt_route(board_path, out_path, banned=None):
     dru = os.path.splitext(board_path)[0] + '.kicad_dru'
     if os.path.exists(dru):
         shutil.copy(dru, os.path.join(d, 'in.kicad_dru'))  # v1.9.6 (#40): cmd_freeroute parity
+    law_layers = []
+    if banned:
+        try:
+            law_layers = _stamp_law_zones(inp, banned)
+        except Exception as e:
+            shutil.rmtree(d, ignore_errors=True)
+            return {'status': 'run_failed', 'detail': 'law zones: %s' % str(e)[:160]}
     try:
-        p = _run_group([sys.executable, auto, inp, out_path], 3600, cwd=d)
+        p = _run_group([sys.executable, auto, inp, out_path,
+                        '--keep-placement', '--board-rules'], 3600, cwd=d)
         tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
     except Exception as e:
         shutil.rmtree(d, ignore_errors=True)
@@ -3565,13 +3573,89 @@ def cmd_krt_route(board_path, out_path, banned=None):
     if not os.path.exists(out_path):
         shutil.rmtree(d, ignore_errors=True)
         return {'status': 'no_output', 'detail': tail[-200:]}
+    if law_layers:
+        # Strip the scaffolding before anything else reads the
+        # board; a candidate still carrying law zones is
+        # contaminated, so a removal failure fails the leg rather
+        # than letting the zones through disguised as design.
+        try:
+            b3 = pcbnew.LoadBoard(out_path)
+            _remove_law_zones(b3)
+            pcbnew.SaveBoard(out_path, b3)
+        except Exception as e:
+            shutil.rmtree(d, ignore_errors=True)
+            return {'status': 'run_failed', 'detail': 'law zone removal: %s' % str(e)[:160]}
     refill_note = 'skipped'
     try:
         b2 = pcbnew.LoadBoard(out_path); refill(b2); pcbnew.SaveBoard(out_path, b2); refill_note = 'ok'
     except Exception as e:
         refill_note = 'failed: %s' % str(e)[:80]
     shutil.rmtree(d, ignore_errors=True)
-    return {'status': 'routed', 'seconds': round(time.time() - t0, 1), 'refill': refill_note}
+    res = {'status': 'routed', 'seconds': round(time.time() - t0, 1), 'refill': refill_note}
+    if banned is not None:
+        res['law_zones'] = law_layers
+    return res
+
+
+def cmd_design_fingerprint(board_path):
+    # #45: the design-invariance fingerprint a portfolio candidate
+    # is checked against -- everything that makes the board THIS
+    # design rather than another one: footprint placement
+    # (ref, position, orientation, side), pad-net assignments,
+    # the zone census (net, layers, rule-area keepout flags,
+    # outline geometry hash), and the board outline. Tracks and
+    # vias are deliberately absent: routing is what candidates
+    # are FOR. Zone FILLS are absent too (a refill is not a
+    # design change); outlines are hashed, so a pour whose
+    # boundary moved is a changed zone even at the same count.
+    import hashlib
+    b = pcbnew.LoadBoard(board_path)
+    fps, pads = [], []
+    for fp in b.GetFootprints():
+        pos = fp.GetPosition()
+        fps.append([str(fp.GetReference()), int(pos.x), int(pos.y),
+                    round(float(fp.GetOrientationDegrees()), 4),
+                    bool(fp.IsFlipped())])
+        for pad in fp.Pads():
+            pads.append([str(fp.GetReference()), str(pad.GetNumber()),
+                         str(pad.GetNetname())])
+    zones = []
+    for z in b.Zones():
+        layers = sorted(b.GetLayerName(l) for l in z.GetLayerSet().Seq())
+        o = z.Outline()
+        rings, holes = [], []
+        for oi in range(o.OutlineCount()):
+            ch = o.COutline(oi)
+            rings.append([[int(ch.GetPoint(i).x), int(ch.GetPoint(i).y)]
+                          for i in range(ch.PointCount())])
+            for hi in range(o.HoleCount(oi)):
+                ch = o.CHole(oi, hi)
+                holes.append([[int(ch.GetPoint(i).x), int(ch.GetPoint(i).y)]
+                              for i in range(ch.PointCount())])
+        zh = hashlib.sha256(json.dumps([rings, holes]).encode()).hexdigest()[:16]
+        zones.append([str(z.GetNetname()), layers, bool(z.GetIsRuleArea()),
+                      bool(z.GetDoNotAllowTracks()), bool(z.GetDoNotAllowVias()),
+                      bool(z.GetDoNotAllowZoneFills()), zh])
+    edges = []
+    edge_id = b.GetLayerID('Edge.Cuts')
+    for dr in b.GetDrawings():
+        if dr.GetLayer() != edge_id:
+            continue
+        e = [str(dr.Type())]
+        for getter in ('GetStart', 'GetEnd', 'GetCenter'):
+            try:
+                pt = getattr(dr, getter)()
+                e += [int(pt.x), int(pt.y)]
+            except Exception:
+                pass
+        try:
+            if dr.GetShape() in (pcbnew.S_CIRCLE, pcbnew.S_ARC):
+                e.append(int(dr.GetRadius()))
+        except Exception:
+            pass
+        edges.append(e)
+    return {'footprints': sorted(fps), 'pads': sorted(pads),
+            'zones': sorted(zones), 'edges': sorted(edges)}
 
 
 def _with_yield(fn, is_fail):
@@ -3597,6 +3681,16 @@ def _with_yield(fn, is_fail):
             res2 = dict(res2); res2['skeleton_yield'] = True
             return res2
     return res
+
+def _ban_arg(a):
+    # #46: the banned-layer list for the external-engine ops, from
+    # the --no-tracks-on flag the pipeline now passes them. None
+    # when the flag is absent (direct worker use keeps the old
+    # no-law behaviour); '' is an explicit empty ban set (#104).
+    if a.no_tracks_on is None:
+        return None
+    return [x.strip() for x in a.no_tracks_on.split(',') if x.strip()]
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -3652,8 +3746,9 @@ def main():
     elif a.cmd == 'lock_window': res = cmd_lock_window(a.board, a.out, a.net, margin=a.margin, fx=a.fx, fy=a.fy, tx=a.tx, ty=a.ty)
     elif a.cmd == 'restore_locks': res = cmd_restore_locks(a.board, a.out, a.locks)
     elif a.cmd == 'lock_all': res = cmd_lock_all(a.board, a.out)
-    elif a.cmd == 'freeroute': res = cmd_freeroute(a.board, a.out, passes=a.passes)
-    elif a.cmd == 'krt_route': res = cmd_krt_route(a.board, a.out)
+    elif a.cmd == 'freeroute': res = cmd_freeroute(a.board, a.out, passes=a.passes, banned=_ban_arg(a))
+    elif a.cmd == 'krt_route': res = cmd_krt_route(a.board, a.out, banned=_ban_arg(a))
+    elif a.cmd == 'design_fingerprint': res = cmd_design_fingerprint(a.board)
     elif a.cmd == 'prune': res = cmd_prune(a.board, a.out)
     elif a.cmd == 'refill': res = cmd_refill(a.board, a.out or a.board)
     else: res = {'status': 'error', 'detail': 'unknown cmd'}

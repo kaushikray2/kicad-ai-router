@@ -242,6 +242,21 @@ def _accept_key(g):
 _PORTFOLIO_ENGINES = ('freerouting', 'krt', 'tm_relax', 'tm_global', 'tm_escape')
 
 
+def _design_diff(section, base_list, cand_list):
+    # #45: a compact, ledger-sized description of how a portfolio
+    # candidate's design fingerprint differs from the base's:
+    # per-section counts plus the first few entries present on
+    # one side only.
+    bs = {json.dumps(e, sort_keys=True) for e in base_list}
+    cs = {json.dumps(e, sort_keys=True) for e in cand_list}
+    parts = ['%s: base %d, candidate %d' % (section, len(base_list), len(cand_list))]
+    for label, items in (('base-only', sorted(bs - cs)),
+                         ('candidate-only', sorted(cs - bs))):
+        for it in items[:3]:
+            parts.append('%s %s' % (label, it[:120]))
+    return '; '.join(parts)
+
+
 def _portfolio_complete(g):
     # Phase 2E (#66): a portfolio candidate is COMPLETE when it
     # connected everything and added no faults -- the two zero
@@ -752,6 +767,26 @@ class Pipeline:
             return wg
         return None
 
+    def _design_invariance_error(self, board):
+        # #45: compare a portfolio candidate's design fingerprint
+        # (footprint ref/pos/orientation/side, pad-net assignments,
+        # zone census, board outline) against the stripped base's.
+        # Returns None when the design is unchanged, else a short
+        # diff description. The base fingerprint is computed once
+        # per Pipeline; race children each compute their own from
+        # their byte-identical base copy.
+        base = getattr(self, '_base_design', None)
+        if base is None:
+            base = self._worker('design_fingerprint', '--board', self.base)
+            self._base_design = base
+        cand = self._worker('design_fingerprint', '--board', board)
+        diffs = []
+        for sec in ('footprints', 'pads', 'zones', 'edges'):
+            b, c = base.get(sec) or [], cand.get(sec) or []
+            if b != c:
+                diffs.append(_design_diff(sec, b, c))
+        return '; '.join(diffs) if diffs else None
+
     def _run_leg(self, eng):
         # #66: one portfolio candidate, run from the base and gated.
         # Returns an outcome dict and never raises -- a failed leg
@@ -784,6 +819,22 @@ class Pipeline:
             return {'engine': eng, 'status': 'no_board', 'board': None,
                     'seconds': (r or {}).get('seconds'),
                     'detail': (r or {}).get('status')}
+        # #45: design-invariance gate -- a candidate that moved a
+        # part, changed the zone set or the board outline, or
+        # rewired a pad is not a routing of this design, whatever
+        # its gate numbers say, and never reaches selection. Every
+        # candidate is checked: the external engines are the known
+        # movers (KRT's decap step relocates capacitors, its chain
+        # pours its own planes), but the contract is one contract.
+        # Fail-closed: a check that cannot run fails the leg.
+        try:
+            _inv = self._design_invariance_error(outp)
+        except Exception as e:
+            _inv = 'invariance check failed: %s' % e
+        if _inv:
+            return {'engine': eng, 'status': 'failed', 'board': None,
+                    'error': 'design-invariance: %s' % _inv,
+                    'seconds': (r or {}).get('seconds')}
         try:
             g = self.tool_gate(outp)
         except Exception as e:
