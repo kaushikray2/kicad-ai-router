@@ -50,7 +50,9 @@ tracks; you decide priorities and which tool runs next, using tool results.
 
 Procedure (measured on real boards; follow it):
 1. Call board_summary and scorecard first to orient.
-2. Call route with first_nets = the RF net plus the main power nets
+2. If board_summary lists engineered_first_nets, those nets are marked
+   (impedance/differential) and ALWAYS route first: route auto-prepends
+   them to any first_nets you pass. Call route with first_nets = the RF net plus the main power nets
    (e.g. GNSS_RF_IN, +5V, V_BAT+). first_nets route first and other nets
    may not rip them.
 3. Call gate after every route. Judge by: signal_items / split_signal_nets =
@@ -175,9 +177,31 @@ def run_llm(cfg, pipe, log):
                 payload = json.dumps({'error': str(e)[:400]})
             messages.append({'role': 'tool', 'tool_call_id': call['id'] or 'x', 'content': payload})
         if finished: break
+    # #214 (option (b), owner ruling 2026-11-27): the LLM loop's
+    # construction-time setup (netclasses/domains) used to be all
+    # the engineered treatment an LLM run ever got -- the stages
+    # and the report never ran, so a marked board came back
+    # half-engineered with no indication.  Run the deterministic
+    # AUTO epilogue after the tool loop exits, exactly as
+    # _run_auto_once does: fix_violations (#210 order: BEFORE
+    # the engineered stages), the engineered stages, finalize,
+    # gate, and attach the engineered report + placement audit.
+    if cfg.get('fix_violations', True):
+        try: pipe.tool_fix_violations()
+        except Exception as e: log('fix_violations failed: %s' % e)
+    _run_engineered_stages(pipe, log)
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): report the gate of the DELIVERED file
     result = {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
+    try:
+        rep = pipe.engineered_report(final)  # #67 Step 1
+        if rep is not None:
+            result['engineered_nets'] = rep
+    except Exception as e:
+        log('Engineered nets report failed (%s)' % e)
+    audit = getattr(pipe, '_audit', None)  # #42: independent of markings
+    if audit is not None:
+        result['placement_audit'] = audit
     _wd = getattr(pipe, 'workdir', None)
     result['ledger_path'] = os.path.join(_wd, 'ledger.json') if _wd else None
     return result

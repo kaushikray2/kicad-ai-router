@@ -2225,6 +2225,13 @@ class Pipeline:
         split = [n for n in r['nets'] if n['components'] > 1 and n['net'] not in ('GND',)]
         r['split_nets'] = split
         self._record('summary', {'split_nets': [s['net'] for s in split]})
+        eng_first = self._engineered_first_nets()
+        if eng_first:
+            # #214 (option (b)): the model sees the engineered
+            # first-nets explicitly; tool_route auto-prepends
+            # them to any route call regardless of what the
+            # model passes.
+            r['engineered_first_nets'] = eng_first
         return r
 
     def tool_skeleton(self, board=None):
