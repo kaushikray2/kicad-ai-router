@@ -220,3 +220,33 @@ if __name__ == '__main__':
     for fn in fns:
         fn()
     print('test_locate_pan: %d tests passed' % len(fns))
+
+
+class _Arc:
+    # A near-closed large arc: endpoints 1 mm apart (a <4 mm
+    # chord), while the arc itself sweeps ~350 degrees around a
+    # centre far from both endpoints.
+    def __init__(self, x1, y1, x2, y2):
+        self._s, self._e = _Pt(x1, y1), _Pt(x2, y2)
+    def GetStart(self): return self._s
+    def GetEnd(self): return self._e
+    def Type(self): return 'arc_t'
+
+
+def test_pan_near_closed_arc_falls_back_to_shape_at_target():
+    # #229: the #220 endpoint test admits this arc (endpoints
+    # 1 mm apart, both within the 2 mm catchment), but
+    # FocusOnItem centres on the ARC -- far from the marked
+    # point.  Arcs must fall through to the transient shape
+    # centred exactly on the target.
+    md = _load()
+    if md is None:
+        return
+    arc = _Arc(10_000_000, 20_000_000, 11_000_000, 20_000_000)
+    board = _Board(tracks=[arc])
+    fake = _fake_pcbnew(board)
+    fake.PCB_ARC_T = 'arc_t'
+    assert md._pan_board_to(fake, board, 10.5, 20.0) is True
+    assert len(fake.focused) == 1 and isinstance(fake.focused[0], _Shape), fake.focused
+    c = fake.focused[0].center
+    assert (c.x, c.y) == (10_500_000, 20_000_000), (c.x, c.y)
