@@ -193,6 +193,111 @@ def test_pick_folds_the_outgoing_token_and_remove_btn_is_guarded():
     assert 'not self._running' in rrb, rrb
 
 
+# ------------------------------------------------- #213 detach leak
+class _Evt:
+    def __init__(self, sel): self._sel = sel
+    def GetSelection(self): return self._sel
+    def Skip(self): pass
+
+
+class _Field:
+    def __init__(self, v=''): self._v = v
+    def GetValue(self): return self._v
+    def SetValue(self, v): self._v = v
+
+
+class _Btn:
+    def Enable(self, on=True): pass
+
+
+class _Radio:
+    def GetValue(self): return True
+
+
+def _load_dialog_sync():
+    # Load ai_router/dialog.py for a behavioural drive of the pick
+    # handlers; the caller makes wx.CallAfter synchronous.
+    try:
+        import wx
+    except ImportError:
+        return None, None
+    import importlib.machinery, importlib.util
+    path = os.path.join(os.path.dirname(__file__), '..', 'ai_router', 'dialog.py')
+    ld = importlib.machinery.SourceFileLoader('dlg_uut_r8', path)
+    sp = importlib.util.spec_from_loader('dlg_uut_r8', ld)
+    mod = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(mod)
+    return mod, wx
+
+
+def _server_dialog(mod):
+    d = mod.RouterDialog.__new__(mod.RouterDialog)
+    d.custom_servers = [{'name': 'Lab A', 'url': 'http://10.0.0.1:8731', 'token': 'secret-A'},
+                        {'name': 'Lab B', 'url': 'http://10.0.0.2:8731', 'token': 'secret-B'}]
+    d._combo_entries = [None, None, None] + d.custom_servers
+    d.backend_url_ctrl = _Field(PRESETS[0])
+    d.backend_tok_ctrl = _Field('preset-tok')
+    d.remove_server_btn = _Btn()
+    d.run_backend_rb = _Radio()
+    d._running = False
+    d._sel_entry = None
+    d._preset_token = 'preset-tok'
+    d._tok_from_custom = False
+    d._on_settings_changed = lambda *a, **k: None
+    return d
+
+
+def test_url_edit_detach_does_not_leak_custom_token():
+    # #213: pick custom A -> edit one URL character (detaches
+    # _sel_entry while the field still holds A's token) -> pick
+    # custom B -> pick a preset.  The preset must end up with the
+    # preset token, never A's; B's pick must not stash A's token.
+    mod, wx = _load_dialog_sync()
+    if mod is None:
+        import pytest; pytest.importorskip('wx'); return
+    orig = wx.CallAfter
+    wx.CallAfter = lambda fn, *a, **k: fn(*a, **k)
+    try:
+        d = _server_dialog(mod)
+        d._on_server_pick(_Evt(3))            # custom A
+        assert d.backend_tok_ctrl.GetValue() == 'secret-A'
+        assert d._preset_token == 'preset-tok', d._preset_token
+        d.backend_url_ctrl.SetValue('http://10.0.0.1:8731x')
+        d._on_url_text()
+        assert d._sel_entry is None
+        d._on_server_pick(_Evt(4))            # custom B
+        assert d._preset_token == 'preset-tok', d._preset_token
+        assert d.backend_tok_ctrl.GetValue() == 'secret-B'
+        d._on_server_pick(_Evt(0))            # a preset
+        assert d.backend_tok_ctrl.GetValue() == 'preset-tok', d.backend_tok_ctrl.GetValue()
+    finally:
+        wx.CallAfter = orig
+
+
+def test_token_typed_while_detached_is_stashable():
+    # #213 control leg: a token the USER types while the fields
+    # represent no custom entry is genuinely non-custom -- a later
+    # custom pick stashes it and a preset pick restores it.
+    mod, wx = _load_dialog_sync()
+    if mod is None:
+        import pytest; pytest.importorskip('wx'); return
+    orig = wx.CallAfter
+    wx.CallAfter = lambda fn, *a, **k: fn(*a, **k)
+    try:
+        d = _server_dialog(mod)
+        d._on_server_pick(_Evt(3))            # custom A
+        d.backend_url_ctrl.SetValue('http://10.0.0.1:8731x')
+        d._on_url_text()                      # detached; field = secret-A
+        d.backend_tok_ctrl.SetValue('typed-tok')
+        d._on_tok_text()                      # user-authored -> non-custom
+        d._on_server_pick(_Evt(4))            # custom B stashes typed-tok
+        assert d._preset_token == 'typed-tok', d._preset_token
+        d._on_server_pick(_Evt(0))            # preset restores it
+        assert d.backend_tok_ctrl.GetValue() == 'typed-tok'
+    finally:
+        wx.CallAfter = orig
+
+
 if __name__ == '__main__':
     fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for fn in fns:
