@@ -175,8 +175,13 @@ def run_board(board, prep_meta, stack_name, cfg, fingerprint, run_dir, log):
         rec['wall_s'] = round(time.time() - t0, 1)
         rec['workdir'] = pipe.workdir
         g = res.get('gate') or {}
+        split_nets = g.get('split_nets')
+        # the gate record carries split_nets as a LIST of net names;
+        # the bench triple counts them (the selftest convention).
+        splits = (len(split_nets) if isinstance(split_nets, (list, tuple))
+                  else split_nets)
         rec['gate'] = {'unconnected': g.get('unconnected_total'),
-                       'splits': g.get('split_nets'),
+                       'splits': splits,
                        'copper': g.get('copper_violations')}
         rec['gate_raw'] = {k: g.get(k) for k in (
             'unconnected_total', 'split_nets', 'split_signal_nets',
