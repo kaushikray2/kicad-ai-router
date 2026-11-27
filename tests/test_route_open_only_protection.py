@@ -40,7 +40,14 @@ import pipeline as pl
 ALIASES = {'f.cu': 'F.Cu', 'b.cu': 'B.Cu', 'in1.cu': 'In1.Cu', 'gnd': 'In1.Cu',
            'in2.cu': 'In2.Cu', '3v3': 'In2.Cu'}
 LAYERS = ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
-GATE = {'unconnected_total': 0, 'copper_violations': 0,
+# Phase 2E (#66): the stub legs in this file run in-process
+# (portfolio_workers=1; the parallel child path is covered by
+# test_portfolio_racing.py), and the stub gate must not be
+# COMPLETE -- under #66's first-complete selection an
+# all-complete first leg ends the portfolio by design. These
+# tests exercise the exclusion plumbing, so every surviving
+# leg must run: the stub board stays unconnected.
+GATE = {'unconnected_total': 2, 'copper_violations': 0,
         'banned_layer_tracks': 0, 'split_nets': [], 'classes': {}}
 
 
@@ -49,7 +56,7 @@ def _fake_pipe(cfg):
     pipe = object.__new__(pl.Pipeline)
     pipe.workdir = d; pipe.pass_no = 0; pipe._oseq = 0; pipe.ledger = []
     pipe.base = os.path.join(d, 'base.kicad_pcb'); pipe.current = pipe.base
-    pipe.cfg = cfg; pipe.last_gate = dict(GATE); pipe.last_route = None
+    pipe.cfg = dict(cfg); pipe.cfg.setdefault('portfolio_workers', 1); pipe.last_gate = dict(GATE); pipe.last_route = None
     pipe.logs = []; pipe.log = lambda m: pipe.logs.append(m)
     pipe._copper_layers = list(LAYERS)
     pipe.calls = []
