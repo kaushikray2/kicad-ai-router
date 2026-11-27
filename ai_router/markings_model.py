@@ -866,20 +866,28 @@ def summarize_report(rep, audit=None):
         for g in lg.get('groups') or []:
             members = g.get('members') or {}
             # lengthmatch grades members with within_tolerance; the
-            # pipeline's meander pass may add 'failed'/'after' --
-            # either signal means the group missed its band.
+            # pipeline's meander pass stores the post-meander grade
+            # under 'after' and flags 'failed' only when the
+            # after-state still misses -- the top-level values stay
+            # at their PRE-meander readings, so grade and delta
+            # must be read from 'after' when it exists (#217).
             failed = [n for n, m in members.items()
-                      if m.get('failed') or m.get('within_tolerance') is False]
+                      if m.get('failed') or (m.get('after') or m).get('within_tolerance') is False]
             verdict = 'FAIL' if (failed or g.get('error')) else 'PASS'
             parts = []
             if g.get('error'):
                 parts.append(str(g['error']))
             for n, m in sorted(members.items()):
                 bad = n in failed
-                if m.get('delta_mm') is not None:
-                    parts.append('%s \u0394%s mm%s' % (n, _fmt(m['delta_mm']), ' (outside tolerance)' if bad else ''))
-                elif m.get('delta_ps') is not None:
-                    parts.append('%s \u0394%s ps%s' % (n, _fmt(m['delta_ps'], 1), ' (outside tolerance)' if bad else ''))
+                cur = m.get('after') or m
+                suffix = ' (outside tolerance)' if bad else ''
+                meander = m.get('meander') or {}
+                if meander.get('adopted') and meander.get('added_mm') is not None:
+                    suffix += ' (tuned +%s mm)' % _fmt(meander['added_mm'])
+                if cur.get('delta_mm') is not None:
+                    parts.append('%s \u0394%s mm%s' % (n, _fmt(cur['delta_mm']), suffix))
+                elif cur.get('delta_ps') is not None:
+                    parts.append('%s \u0394%s ps%s' % (n, _fmt(cur['delta_ps'], 1), suffix))
             rows.append({'section': 'length_groups',
                          'marking': 'Length group \u2014 %s' % g.get('name'),
                          'verdict': verdict, 'detail': ' \u00b7 '.join(parts), 'at': None})
