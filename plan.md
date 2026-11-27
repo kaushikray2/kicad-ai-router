@@ -808,9 +808,10 @@ next release).
 
 ## In progress
 
-- Phase 2E is under way. Its first item, **#62 (bench
-  harness), has landed** on `main` (see the Phase 2E section);
-  next in the block is #66 (portfolio racing).
+- Phase 2E is under way. **#62 (bench harness) and #66
+  (portfolio racing) have landed** on `main` (see the Phase 2E
+  section); next in the block is item 3, the fair engine A/B
+  (#45/#46/#52).
   v1.12.5 (P2.7a #190 + round 7 fixes #207-#211) is
   released and recorded in Done above; production
   backends stay on 1.10.2 until the owner calls a
@@ -900,8 +901,9 @@ definition comes from it.
    contract. Discharges #52's reproducibility defect in the portfolio
    stage. Before the A/B, so the A/B measures engines rather than a
    timing race.
-   **LANDED 2026-11-27** on branch `phase2e-portfolio-racing`
-   (off bdfbfa1): `Pipeline.tool_portfolio` now races the
+   **LANDED 2026-11-27** on `main` (merged from branch
+   `phase2e-portfolio-racing`, off bdfbfa1; merge cbfbe24):
+   `Pipeline.tool_portfolio` now races the
    configured candidate list in heats of `portfolio_workers`
    (new config key, default 4). Selection is a pure function of
    the finished leg outcomes: the first COMPLETE candidate
@@ -944,8 +946,8 @@ definition comes from it.
    wall = slowest leg, not the sum of legs) is the mechanism
    evidence, and the fair wall verdict belongs to item 3.
    The default `engine_portfolio` is unchanged ('tm_relax');
-   whether it grows now that racing makes the trio cheap is
-   the owner's call.
+   the owner ruled 2026-11-27 that it stays 'tm_relax' only
+   (the trio remains opt-in via config).
 3. **Fair engine A/B — #45, #46, #52.** The queued slot, now here:
    KRT design-invariance gate + `--keep-placement`; Freerouting
    `-mt 1` and power-type DSN layer export; tm_relax bounded by
