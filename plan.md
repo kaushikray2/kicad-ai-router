@@ -984,6 +984,39 @@ definition comes from it.
    produced under a deadline are labelled non-deterministic.
    Independent of the A/B; placed last in the block, and
    pull-forwardable if a lost long run hurts first.
+   **IMPLEMENTED 2026-11-27** on branch `phase2e-item5` (off
+   main 7326fcc; NOT yet merged -- lane sequencing lands item
+   4 first, and #61 closes at merge time): the checkpoint hook
+   (tool_gate of the current board + portfolio adoption)
+   prices candidates with the run key -- `_final_key` /
+   `_unc_key` now defined in pipeline.py, imported by the
+   orchestrator -- and rewrites the job's `result.kicad_pcb`
+   on every strict improvement, atomically (write beside +
+   rename; the result sidecars, the ledger copy and the
+   pipeline's own ledger writes are atomic the same way). One
+   absolute deadline: routing `time_limit_s` becomes
+   `deadline_epoch` once at job start (`AIR_DEADLINE_EPOCH`
+   for subprocess workers and race legs); tools refuse to
+   START new work after it (portfolio legs resolve
+   not-run/deadline, race heats stop starting), in-flight
+   engine passes are capped through their own `--time`, and
+   a result the deadline truncated is labelled
+   (`deadline_hit` / `nondeterministic` in the job status +
+   a ledger `deadline` record). Deadline-free runs are the
+   old behaviour exactly. Proof: tests/test_best_so_far.py
+   (10 tests, fail-before on 7326fcc); suites pytest 205 /
+   standalone 63 (baselines 195 / 62); live fixture proofs --
+   hbridge checkpoint run (artifact gate == delivered gate),
+   mapone under a 20 s deadline (finished in 29.6 s,
+   deadline_hit set, valid unc-5 artifact), a real run_job
+   mapone job SIGTERMed at 74 s (the portfolio winner, unc 0,
+   survived as result.kicad_pcb, byte-identical to its
+   checkpoint sha; the stripped base measures 89
+   unconnected), and a scratch-backend self-test cycle (both
+   fixture jobs done at 0 unconnected, baselines recorded,
+   verdicts PASS). Deadline semantics documented in the
+   README's backend section. Production backends untouched
+   (deployment is the owner's separate decision).
 
 **Diagnostic hardening (read-only; zero effect on routing
 decisions — protects benchmark integrity on #62 / #45 / #46 /
