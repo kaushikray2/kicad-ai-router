@@ -53,12 +53,15 @@ LAYER_COST_UNRESOLVED = []  # (name, factor) pairs the canonical table could not
 # off, and every leg command line is then exactly what it was.
 SKELETON_ON = False
 SKELETON_SLACK_MM = 0.1  # skeleton width = zone min-thickness + slack
-# Phase 2E (#64): --severance charges finisher candidates that
+# Phase 2E (#64/#65): --severance charges finisher candidates that
 # close a barrier loop around an unrouted connection (and for the
-# unrouted airwires they cross). Off unless the pipeline passes
-# the flag (config key severance_scoring); absent, every
-# candidate price is exactly what it was.
+# unrouted airwires they cross); --regret-order commits a repair
+# set in regret order instead of the ILP/greedy cost order. Both
+# off unless the pipeline passes the flags (config keys
+# severance_scoring / regret_order); absent, every candidate price
+# and every commit order is exactly what it was.
 SEVERANCE_ON = False
+REGRET_ORDER_ON = False
 
 def _layer_id_from_name(n):
     n = n.strip()
@@ -3568,6 +3571,26 @@ def _ilp_solve(cands, conflicts):
     return chosen, 'greedy'
 
 
+def _regret_pick(by_net, committed, clr):
+    # Phase 2E (#65): one regret-order commit step. A connection's
+    # available candidates are those not conflicting with the legs
+    # already committed this round; its regret is its available
+    # second-best cost minus its best -- a connection with a single
+    # available candidate has the most to lose and commits first
+    # (infinite regret). Returns (net, candidate) for the highest
+    # regret, ties to the cheaper best then the net name so the
+    # order is deterministic, or None when every connection in
+    # by_net is fully blocked by committed legs. by_net's lists
+    # must be cost-sorted.
+    best = None
+    for n, cs in by_net.items():
+        av = [c for c in cs if not any(_cands_conflict(c, k, clr) for k in committed)]
+        if not av: continue
+        r = math.inf if len(av) == 1 else av[1]['cost'] - av[0]['cost']
+        key = (-r, av[0]['cost'], n)
+        if best is None or key < best[0]: best = (key, n, av[0])
+    return (best[1], best[2]) if best else None
+
 def cmd_ilp_repair(board_path, out_path, nets):
     import subprocess, tempfile
     cur = board_path
@@ -3631,6 +3654,51 @@ def cmd_ilp_repair(board_path, out_path, nets):
     for round_ in range(2):
         rounds = round_ + 1
         barrier = _barrier()
+        if REGRET_ORDER_ON:
+            # Phase 2E (#65): regret-order commit in place of the
+            # ILP/greedy selection below. Commit the connection
+            # with the most to lose first; after each commit, only
+            # the connections whose candidates touch the committed
+            # leg (conflict with it) are rescored, against the new
+            # board -- the rest keep their prices. Connections
+            # left fully blocked fall to the next round, then to
+            # the rip-up path (the later finisher stages).
+            solver = 'regret'
+            all_cands, cand_counts = _gather(barrier)
+            if not all_cands: break
+            by_net = {}
+            for c in all_cands: by_net.setdefault(c['net'], []).append(c)
+            for n in by_net: by_net[n].sort(key=lambda c: c['cost'])
+            b0 = pcbnew.LoadBoard(cur); clr = board_clearance(b0); del b0
+            committed, attempted = [], set()
+            pending = {n for n, cs in by_net.items() if cs}
+            progressed = False
+            leg_no = 0
+            while pending:
+                pick = _regret_pick({n: by_net[n] for n in pending}, committed, clr)
+                if pick is None: break
+                net, cand = pick
+                attempted.add(net); leg_no += 1
+                if _apply(cand, rounds, 100 + leg_no):
+                    progressed = True
+                    committed.append(cand)
+                    dirty = {n for n in pending if n != net and any(_cands_conflict(c, cand, clr) for c in by_net[n])}
+                    pending.discard(net)
+                    if dirty:
+                        barrier = _barrier()
+                        for n in dirty:
+                            cs = _ilp_candidates(cur, n, barrier=barrier)
+                            _note_sev(cs)
+                            cs.sort(key=lambda c: c['cost'])
+                            by_net[n] = cs
+                            if not cs: pending.discard(n)
+                else:
+                    pending.discard(net)
+            for net in cand_counts:
+                if cand_counts[net] and net not in attempted and results.get(net) != 'routed':
+                    results[net] = 'not_selected'
+            if not progressed: break
+            continue
         all_cands, cand_counts = _gather(barrier)
         if not all_cands: break
         b0 = pcbnew.LoadBoard(cur)
@@ -4034,6 +4102,7 @@ def main():
     ap.add_argument('--layer-cost')
     ap.add_argument('--skeleton', action='store_true')  # v1.12 (#63)
     ap.add_argument('--severance', action='store_true')  # Phase 2E (#64)
+    ap.add_argument('--regret-order', action='store_true')  # Phase 2E (#65)
     ap.add_argument('--faults')  # v1.12 (#155): JSON fault list for fix_violations
     ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
@@ -4051,6 +4120,9 @@ def main():
     if a.severance:
         global SEVERANCE_ON
         SEVERANCE_ON = True
+    if a.regret_order:
+        global REGRET_ORDER_ON
+        REGRET_ORDER_ON = True
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'skeleton': res = cmd_skeleton(a.board)

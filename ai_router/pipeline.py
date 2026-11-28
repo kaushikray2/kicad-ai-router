@@ -1730,6 +1730,7 @@ class Pipeline:
         kb = _accept_key(before)
         extra = []
         if self.cfg.get('severance_scoring'): extra += ['--severance']  # Phase 2E (#64)
+        if self.cfg.get('regret_order'): extra += ['--regret-order']  # Phase 2E (#65)
         r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), *self._leg_ban_args(), *self._leg_layer_args(), *extra, *self._leg_skeleton_args())
         if r.get('routed') and os.path.exists(outp):
             prev = self.current
