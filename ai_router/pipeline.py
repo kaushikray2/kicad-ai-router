@@ -1728,7 +1728,9 @@ class Pipeline:
         outp = self._out('ilprepair')
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
         kb = _accept_key(before)
-        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), *self._leg_ban_args(), *self._leg_layer_args(), *self._leg_skeleton_args())
+        extra = []
+        if self.cfg.get('severance_scoring'): extra += ['--severance']  # Phase 2E (#64)
+        r = self._worker('ilp_repair', '--board', self.current, '--out', outp, '--nets', ','.join(nets), *self._leg_ban_args(), *self._leg_layer_args(), *extra, *self._leg_skeleton_args())
         if r.get('routed') and os.path.exists(outp):
             prev = self.current
             self.current = outp

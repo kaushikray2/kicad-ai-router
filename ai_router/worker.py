@@ -53,6 +53,12 @@ LAYER_COST_UNRESOLVED = []  # (name, factor) pairs the canonical table could not
 # off, and every leg command line is then exactly what it was.
 SKELETON_ON = False
 SKELETON_SLACK_MM = 0.1  # skeleton width = zone min-thickness + slack
+# Phase 2E (#64): --severance charges finisher candidates that
+# close a barrier loop around an unrouted connection (and for the
+# unrouted airwires they cross). Off unless the pipeline passes
+# the flag (config key severance_scoring); absent, every
+# candidate price is exactly what it was.
+SEVERANCE_ON = False
 
 def _layer_id_from_name(n):
     n = n.strip()
@@ -3198,10 +3204,290 @@ def _phi_of(v, width_of, pads_of):
     return sc
 
 
-def _ilp_candidates(board_path, net):
+# ---------------------------------------------------------- #64 severance
+# Phase 2E (#64): barrier-closure (severance) penalty in finisher
+# candidate scoring, adapted from the WeaveEngine review of
+# 2026-11-24 (ideas reimplemented, no code taken). A locally cheap
+# leg can close a loop of placed copper, pads and saturated channels
+# around an unrouted connection's pads and strand that net; the
+# finisher discovers the stranding late and pays multi-victim
+# displacement rounds to undo it -- prevention is cheaper than
+# repair. Model: obstacle groups are the connected components of
+# placed track/via/pad copper, plus the board edge as one group;
+# two groups whose surface gap is too narrow for the candidate's
+# net to pass are welded by a saturated gate. A candidate welds the
+# groups holding its endpoint pads; if the welds already join them,
+# the candidate closes a loop, and every other unrouted connection
+# whose airwire crosses that loop an odd number of times is
+# severed by it. Charges are in the planner's own cost units (A*
+# cells; one via step costs 25): SEVER_LAMBDA per severed
+# connection (WeaveEngine's lambda_sever, 50x pitch) and
+# SEVER_LAMBDA_X per unrouted airwire the candidate crosses (their
+# lambda_x, the weaker sibling signal folded into the same change).
+# Two documented approximations: the barrier is evaluated on the
+# 2D projection of the copper (a loop in projection may be
+# escapable on another layer, so the charge is a penalty, never a
+# veto), and zone fills are not obstacle material (a board-wide
+# pour in projection would make the parity test meaningless; pours
+# are guarded by the #63 skeleton reservation instead).
+SEVER_LAMBDA = 50.0
+SEVER_LAMBDA_X = 2.0
+SEVER_GATE_DMAX = 2.5  # widest surface gap (mm) a gate weld can span
+
+def _seg_closest_pt(px, py, x1, y1, x2, y2):
+    dx, dy = x2 - x1, y2 - y1; L2 = dx * dx + dy * dy
+    if L2 == 0: return (x1, y1)
+    u = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / L2))
+    return (x1 + u * dx, y1 + u * dy)
+
+def _seg_intersection(s1, s2):
+    # The proper crossing point of two segments, or None.
+    x1, y1, x2, y2 = s1; x3, y3, x4, y4 = s2
+    d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3)
+    if d == 0: return None
+    t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d
+    u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+    return None
+
+def _seg_seg_closest(s1, s2):
+    # (centreline dist, point on s1, point on s2): exact for
+    # crossing segments (distance 0 at the crossing point) and
+    # whenever the closest pair involves an endpoint (the usual
+    # gate case); staggered interior parallels overstate the gap,
+    # so a gate weld can be missed, never invented -- the
+    # conservative direction for a penalty.
+    ix = _seg_intersection(s1, s2)
+    if ix is not None: return (0.0, ix, ix)
+    x1, y1, x2, y2 = s1; x3, y3, x4, y4 = s2
+    best = None
+    for (px, py) in ((x1, y1), (x2, y2)):
+        q = _seg_closest_pt(px, py, x3, y3, x4, y4)
+        d = math.hypot(px - q[0], py - q[1])
+        if best is None or d < best[0]: best = (d, (px, py), q)
+    for (px, py) in ((x3, y3), (x4, y4)):
+        q = _seg_closest_pt(px, py, x1, y1, x2, y2)
+        d = math.hypot(px - q[0], py - q[1])
+        if d < best[0]: best = (d, q, (px, py))
+    return best
+
+def _segs_cross(p1, p2, p3, p4):
+    # Proper crossings only: an airwire that merely touches the
+    # loop (shared endpoint, collinear overlap) is not severed.
+    def orient(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    d1, d2 = orient(p3, p4, p1), orient(p3, p4, p2)
+    d3, d4 = orient(p1, p2, p3), orient(p1, p2, p4)
+    if 0.0 in (d1, d2, d3, d4): return False
+    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
+
+def _item_gap(a, b):
+    # Surface gap (mm) between two barrier items; negative means
+    # overlap. Items: ('seg', net, (x1, y1, x2, y2, halfwidth)) or
+    # ('pt', net, (x, y, r)).
+    if a[0] == 'seg' and b[0] == 'seg':
+        d, _p, _q = _seg_seg_closest(a[2][:4], b[2][:4])
+        return d - a[2][4] - b[2][4]
+    if a[0] == 'pt' and b[0] == 'pt':
+        return math.hypot(a[2][0] - b[2][0], a[2][1] - b[2][1]) - a[2][2] - b[2][2]
+    if a[0] == 'pt': a, b = b, a
+    return seg_pt(b[2][0], b[2][1], a[2][0], a[2][1], a[2][2], a[2][3]) - a[2][4] - b[2][2]
+
+def _item_closest(a, b):
+    # (surface gap, point on a, point on b): the gate chord.
+    if a[0] == 'seg' and b[0] == 'seg':
+        d, p, q = _seg_seg_closest(a[2][:4], b[2][:4])
+        return (d - a[2][4] - b[2][4], p, q)
+    if a[0] == 'pt' and b[0] == 'pt':
+        return (_item_gap(a, b), (a[2][0], a[2][1]), (b[2][0], b[2][1]))
+    if a[0] == 'pt':
+        g, q, p = _item_closest(b, a); return (g, p, q)
+    q = _seg_closest_pt(b[2][0], b[2][1], a[2][0], a[2][1], a[2][2], a[2][3])
+    return (_item_gap(a, b), q, (b[2][0], b[2][1]))
+
+class _Barrier:
+    # Obstacle model of one board state, built once per repair
+    # round: components (union-find over touching same-net items),
+    # saturated-gate welds between components, and the airwires of
+    # every still-split net (MST over its pad clusters, endpoints
+    # resolved to components).
+    def __init__(self, b):
+        conn = b.GetConnectivity(); conn.Build(b)
+        items = []       # ('seg'|'pt', net, geom); edge items: net None
+        pad_item = {}    # (net, rx, ry) -> item index
+        for fp in b.GetFootprints():
+            for p in fp.Pads():
+                x, y = mm(p.GetPosition().x), mm(p.GetPosition().y)
+                r = max(mm(p.GetSize().x), mm(p.GetSize().y)) / 2
+                pad_item[(p.GetNetname(), round(x, 2), round(y, 2))] = len(items)
+                items.append(('pt', p.GetNetname(), (x, y, r)))
+        for t in b.GetTracks():
+            if t.Type() == pcbnew.PCB_VIA_T:
+                items.append(('pt', t.GetNetname(), (mm(t.GetPosition().x), mm(t.GetPosition().y), mm(t.GetWidth(pcbnew.F_Cu)) / 2)))
+            else:
+                items.append(('seg', t.GetNetname(), (mm(t.GetStart().x), mm(t.GetStart().y), mm(t.GetEnd().x), mm(t.GetEnd().y), mm(t.GetWidth()) / 2)))
+        edge0 = len(items)
+        edge_id = b.GetLayerID('Edge.Cuts')
+        for dr in b.GetDrawings():
+            if dr.GetLayer() != edge_id: continue
+            for (x1, y1, x2, y2) in _edge_shape_segments(dr):
+                items.append(('seg', None, (x1, y1, x2, y2, 0.0)))
+        # Candidate pairs: items that can come within
+        # SEVER_GATE_DMAX of each other, found by sampling each
+        # item every ~1.25 mm into a uniform hash (5x5 cell
+        # neighbourhood covers the widest gate plus sample slack).
+        STEP = 1.25
+        def samples(it):
+            if it[0] == 'pt':
+                x, y, r = it[2]
+                return [(x, y), (x + r, y), (x - r, y), (x, y + r), (x, y - r)]
+            x1, y1, x2, y2 = it[2][:4]
+            n = max(1, int(math.hypot(x2 - x1, y2 - y1) / STEP))
+            return [(x1 + (x2 - x1) * k / n, y1 + (y2 - y1) * k / n) for k in range(n + 1)]
+        buckets = {}
+        for i, it in enumerate(items):
+            for (sx, sy) in samples(it):
+                buckets.setdefault((int(sx / STEP), int(sy / STEP)), []).append(i)
+        pairs = set()
+        for (cx, cy), idxs in buckets.items():
+            near = []
+            for dx in (-2, -1, 0, 1, 2):
+                for dy in (-2, -1, 0, 1, 2):
+                    near += buckets.get((cx + dx, cy + dy), [])
+            for i in idxs:
+                for j in near:
+                    if j > i: pairs.add((i, j))
+        # Union-find over touching same-net items (surface gap
+        # under 0.011 mm). Edge items never union: the outline is
+        # one group by construction.
+        parent = list(range(len(items)))
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]; x = parent[x]
+            return x
+        for (i, j) in pairs:
+            if items[i][1] is None or items[i][1] != items[j][1]: continue
+            if _item_gap(items[i], items[j]) < 0.011:
+                ri, rj = find(i), find(j)
+                if ri != rj: parent[ri] = rj
+        def root_of(i):
+            return 'EDGE' if i >= edge0 else find(i)
+        self.pad_comp = {k: root_of(v) for k, v in pad_item.items()}
+        # Saturated gates: closest surface approach per component
+        # pair, kept as a chord for the parity walk.
+        self.gates = {}
+        for (i, j) in pairs:
+            ri, rj = root_of(i), root_of(j)
+            if ri == rj: continue
+            gap, pi, pj = _item_closest(items[i], items[j])
+            if gap > SEVER_GATE_DMAX: continue
+            key = (ri, rj) if str(ri) <= str(rj) else (rj, ri)
+            if key not in self.gates or gap < self.gates[key][0]:
+                chord = (pi, pj) if key[0] == ri else (pj, pi)
+                self.gates[key] = (gap, chord[0], chord[1])
+        # Airwires of every split net.
+        self.airwires = []
+        netnames = sorted({p.GetNetname() for fp in b.GetFootprints() for p in fp.Pads()})
+        for net in netnames:
+            pads, clusters = _pad_clusters(b, conn, net)
+            if len(clusters) <= 1: continue
+            cof = _comp_of(pads, clusters)
+            # One representative per cluster: its position and the
+            # barrier component of its first resolvable pad.
+            # _comp_of omits pads whose position appears in no
+            # cluster id set (duplicate-position pads), and a
+            # cluster whose pads are all absent from the item
+            # model cannot be placed in the barrier -- both are
+            # skipped rather than guessed.
+            reps = {}
+            for (name, x, y, _layers, _p) in pads:
+                ci = cof.get(name)
+                if ci is None or ci in reps: continue
+                root = self.pad_comp.get((net, round(x, 3), round(y, 3)))
+                if root is None: continue
+                reps[ci] = ((x, y), root)
+            keys = sorted(reps)
+            if len(keys) < 2: continue
+            pts = [reps[k][0] for k in keys]
+            for (i, j, _d) in _mst_edges(pts):
+                self.airwires.append({'net': net, 'p1': pts[i], 'p2': pts[j],
+                                      'c1': reps[keys[i]][1], 'c2': reps[keys[j]][1]})
+
+    def loop_chain(self, cA, cB, need, ptA, ptB):
+        # If the welds (gates with gap < need, the edge group
+        # included) already join cA and cB, a candidate between
+        # them closes a loop: return (return-path segments
+        # Bp -> A, loop node set), the path running gate chord to
+        # gate chord with straight intra-component chords between.
+        # (None, None) when the groups are not yet one barrier.
+        if cA == cB: return ([(ptB, ptA)], {cA})
+        adj = {}
+        for (ra, rb), (gap, pa, pb) in self.gates.items():
+            if gap >= need: continue
+            adj.setdefault(ra, []).append((rb, pa, pb))
+            adj.setdefault(rb, []).append((ra, pb, pa))
+        prev = {cA: None}
+        queue = [cA]
+        while queue:
+            x = queue.pop(0)
+            if x == cB: break
+            for (y, p_on_x, p_on_y) in adj.get(x, []):
+                if y not in prev:
+                    prev[y] = (x, p_on_x, p_on_y)
+                    queue.append(y)
+        if cB not in prev: return (None, None)
+        hops = []
+        node = cB
+        while prev[node] is not None:
+            lo, p_on_lo, p_on_hi = prev[node]
+            hops.append((node, lo, p_on_hi, p_on_lo))
+            node = lo
+        segs, nodes, cur = [], set(), ptB
+        for (hi, lo, p_hi, p_lo) in hops:
+            nodes.add(hi); nodes.add(lo)
+            segs.append((cur, p_hi)); segs.append((p_hi, p_lo)); cur = p_lo
+        segs.append((cur, ptA))
+        return (segs, nodes)
+
+def _severance_charge(model, net, A, Bp, simp, need):
+    # (charge, severed_nets, airwire_crossings) for one candidate:
+    # its planned path (simp, the A* point list) priced against the
+    # barrier model of the board it was planned on. A and Bp are
+    # the pad tuples _plan_attempts returns.
+    poly = []
+    for (_l, x, y) in simp:
+        if not poly or poly[-1] != (x, y): poly.append((x, y))
+    cA = model.pad_comp.get((net, round(A[1], 2), round(A[2], 2)))
+    cB = model.pad_comp.get((net, round(Bp[1], 2), round(Bp[2], 2)))
+    served = None
+    for w in model.airwires:
+        if w['net'] == net and {w['c1'], w['c2']} == {cA, cB}: served = w; break
+    path_segs = list(zip(poly, poly[1:]))
+    crossings = 0
+    for w in model.airwires:
+        if w is served: continue
+        for (p1, p2) in path_segs:
+            if _segs_cross(p1, p2, w['p1'], w['p2']): crossings += 1
+    severed = []
+    if cA is not None and cB is not None:
+        chain, loop_nodes = model.loop_chain(cA, cB, need, (A[1], A[2]), (Bp[1], Bp[2]))
+        if chain is not None:
+            curve = path_segs + chain
+            for w in model.airwires:
+                if w is served: continue
+                if w['c1'] in loop_nodes or w['c2'] in loop_nodes: continue
+                par = 0
+                for (p1, p2) in curve:
+                    if _segs_cross(p1, p2, w['p1'], w['p2']): par ^= 1
+                if par: severed.append(w['net'])
+    return (SEVER_LAMBDA * len(severed) + SEVER_LAMBDA_X * crossings, severed, crossings)
+
+
+def _ilp_candidates(board_path, net, barrier=None):
     plan = _plan_attempts(board_path, net)
     if plan is None: return []
-    _A, _Bp, attempts = plan
+    A, Bp, attempts = plan
     b0 = pcbnew.LoadBoard(board_path); refill(b0)
     width_of, pads_of = _phi_maps(b0)
     tw = net_class_width(b0, net, W_TRACK); vr = net_class_via(b0, net)[0] / 2
@@ -3214,8 +3500,17 @@ def _ilp_candidates(board_path, net):
         if early is not None or simp is None: continue
         segs, vias = path_segs_vias(simp)
         price = float(cost or 0.0) + sum(_phi_of(v, width_of, pads_of) for v in victims)
-        cands.append({'net': net, 'victims': victims, 'segs': segs, 'vias': vias,
-                      'cost': price, 'tw': tw, 'vr': vr})
+        cand = {'net': net, 'victims': victims, 'segs': segs, 'vias': vias,
+                'cost': price, 'tw': tw, 'vr': vr}
+        if SEVERANCE_ON and barrier is not None:
+            # #64: charge the candidate for the barrier loops its
+            # path would close and the unrouted airwires it
+            # crosses, at the width its own net needs to pass a
+            # gate (track width + both clearances).
+            charge, severed, xings = _severance_charge(barrier, net, A, Bp, simp, tw + 2 * board_clearance(b0))
+            cand['cost'] = price + charge
+            cand['severed'] = severed; cand['xings'] = xings
+        cands.append(cand)
     return cands
 
 
@@ -3279,16 +3574,64 @@ def cmd_ilp_repair(board_path, out_path, nets):
     results = {}
     solver = None
     rounds = 0
-    for round_ in range(2):
-        rounds = round_ + 1
-        all_cands = []
-        cand_counts = {}
+    sev = {'evaluated': 0, 'severed': 0, 'crossings': 0}
+
+    def _barrier():
+        if not SEVERANCE_ON: return None
+        bb = pcbnew.LoadBoard(cur); refill(bb)
+        m = _Barrier(bb); del bb
+        return m
+
+    def _note_sev(cs):
+        for c in cs:
+            if c.get('severed') or c.get('xings'):
+                sev['evaluated'] += 1
+                sev['severed'] += len(c.get('severed') or [])
+                sev['crossings'] += c.get('xings') or 0
+
+    def _gather(barrier):
+        all_cands, cand_counts = [], {}
         for net in nets:
             if results.get(net) == 'routed': continue
-            cs = _ilp_candidates(cur, net)
+            cs = _ilp_candidates(cur, net, barrier=barrier)
             cand_counts[net] = len(cs)
             if not cs and net not in results: results[net] = 'no_candidate'
+            _note_sev(cs)
             all_cands += cs
+        return all_cands, cand_counts
+
+    def _apply(cand, rnd, idx):
+        # Execute one priced candidate: a finish_attempt child on
+        # the current accumulated board. On 'routed' the board
+        # advances; sequencing is the caller's business.
+        nonlocal cur
+        fd, rpath = tempfile.mkstemp(suffix='.json'); os.close(fd)
+        # v1.8.2 (#14): unique leg output -- reusing one path made
+        # each leg read AND write the same file, so a failed save
+        # corrupted the accumulated state.
+        tmp_out = '%s.leg-%d-%d.kicad_pcb' % (out_path, rnd, idx)
+        cmdline = [sys.executable, os.path.abspath(__file__), 'finish_attempt',
+                   '--board', cur, '--out', tmp_out, '--net', cand['net'],
+                   '--victims', ','.join(cand['victims']), '--result', rpath]
+        if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
+        if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
+        if SKELETON_ON: cmdline += ['--skeleton']
+        try:
+            subprocess.run(cmdline, capture_output=True, text=True, timeout=600)
+            res = json.load(open(rpath))
+        except Exception:
+            res = {'status': 'failed'}
+        try: os.unlink(rpath)
+        except Exception: pass
+        results[cand['net']] = res.get('status')
+        if res.get('status') == 'routed':
+            cur = tmp_out; return True
+        return False
+
+    for round_ in range(2):
+        rounds = round_ + 1
+        barrier = _barrier()
+        all_cands, cand_counts = _gather(barrier)
         if not all_cands: break
         b0 = pcbnew.LoadBoard(cur)
         clr = board_clearance(b0); del b0
@@ -3305,36 +3648,14 @@ def cmd_ilp_repair(board_path, out_path, nets):
         if not sel: break
         progressed = False
         for i in sorted(sel, key=lambda k: all_cands[k]['cost']):
-            cand = all_cands[i]
-            fd, rpath = tempfile.mkstemp(suffix='.json'); os.close(fd)
-            # v1.8.2 (#14): unique leg output -- reusing one path made
-            # each leg read AND write the same file, so a failed save
-            # corrupted the accumulated state.
-            tmp_out = '%s.leg-%d-%d.kicad_pcb' % (out_path, rounds, i)
-            cmdline = [sys.executable, os.path.abspath(__file__), 'finish_attempt',
-                       '--board', cur, '--out', tmp_out, '--net', cand['net'],
-                       '--victims', ','.join(cand['victims']), '--result', rpath]
-            if NO_TRACKS_ON_RAW is not None: cmdline += ['--no-tracks-on', NO_TRACKS_ON_RAW]  # v1.11.2 (#104): forward an explicit '' too
-            if LAYER_COST_RAW: cmdline += ['--layer-cost', LAYER_COST_RAW]
-            if SKELETON_ON: cmdline += ['--skeleton']
-            try:
-                subprocess.run(cmdline, capture_output=True, text=True, timeout=600)
-                res = json.load(open(rpath))
-            except Exception:
-                res = {'status': 'failed'}
-            try: os.unlink(rpath)
-            except Exception: pass
-            results[cand['net']] = res.get('status')
-            if res.get('status') == 'routed':
-                cur = tmp_out; progressed = True
+            if _apply(all_cands[i], rounds, i): progressed = True
         if not progressed: break
     if cur != board_path:
         import shutil; shutil.copy(cur, out_path)
-    return {'status': 'done', 'solver': solver, 'rounds': rounds,
-            'routed': [n for n, s in results.items() if s == 'routed'], 'nets': results}
-
-
-
+    res = {'status': 'done', 'solver': solver, 'rounds': rounds,
+           'routed': [n for n, s in results.items() if s == 'routed'], 'nets': results}
+    if SEVERANCE_ON: res['severance'] = sev
+    return res
 def _freerouting_bin():
     for cand in (os.environ.get('FREEROUTING_BIN'), '/opt/freerouting/bin/freerouting'):
         if cand and os.path.exists(cand):
@@ -3712,6 +4033,7 @@ def main():
     ap.add_argument('--no-tracks-on')
     ap.add_argument('--layer-cost')
     ap.add_argument('--skeleton', action='store_true')  # v1.12 (#63)
+    ap.add_argument('--severance', action='store_true')  # Phase 2E (#64)
     ap.add_argument('--faults')  # v1.12 (#155): JSON fault list for fix_violations
     ap.add_argument('--passes', type=int, default=50)
     a = ap.parse_args()
@@ -3726,6 +4048,9 @@ def main():
     if a.skeleton:
         global SKELETON_ON
         SKELETON_ON = True
+    if a.severance:
+        global SEVERANCE_ON
+        SEVERANCE_ON = True
     if a.cmd == 'summary': res = cmd_summary(a.board, fast=getattr(a, 'fast', False))
     elif a.cmd == 'scorecard': res = cmd_scorecard(a.board)
     elif a.cmd == 'skeleton': res = cmd_skeleton(a.board)

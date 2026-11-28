@@ -42,6 +42,7 @@ DEFAULTS = {
     'reroute_margin': 6.0,     # v1.9 (Phase 1.5): window margin (mm) around the stuck corridor / net bbox   # v1.9 (Phase 1.3): with pass_advice='priority', also reserve the stuck report's per-connection region_mm corridor for its net (advice 'regions', reserve_for)
     'attempt_select': False,  # v1.7: bridge-aware attempt selection in finish_leg -- DEFAULT OFF: measured 2026-11-22 head-to-head vs v1.6.0 on srambo (6 nets) + Manikin (4 nets): outcomes identical on all 10, 0 closures, probes cost +14-39s where they engage; enable for the attempts_probed diagnostics
     'ilp_repair_cap': 0,      # AUTO: joint ILP repair per run (v1.5, phase (c) Stage B) -- DEFAULT OFF: measured 2026-11-22, the ILP closes nothing yet (execution/re-bridge binds, not selection); enable per-run to experiment     # AUTO: max large-window hard-A* long_finish attempts per run (v1.4, phase (c) Stage B-0)     # AUTO: max pour-net finish_leg attempts per run (was hard-coded 2)
+    'severance_scoring': False,  # Phase 2E (#64): barrier-closure (severance) penalty in ilp_repair candidate pricing -- DEFAULT OFF pending the item-4 A/B verdict
     'work': 40000000,  # v1.12.2 (#180): recalibrated -- 20M starved Nomad-class boards on the Phase 2 engine (Stage C: 1 unconnected, stopped_by=work; the 40M rerun restored 0/0/14, job 0d50e2a7)
     'no_tracks_on': 'In1.Cu',
     'layer_law_policy': 'auto',  # v1.8: B-first + escalate on >=4L In2-pour boards (dataset-v3 gap)
