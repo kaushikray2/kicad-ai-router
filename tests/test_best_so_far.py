@@ -255,6 +255,125 @@ def test_server_config_carries_time_limit():
     assert srv.default_config()['routing']['time_limit_s'] == 0
 
 
+def _variant_gate(unc, splits):
+    return {'unconnected_total': unc, 'copper_violations': 0,
+            'banned_layer_tracks': 0, 'split_nets': list(splits),
+            'split_signal_nets': list(splits), 'split_pour_nets': [],
+            'classes': {}}
+
+
+def _variant_harness(state):
+    import orchestrator as orc
+    built, ran = [], []
+
+    class _FakePipe:
+        def __init__(self, cfg, board_path, log):
+            built.append(cfg.get('no_tracks_on'))
+            self.board_path = board_path
+        def deadline_passed(self):
+            return state['pipe_hit']
+
+    class _Caller:
+        board_path = 'board.kicad_pcb'
+        def tool_board_summary(self):
+            return {'copper_layers': ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu'],
+                    'pour_layers': {'GND': ['In1.Cu', 'In2.Cu']},
+                    'layer_aliases': {}}
+
+    def fake_once(cfg, pipe, log):
+        ran.append(cfg.get('no_tracks_on'))
+        if cfg.get('no_tracks_on') == 'In1.Cu,In2.Cu':
+            return {'gate': _variant_gate(state['b_unc'], ['SIG1']),
+                    'deadline_hit': state['res_hit'],
+                    'final_board': 'B'}
+        return {'gate': _variant_gate(state['a_unc'], []),
+                'deadline_hit': state['a_hit'], 'final_board': 'A'}
+
+    saved = (orc.Pipeline, orc._run_auto_once)
+    orc.Pipeline, orc._run_auto_once = _FakePipe, fake_once
+    try:
+        res = orc.run_auto({'layer_law_policy': 'auto'}, _Caller(),
+                           lambda m: None)
+    finally:
+        orc.Pipeline, orc._run_auto_once = saved
+    return res, built, ran
+
+
+def test_run_auto_no_escalation_after_deadline():
+    # #241: Variant B deadline-bound -- by its result dict OR
+    # by the pipe's own deadline flag -- with splits that
+    # would otherwise escalate, must return B at once: no
+    # second Pipeline is built and Variant A never runs.
+    for state in ({'res_hit': True, 'pipe_hit': False},
+                  {'res_hit': False, 'pipe_hit': True}):
+        state.update({'b_unc': 3, 'a_unc': 0, 'a_hit': False})
+        res, built, ran = _variant_harness(state)
+        assert res['final_board'] == 'B', (state, res)
+        assert built == ['In1.Cu,In2.Cu'], (state, built)
+        assert ran == ['In1.Cu,In2.Cu'], (state, ran)
+
+
+def test_run_auto_deadline_hit_ors_across_variants():
+    # #241: escalation runs, A is deadline-bound but worse,
+    # B is kept -- the kept result must still carry the run's
+    # deadline label.
+    state = {'res_hit': False, 'pipe_hit': False,
+             'b_unc': 0, 'a_unc': 9, 'a_hit': True}
+    res, built, ran = _variant_harness(state)
+    assert res['final_board'] == 'B', res
+    assert built == ['In1.Cu,In2.Cu', 'In1.Cu'], built
+    assert res['deadline_hit'] is True, res
+
+
+def test_portfolio_ledger_carries_deadline_detail():
+    # #242: the first sequential leg resolves not-run/deadline
+    # and the tail legs inherit the cause; every not-run entry
+    # in the ledger record carries the detail (raced outcomes
+    # lost theirs in this builder too, before the fix).
+    with tempfile.TemporaryDirectory() as wd:
+        pipe = _shell({'portfolio_workers': 1}, wd)
+        pipe._check_deadline = lambda *a: None
+        pipe._layer_cost_spec = lambda b: None
+        pipe.deadline_passed = lambda: False
+        records = []
+        pipe._record = lambda kind, rec: records.append((kind, rec))
+        pipe._run_leg = lambda eng: {'engine': eng,
+                                     'status': 'not-run',
+                                     'detail': 'deadline'}
+        out = pipe.tool_portfolio(['tm_relax', 'freerouting', 'krt'])
+        assert out is None
+        rec = [r for k, r in records if k == 'portfolio'][0]
+        by_eng = {e['engine']: e for e in rec['results']}
+        for eng in ('tm_relax', 'freerouting', 'krt'):
+            assert by_eng[eng]['termination'] == 'not-run', by_eng
+            assert by_eng[eng].get('detail') == 'deadline', by_eng
+
+
+def test_race_heat_interrupted_vs_never_started():
+    # #242: a leg killed in flight by the deadline is
+    # 'interrupted'; a leg that never started is not -- the
+    # two read identically (not-run/deadline) without the flag.
+    with tempfile.TemporaryDirectory() as wd:
+        pipe = _shell({}, wd)
+        pipe.deadline_passed = lambda: True
+        pipe._leg_watchdog_s = lambda: 30
+
+        class _Proc:
+            def poll(self):
+                return None
+        pipe._spawn_leg = lambda i, eng: {'proc': _Proc(), 'engine': eng}
+        pipe._poll_leg = lambda h: None      # still running
+        pipe._kill_leg = lambda h: None
+        outcomes = pipe._race_heat(['tm_relax'], 0)
+        assert outcomes[0]['status'] == 'not-run', outcomes
+        assert outcomes[0]['detail'] == 'deadline', outcomes
+        assert outcomes[0].get('interrupted') is True, outcomes
+        outcomes = pipe._race_portfolio(['tm_relax', 'krt'], 2)
+        assert all(o['status'] == 'not-run'
+                   and o.get('detail') == 'deadline'
+                   and not o.get('interrupted') for o in outcomes), outcomes
+
+
 if __name__ == '__main__':
     fns = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for fn in fns:
