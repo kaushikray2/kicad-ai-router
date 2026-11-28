@@ -277,12 +277,37 @@ def test_footprint_tolerance_bounds():
     assert not pl._footprints_match(base, base[:1])
 
 
+def test_footprint_match_duplicate_refs():
+    # #231: refs are not unique -- unannotated parts (REF**),
+    # mounting holes and fiducials share a ref. Identical
+    # fingerprints with duplicate refs must match (the old
+    # dict-by-ref collapse rejected EVERY candidate on such
+    # boards, tm_relax included), a reordered identical set
+    # must match, and a genuinely moved or turned duplicate
+    # must still fail.
+    base = [['REF**', 1000000, 2000000, 0.0, False],
+            ['REF**', 5000000, 2000000, 0.0, False],
+            ['U1', 9000000, 9000000, 90.0, False]]
+    assert pl._footprints_match(base, [list(e) for e in base])
+    swapped = [base[1], base[0], base[2]]
+    assert pl._footprints_match(base, [list(e) for e in swapped])
+    moved = [['REF**', 1000000, 2000000, 0.0, False],
+             ['REF**', 5500000, 2000000, 0.0, False],
+             ['U1', 9000000, 9000000, 90.0, False]]
+    assert not pl._footprints_match(base, moved)
+    turned = [['REF**', 1000000, 2000000, 0.0, False],
+              ['REF**', 5000000, 2000000, 180.0, False],
+              ['U1', 9000000, 9000000, 90.0, False]]
+    assert not pl._footprints_match(base, turned)
+
+
 if __name__ == '__main__':
     test_copper_stack_index()
     test_freeroute_mt1_and_dsn_law()
     test_krt_flags_and_law_zones()
     test_fingerprint_detects_design_changes()
     test_footprint_tolerance_bounds()
+    test_footprint_match_duplicate_refs()
     test_law_zone_roundtrip_is_invisible()
     test_leg_gets_the_layer_law()
     test_leg_rejects_a_moved_part_before_gating()
