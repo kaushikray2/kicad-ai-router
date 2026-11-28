@@ -29,9 +29,9 @@ try:
 except ImportError:
     from llm_client import LLMClient, LLMError
 try:
-    from .pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta
+    from .pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta, _final_key, _unc_key
 except ImportError:
-    from pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta
+    from pipeline import Pipeline, cost_tail, fault_count, parse_layer_cost, starved_delta, _final_key, _unc_key
 try:
     from .config import DEFAULTS as _CFG_DEFAULTS
 except Exception:
@@ -145,6 +145,9 @@ def run_llm(cfg, pipe, log):
     max_calls = _cfg_int(cfg, 'max_tool_calls', 48)
     calls_made = 0
     while calls_made < max_calls:
+        if getattr(pipe, 'deadline_passed', None) is not None and pipe.deadline_passed():  # #61: stop starting new work; finalize delivers the best so far
+            log('Deadline passed -- finishing with the best board so far (#61)')
+            break
         try:
             resp = client.chat(messages, TOOLS)
         except LLMError as e:
@@ -175,9 +178,11 @@ def run_llm(cfg, pipe, log):
                 payload = json.dumps({'error': str(e)[:400]})
             messages.append({'role': 'tool', 'tool_call_id': call['id'] or 'x', 'content': payload})
         if finished: break
+    if getattr(pipe, 'deadline_hit', False):
+        pipe._record('deadline', {'epoch': pipe._deadline_epoch(), 'hit': True})  # #61
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): report the gate of the DELIVERED file
-    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
+    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe), 'deadline_hit': bool(getattr(pipe, 'deadline_hit', False))}
 
 def default_first_nets(pipe):
     summ = pipe.tool_board_summary()
@@ -196,27 +201,11 @@ def default_first_nets(pipe):
             seen.add(p); out.append(p)
     return out[:6]
 
-def _unc_key(g):
-    # v1.8.2 (#13): None-safe -- 'unconnected_total or 9999' mapped a
-    # fully connected board (0) to 9999, the WORST key, so the pass
-    # loop restored worse passes over perfect ones and a layer-law
-    # escalation that connected everything lost to the split variant.
-    u = (g or {}).get('unconnected_total')
-    return 10 ** 9 if u is None else u
-
-def _final_key(g):
-    # v1.11.4 (#115): the same layer-cost tail as _accept_key,
-    # appended last -- this key's (unconnected, splits, faults)
-    # order is deliberate (#37) and unchanged; the tail only breaks
-    # full ties, so between two passes equal on the gate the cheaper
-    # one now wins instead of whichever came first.
-    # Merged key (P2.1b merge, 2026-11-26): the starved-thermal
-    # delta tier (#116) and the skeleton-intrusion tier (#63/#158)
-    # both price after real faults and before the cost tail --
-    # starved is a connectivity-quality signal, intrusions a
-    # policy census, so starved ranks first of the two.
-    _intr = int(g.get('skeleton_intrusions') or 0)
-    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), starved_delta(g), _intr, cost_tail(g))
+# _unc_key / _final_key are defined in pipeline.py since #61 --
+# the best-so-far checkpoint hook prices candidate boards with
+# the run key, so it must be the same function this policy's
+# best-tracking uses -- and imported above, so
+# orchestrator._final_key still resolves for its callers/tests.
 
 def _b_needs_escalation(gate):
     # v1.12.2 (#179): B is kept only when it left NOTHING split.
@@ -275,14 +264,22 @@ def run_auto(cfg, pipe, log):
             import time as _time; _time.sleep(1.1)  # pipe_b needs a distinct workdir stamp
             cfg_b = dict(cfg); cfg_b['no_tracks_on'] = 'In1.Cu,In2.Cu'
             log('Layer-law policy: Variant B (In2 banned) first on this %d-layer pour board' % len(layers))
-            res_b = _run_auto_once(cfg_b, Pipeline(cfg_b, pipe.board_path, log), log)
+            pipe_b = Pipeline(cfg_b, pipe.board_path, log)
+            pipe_b.best_so_far_path = getattr(pipe, 'best_so_far_path', None)  # #61: the variants share the caller's checkpoint artifact
+            _shared_best = getattr(pipe, '_best_state', None)  # #61: ... and its best-key state, so neither variant can overwrite the other's better board with a worse one
+            if _shared_best is not None: pipe_b._best_state = _shared_best
+            res_b = _run_auto_once(cfg_b, pipe_b, log)
             if not _b_needs_escalation(res_b['gate']):
                 log('Layer-law policy: B left no split nets -- keeping B')
                 return res_b
             log('Layer-law policy: B left split nets (signal %s, pour %s) -- escalating to Variant A' % (res_b['gate'].get('split_signal_nets'), res_b['gate'].get('split_pour_nets')))
             import time as _time; _time.sleep(1.1)  # pipe2 needs a distinct workdir stamp
             cfg2 = dict(cfg); cfg2['no_tracks_on'] = 'In1.Cu'
-            res_a = _run_auto_once(cfg2, Pipeline(cfg2, pipe.board_path, log), log)
+            pipe_a = Pipeline(cfg2, pipe.board_path, log)
+            pipe_a.best_so_far_path = getattr(pipe, 'best_so_far_path', None)  # #61: shared checkpoint artifact (see Variant B)
+            _shared_best = getattr(pipe, '_best_state', None)  # #61: shared best-key state
+            if _shared_best is not None: pipe_a._best_state = _shared_best
+            res_a = _run_auto_once(cfg2, pipe_a, log)
             ka, kb = _final_key(res_a['gate']), _final_key(res_b['gate'])
             log('Layer-law policy: A key %s vs B key %s -- keeping %s' % (ka, kb, 'A' if ka < kb else 'B'))
             return res_a if ka < kb else res_b
@@ -471,7 +468,12 @@ def _run_auto_once(cfg, pipe, log):
         try: pipe.tool_fix_violations()
         except Exception as e: log('fix_violations failed: %s' % e)
         gate = pipe.tool_gate()
+    if getattr(pipe, 'deadline_hit', False):
+        # #61: the deadline shaped this result -- the ledger says
+        # so, and run_job labels the job non-deterministic.
+        pipe._record('deadline', {'epoch': pipe._deadline_epoch(), 'hit': True})
+        log('Deadline was hit -- this result is the best found so far and is labelled non-deterministic (#61)')
     final = pipe.finalize()
     gate = pipe.tool_gate(final)  # v1.8.2 (#18): the reported gate measures the delivered file
     log('AUTO done: %s' % json.dumps({k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'violations_total')}))
-    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe)}
+    return {'final_board': final, 'gate': gate, 'route': _route_info(pipe), 'deadline_hit': bool(getattr(pipe, 'deadline_hit', False))}

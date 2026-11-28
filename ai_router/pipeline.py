@@ -32,6 +32,32 @@ RACE_LEG = os.path.join(HERE, 'race_leg.py')  # Phase 2E (#66): one portfolio le
 class PipelineError(Exception):
     pass
 
+class DeadlinePassed(PipelineError):
+    # Phase 2E (#61): the run's shared deadline has passed -- a
+    # tool raises this instead of STARTING new work. It is a
+    # PipelineError so the policies' existing failure handling
+    # unwinds the run to finalize (which delivers the best board
+    # so far), never a hard crash.
+    pass
+
+# Phase 2E (#61): the one wall-clock deadline shared by every
+# worker in a run. It is an absolute point in time (epoch
+# seconds), never a duration: run_job converts the configured
+# time_limit_s once, at job start, and every process in the run
+# -- this pipeline, its worker subprocesses, the portfolio race
+# children -- compares against the same instant, inherited
+# through this environment variable (cfg['deadline_epoch'] is
+# the in-process spelling and wins when both are present).
+DEADLINE_ENV = 'AIR_DEADLINE_EPOCH'
+
+def _atomic_copy(src, dst):
+    # #61: write beside the target, rename over it -- a reader
+    # (or a kill) at any instant sees either the old complete
+    # file or the new complete file, never a partial one.
+    tmp = dst + '.tmp-%d' % os.getpid()
+    shutil.copy(src, tmp)
+    os.replace(tmp, dst)
+
 # DRC classes a finish/heal step can plausibly ADD with its copper;
 # the gate guard reverts a step that increases any of them (v1.2.3:
 # widened from the original 3 -- hole_clearance and tracks_crossing
@@ -239,6 +265,34 @@ def _accept_key(g):
     return (fault_count(g), 10 ** 9 if (g or {}).get('unconnected_total') is None else int(g['unconnected_total']),
             len((g or {}).get('split_nets') or []), starved_delta(g), _intr, cost_tail(g))
 
+def _unc_key(g):
+    # v1.8.2 (#13): None-safe -- 'unconnected_total or 9999' mapped a
+    # fully connected board (0) to 9999, the WORST key, so the pass
+    # loop restored worse passes over perfect ones and a layer-law
+    # escalation that connected everything lost to the split variant.
+    u = (g or {}).get('unconnected_total')
+    return 10 ** 9 if u is None else u
+
+def _final_key(g):
+    # The run-level pass/variant key: (unconnected, splits, faults,
+    # starved delta, skeleton intrusions, cost tail).
+    # v1.11.4 (#115): the same layer-cost tail as _accept_key,
+    # appended last -- this key's (unconnected, splits, faults)
+    # order is deliberate (#37) and unchanged; the tail only breaks
+    # full ties, so between two passes equal on the gate the cheaper
+    # one now wins instead of whichever came first.
+    # Merged key (P2.1b merge, 2026-11-26): the starved-thermal
+    # delta tier (#116) and the skeleton-intrusion tier (#63/#158)
+    # both price after real faults and before the cost tail --
+    # starved is a connectivity-quality signal, intrusions a
+    # policy census, so starved ranks first of the two.
+    # Phase 2E (#61): defined HERE (moved from orchestrator.py) --
+    # the best-so-far checkpoint hook prices candidate boards with
+    # this key, so it must be the same function the policy's own
+    # best-tracking uses; the orchestrator imports it from here.
+    _intr = int(g.get('skeleton_intrusions') or 0)
+    return (_unc_key(g), len(g.get('split_nets') or []), fault_count(g), starved_delta(g), _intr, cost_tail(g))
+
 _PORTFOLIO_ENGINES = ('freerouting', 'krt', 'tm_relax', 'tm_global', 'tm_escape')
 
 
@@ -384,6 +438,9 @@ class Pipeline:
         self.ledger = []
         self.last_gate = None
         self.last_route = None
+        self.deadline_hit = False  # #61: set once the shared deadline stops work
+        self.best_so_far_path = None  # #61: checkpoint output artifact (backend runs set this; None = hook off, e.g. local runs)
+        self._best_state = {'key': None}  # #61: best run key checkpointed so far; run_auto shares this dict across its layer-law variant Pipelines
         src_copy = os.path.join(self.workdir, 'input.kicad_pcb')
         shutil.copy(self.board_path, src_copy)
         _pro, _dru = naming.sidecar_paths(self.board_path)  # (#182): project-stem resolution, not splitext(board) -- a renamed board keeps its netclasses / DRC rules
@@ -437,8 +494,13 @@ class Pipeline:
     def _record(self, step, data):
         entry = {'t': time.strftime('%H:%M:%S'), 'step': step, 'data': data}
         self.ledger.append(entry)
-        with open(os.path.join(self.workdir, 'ledger.json'), 'w') as f:
+        # #61: the ledger is a run artifact too -- write beside +
+        # rename, so a kill mid-write never leaves it torn.
+        _lp = os.path.join(self.workdir, 'ledger.json')
+        _lt = _lp + '.tmp-%d' % os.getpid()
+        with open(_lt, 'w') as f:
             json.dump(self.ledger, f, indent=1)
+        os.replace(_lt, _lp)
 
     def _sidecars(self, board_path):
         # v1.8.2 (#17): the project file and the custom-rules file
@@ -462,6 +524,67 @@ class Pipeline:
         self._oseq += 1
         return os.path.join(self.workdir, '%s-%d.kicad_pcb' % (name, self._oseq))
 
+    # ------------------------------------------ #61: deadline + best-so-far
+    def _deadline_epoch(self):
+        # The run's shared deadline as an absolute epoch, or None.
+        # cfg wins; the environment is the channel subprocess
+        # workers (worker.py children, race legs) inherit.
+        v = self.cfg.get('deadline_epoch')
+        if v is None:
+            v = os.environ.get(DEADLINE_ENV)
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def deadline_passed(self):
+        d = self._deadline_epoch()
+        if d is None:
+            return False
+        if time.time() >= d:
+            self.deadline_hit = True
+            return True
+        return False
+
+    def _deadline_remaining(self):
+        d = self._deadline_epoch()
+        return None if d is None else d - time.time()
+
+    def _check_deadline(self, what):
+        if self.deadline_passed():
+            raise DeadlinePassed('deadline passed -- %s not started (#61)' % what)
+
+    def _checkpoint(self, board, gate):
+        # #61 checkpoint hook: whenever a gated board that IS the
+        # run's current board beats the best-so-far run key, the
+        # output artifact is rewritten with it -- atomically, with
+        # its sidecars, so the artifact is always a complete,
+        # gate-checkable board. Called from tool_gate (every gate
+        # of the current board) and from tool_portfolio (the
+        # adopted winner, whose gate ran inside its leg, never as
+        # this pipeline's current board). Inert unless a run
+        # configured an output path: backend jobs do; local runs
+        # leave it None and behave exactly as before.
+        out = getattr(self, 'best_so_far_path', None)
+        if not out or not board or gate is None or not os.path.exists(board):
+            return
+        state = getattr(self, '_best_state', None)
+        if state is None:
+            state = self._best_state = {'key': None}
+        key = _final_key(gate)
+        if state['key'] is not None and not key < state['key']:
+            return
+        _atomic_copy(board, out)
+        stem = os.path.splitext(out)[0]
+        for ext in ('.kicad_pro', '.kicad_dru'):
+            src = os.path.splitext(board)[0] + ext
+            if os.path.exists(src):
+                _atomic_copy(src, stem + ext)
+        state['key'] = key
+        self._record('best_so_far', {'key': list(key), 'board': board, 'out': out,
+                                      'unconnected': gate.get('unconnected_total')})
+        self.log('Best-so-far checkpoint: %s (unconnected %s, key %s)' % (os.path.basename(out), gate.get('unconnected_total'), key))
+
     def _worker(self, cmd, *args, timeout=1800):
         py = shutil.which('python3') or sys.executable
         self._wseq = getattr(self, '_wseq', 0) + 1
@@ -470,6 +593,13 @@ class Pipeline:
             if _a == '--board' and _i + 1 < len(args):
                 try: self._sidecars(args[_i + 1])
                 except Exception: pass
+        _rem = self._deadline_remaining()
+        if _rem is not None:
+            # #61: a worker op never runs far past the run's
+            # deadline; the grace covers its own write-out. Ops
+            # the unwind still needs (finalize's refill, the final
+            # gate's summary) are quick and fit inside it.
+            timeout = min(timeout, max(_rem, 0.0) + 300)
         cmdline = [py, WORKER, cmd] + list(args) + ['--result', result_path]
         p = subprocess.run(cmdline, capture_output=True, text=True, timeout=timeout)  # v1.10.1 (#55): per-command -- engine commands pass 3900 so the worker outlives the engines' own 2400/3600 s timeouts
         if os.path.exists(result_path):
@@ -509,6 +639,7 @@ class Pipeline:
         return r
 
     def tool_route(self, first_nets=None, work=None, from_current=False, priority=None, regions=None):
+        self._check_deadline('route pass')  # #61
         self.pass_no += 1
         inp = self.current if from_current else self.base
         outp = os.path.join(self.workdir, 'pass%d.kicad_pcb' % self.pass_no)
@@ -536,9 +667,22 @@ class Pipeline:
             cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(inp)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += engine_run.route_flags(self.cfg, work or self.cfg.get('work', 40000000))  # v1.12.2 (#170/#171)
+        # #61: with a deadline in force, the engine's own --time
+        # becomes the time left, so an in-flight pass stops at the
+        # deadline with a partial board (a normal rc-3 partial)
+        # instead of overrunning it; the subprocess cap is the
+        # backstop. Under deterministic, route_flags drops --time
+        # (the work budget alone bounds the leg) and only the cap
+        # applies -- the run is labelled non-deterministic if it
+        # binds. No deadline: the historical line, byte-identical.
+        _rem = self._deadline_remaining()
+        _kw = {'time_s': max(1, min(3600, int(_rem)))} if _rem is not None else {}
+        cmdline += engine_run.route_flags(self.cfg, work or self.cfg.get('work', 40000000), **_kw)  # v1.12.2 (#170/#171)
+        _timeout = engine_run.scaled_timeout(3900, work or self.cfg.get('work', 40000000))  # v1.12.2 (#176): scales with the work budget
+        if _rem is not None:
+            _timeout = min(_timeout, max(_rem, 0.0) + 300)
         with open(log_path, 'w') as lf:
-            p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(3900, work or self.cfg.get('work', 40000000)))  # v1.12.2 (#176): scales with the work budget
+            p = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=_timeout)
         if not os.path.exists(outp):
             _err = engine_run.engine_error(p.returncode, None)
             if _err:
@@ -627,6 +771,7 @@ class Pipeline:
         return self.last_route
 
     def tool_portfolio(self, engines):
+        self._check_deadline('portfolio stage')  # #61: no new work after the deadline
         # v1.9.5 (Phase 1.2): alternative engines run from the same
         # stripped base; every candidate is gated and the winner by
         # the acceptance key becomes the current board. A candidate
@@ -650,6 +795,11 @@ class Pipeline:
         # non-deterministic there); every leg stays bounded by its
         # work budget alone, so deterministic runs stay
         # deterministic.
+        # #61: a run deadline in force stops NEW legs from
+        # starting (the entry check above, the per-leg check in
+        # _run_leg, the per-heat checks in _race_portfolio /
+        # _race_heat) and labels the run -- it still never
+        # decides a winner among finished legs.
         engines = list(engines)
         # v1.11.3 (#109): freerouting/krt cannot honour layer_cost --
         # they take no layer-law arguments, and priced layers leave
@@ -714,6 +864,8 @@ class Pipeline:
                 self._log_leg_outcome(oc)
                 if oc['status'] == 'finished' and _portfolio_complete(oc['gate']):
                     break
+                if oc['status'] == 'not-run' and oc.get('detail') == 'deadline':
+                    break  # #61: later legs would refuse identically; the tail loop records them not-run
             for eng in candidates[len(outcomes):]:
                 oc = {'engine': eng, 'status': 'not-run'}
                 outcomes.append(oc)
@@ -784,6 +936,7 @@ class Pipeline:
         if winner is not None:
             self.current = adopted
             wg = winner['gate']
+            self._checkpoint(adopted, wg)  # #61: the adopted winner is a finished variant -- checkpoint it (its gate ran inside its leg, never as this pipeline's current board, so tool_gate's hook could not see it)
             if raced:
                 wg = copy.deepcopy(wg)
                 wg['board'] = adopted
@@ -829,6 +982,12 @@ class Pipeline:
         # tool_portfolio. Runs identically in this process
         # (sequential mode) and in a race child (race_leg.py), which
         # is what makes the two modes' outcomes comparable.
+        if self.deadline_passed():
+            # #61: a leg that would start after the run's deadline
+            # is not-run data, exactly like a leg behind a complete
+            # one -- never an exception, never a started engine.
+            return {'engine': eng, 'status': 'not-run', 'board': None,
+                    'detail': 'deadline'}
         outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
         try:
             if eng == 'freerouting':
@@ -904,7 +1063,10 @@ class Pipeline:
         elif oc['status'] == 'out-raced':
             self.log('portfolio: %s out-raced -- terminated once the outcome was decided' % eng)
         elif oc['status'] == 'not-run':
-            self.log('portfolio: %s not run -- an earlier candidate completed' % eng)
+            if oc.get('detail') == 'deadline':
+                self.log('portfolio: %s not run -- the run deadline passed (#61)' % eng)
+            else:
+                self.log('portfolio: %s not run -- an earlier candidate completed' % eng)
 
     def _race_portfolio(self, candidates, workers):
         # #66: heats of up to `workers` leg processes, in fixed
@@ -915,6 +1077,8 @@ class Pipeline:
         outcomes = [None] * len(candidates)
         heats = 0
         for start in range(0, len(candidates), workers):
+            if self.deadline_passed():
+                break  # #61: no new heat starts after the deadline; the tail loop records the rest not-run
             heat = candidates[start:start + workers]
             heats += 1
             self.log('portfolio: racing heat %d -- %s (%d workers)' % (heats, ', '.join(heat), workers))
@@ -927,6 +1091,8 @@ class Pipeline:
         for i, oc in enumerate(outcomes):
             if oc is None:
                 outcomes[i] = {'engine': candidates[i], 'status': 'not-run'}
+                if self.deadline_passed():
+                    outcomes[i]['detail'] = 'deadline'  # #61
                 self._log_leg_outcome(outcomes[i])
         return outcomes
 
@@ -956,7 +1122,8 @@ class Pipeline:
                         break
                     if outcomes[j]['status'] == 'finished' and _portfolio_complete(outcomes[j]['gate']):
                         decided = True
-                if decided or time.time() > deadline:
+                _dl = self.deadline_passed()  # #61
+                if decided or _dl or time.time() > deadline:
                     for j in sorted(pending):
                         oc = self._poll_leg(handles[j])
                         if oc is not None:
@@ -965,6 +1132,9 @@ class Pipeline:
                             self._kill_leg(handles[j])
                             if decided:
                                 outcomes[j] = {'engine': heat[j], 'status': 'out-raced'}
+                            elif _dl:
+                                outcomes[j] = {'engine': heat[j], 'status': 'not-run',
+                                               'detail': 'deadline'}
                             else:
                                 outcomes[j] = {'engine': heat[j], 'status': 'failed',
                                                'error': 'leg watchdog: no result within %d s' % self._leg_watchdog_s()}
@@ -1084,10 +1254,15 @@ class Pipeline:
         if banned: cmdline += ['--no-tracks-on', ','.join(banned)]
         _cost = self._layer_cost_spec(self.base)  # v1.11 (#73)
         if _cost: cmdline += ['--layer-cost', _cost]
-        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), 1800, relax=(eng == 'tm_relax'))  # v1.12.2 (#170/#171); relax: #184 (deterministic round budget)
+        _rem = self._deadline_remaining()  # #61: same treatment as tool_route -- the leg's --time becomes the time left
+        _ts = max(1, min(1800, int(_rem))) if _rem is not None else 1800
+        cmdline += engine_run.route_flags(self.cfg, self.cfg.get('work', 40000000), _ts, relax=(eng == 'tm_relax'))  # v1.12.2 (#170/#171); relax: #184 (deterministic round budget)
+        _vtimeout = engine_run.scaled_timeout(2400, self.cfg.get('work', 40000000))  # v1.12.2 (#176)
+        if _rem is not None:
+            _vtimeout = min(_vtimeout, max(_rem, 0.0) + 300)
         log_path = outp + '.tm.log'
         with open(log_path, 'w') as lf:
-            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=engine_run.scaled_timeout(2400, self.cfg.get('work', 40000000))).returncode  # v1.12.2 (#176)
+            _rc = subprocess.run(cmdline, stdout=lf, stderr=subprocess.STDOUT, timeout=_vtimeout).returncode
         if _rc not in (0, 3):
             self.log('TraceMaker variant %s exited with code %d (log: %s)' % (eng, _rc, log_path))  # v1.9.6 (#40); #188: rc 3 is a normal partial result, not an error
         if not os.path.exists(outp):
@@ -1388,6 +1563,7 @@ class Pipeline:
             if not (rec.get('invariance') or {}).get('ok', True): self.log('WARNING: invariance census -- this board lost locked items or free vias vs the input: %s' % rec['invariance'])
             if rec.get('skeleton_intrusions'):
                 self.log('Gate: %d foreign items inside reserved pour corridors (%.1f mm) -- router-added pour faults (#63)' % (rec['skeleton_intrusions'], rec.get('skeleton_intrusion_mm') or 0.0))
+            if board == self.current: self._checkpoint(board, rec)  # #61
             return rec
         # v1.8.2 (#15): a UNIQUE report per gate + the return code is
         # checked. Before, every post-pass gate reused gate<pass>.drc.txt
@@ -1491,6 +1667,7 @@ class Pipeline:
         if self.last_gate.get('skeleton_intrusions'):
             self.log('Gate: %d foreign items inside reserved pour corridors (%.1f mm) -- router-added pour faults (#63)' % (self.last_gate['skeleton_intrusions'], self.last_gate.get('skeleton_intrusion_mm') or 0.0))
         _cache[_key] = copy.deepcopy(self.last_gate)  # P2.7a: verdict for these exact bytes, under the state _key captured at entry
+        if board == self.current: self._checkpoint(board, self.last_gate)  # #61
         return self.last_gate
 
     def _drc_fault_items(self, board):
@@ -1524,6 +1701,7 @@ class Pipeline:
         return out
 
     def tool_fix_violations(self):
+        self._check_deadline('fix_violations')  # #61
         # P2.1b (#155): repair router-added copper faults on
         # already-connected nets. Diff the current board's
         # item-level DRC faults against the base board's -- a fault
@@ -1575,6 +1753,7 @@ class Pipeline:
         return r
 
     def tool_reroute_window(self, net, margin=6.0):
+        self._check_deadline('reroute_window')  # #61
         # v1.9 (Phase 1.5): windowed engine re-route. Lock all copper
         # outside a window around the net's stuck connection, let
         # TraceMaker --reroute rip and re-route the window, keep the
@@ -1671,6 +1850,7 @@ class Pipeline:
         return {'status': st, 'net': net, 'gate': after}
 
     def tool_finish_leg(self, net):
+        self._check_deadline('finish_leg')  # #61
         outp = self._out('finish-' + re.sub(r'[^A-Za-z0-9_+-]', '_', net))
         # The finisher self-verifies connectivity only; its grid planner
         # can still introduce copper faults (a via 0.18 mm from a track
@@ -1695,6 +1875,7 @@ class Pipeline:
         return r
 
     def tool_long_finish(self, net):
+        self._check_deadline('long_finish')  # #61
         # v1.4 phase (c) Stage B-0: large-window hard-A* finish for
         # far-apart split signal nets. Same gate-verify discipline as
         # tool_finish_leg: a long leg that adds copper faults is
@@ -1717,6 +1898,7 @@ class Pipeline:
         return r
 
     def tool_ilp_repair(self, nets):
+        self._check_deadline('ilp_repair')  # #61
         # v1.5 phase (c) Stage B: joint 0-1 ILP candidate selection
         # across co-windowed split signal nets (worker prices each
         # net's victim-set candidates, builds the exact conflict
@@ -1743,6 +1925,7 @@ class Pipeline:
         return r
 
     def tool_heal(self):
+        self._check_deadline('heal')  # #61
         # v1.2.2: per-net invocation. v1.2 called heal once for all
         # pour nets and the gate-verdict reverted EVERY net's bridges
         # if one net added a fault; now each split pour net is healed
@@ -1782,6 +1965,7 @@ class Pipeline:
         return agg
 
     def tool_stitch(self):
+        self._check_deadline('stitch')  # #61
         # v1.3.2: gate-verified like finish/heal -- stitch used to
         # accept its output board unconditionally.
         before = self.last_gate if self.last_gate is not None else self.tool_gate()
@@ -1802,6 +1986,7 @@ class Pipeline:
         return r
 
     def tool_prune(self):
+        self._check_deadline('prune')  # #61
         if self.cfg.get('route_open_only'):
             # v1.12.2 (#174): prune's whole diet is unlocked,
             # pad-less, zone-less copper -- under Finish-this-board

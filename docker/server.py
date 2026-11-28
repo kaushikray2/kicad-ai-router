@@ -59,7 +59,8 @@ def default_config():
             'allowed_hosts': [],
             'llm': {'endpoint': 'http://127.0.0.1:8080/v1', 'model': 'local-model', 'api_key': ''},
             'routing': {'mode': 'auto', 'max_passes': 4, 'work': 40000000,
-                        'no_tracks_on': 'In1.Cu', 'strip_existing': True},
+                        'no_tracks_on': 'In1.Cu', 'strip_existing': True,
+                        'time_limit_s': 0},  # #61: best-so-far deadline for a run, seconds; 0 = no limit
             'max_concurrent_jobs': 1,
             'selftest_tolerance': {'unconnected': 2, 'split_nets': 0},
             'tracemaker': {'url': os.environ.get('TRACEMAKER_URL', ''), 'selected_version': '', 'sha256': {}},
@@ -573,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
                 if llm.get('api_key'): cfg['llm']['api_key'] = llm['api_key']
                 if llm.get('clear_api_key'): cfg['llm']['api_key'] = ''
                 rt = upd.get('routing') or {}
-                for k in ('mode', 'max_passes', 'work', 'no_tracks_on', 'layer_cost', 'strip_existing', 'engine_portfolio', 'layer_law_policy', 'reroute_window_cap', 'reroute_accept', 'reroute_margin', 'pass_advice', 'advice_regions', 'first_nets_policy', 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap', 'ilp_repair_cap', 'attempt_select', 'deterministic', 'route_open_only'):  # v1.9.6 (#40): Phase 1 keys were silently dropped; v1.12.2 (#171): the Phase 2 run actions
+                for k in ('mode', 'max_passes', 'work', 'no_tracks_on', 'layer_cost', 'strip_existing', 'engine_portfolio', 'layer_law_policy', 'reroute_window_cap', 'reroute_accept', 'reroute_margin', 'pass_advice', 'advice_regions', 'first_nets_policy', 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap', 'ilp_repair_cap', 'attempt_select', 'deterministic', 'route_open_only', 'time_limit_s'):  # v1.9.6 (#40): Phase 1 keys were silently dropped; v1.12.2 (#171): the Phase 2 run actions
                     if k in rt: cfg['routing'][k] = rt[k]
                 if 'allowed_hosts' in upd: cfg['allowed_hosts'] = upd['allowed_hosts']
                 if 'retention' in upd: cfg['retention'] = upd['retention']

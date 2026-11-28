@@ -21,7 +21,7 @@
 """One routing job, run as a subprocess by server.py. Drives the existing
 ai_router Pipeline + orchestrator on the job's input board; writes the
 terminal status to <job-dir>/status.json and the result board beside it."""
-import argparse, json, os, subprocess, sys, time
+import argparse, json, os, shutil, subprocess, sys, time
 
 def find_plugin():
     cands = [os.path.dirname(os.path.abspath(__file__)),
@@ -47,6 +47,22 @@ def _engines_or(rt, d):
     for e in items:
         if e in _ENGINES and e not in out: out.append(e)
     return ','.join(out[:4])
+
+def _deadline_epoch_for(cfg, now):
+    # #61: the configured limit (a duration) becomes ONE absolute
+    # deadline -- a single point in time every worker in the run
+    # compares against, never a per-worker duration.
+    try: limit = int(cfg.get('time_limit_s') or 0)
+    except Exception: limit = 0
+    return (now + limit) if limit > 0 else None
+
+def _atomic_copy(src, dst):
+    # #61: write beside the target, rename over it -- the
+    # write_status pattern, for file copies: the artifact is
+    # always a complete file.
+    tmp = dst + '.tmp-%d' % os.getpid()
+    shutil.copy(src, tmp)
+    os.replace(tmp, dst)
 
 def build_cfg(rt, llm, tm_exe):
     # v1.10.1 (#43): ONE source of defaults. The old constructor
@@ -81,6 +97,7 @@ def build_cfg(rt, llm, tm_exe):
         cfg[_k] = _int_or(rt, _k, cfg.get(_k, _d))
     cfg['attempt_select'] = bool(rt.get('attempt_select', cfg.get('attempt_select', False)))
     cfg['deterministic'] = bool(rt.get('deterministic', cfg.get('deterministic', False)))  # v1.12.2 (#171)
+    cfg['time_limit_s'] = _int_or(rt, 'time_limit_s', cfg.get('time_limit_s', 0))  # Phase 2E (#61)
     cfg['route_open_only'] = bool(rt.get('route_open_only', cfg.get('route_open_only', False)))  # v1.12.2 (#171)
     if cfg['mode'] == 'llm' and cfg['deterministic']:
         # v1.12.2 (#185): Reproducible is an Auto-mode property --
@@ -106,7 +123,7 @@ def build_cfg(rt, llm, tm_exe):
                 'finish_signal_cap', 'finish_pour_cap', 'long_finish_cap',
                 'ilp_repair_cap', 'attempt_select', 'layer_law_policy',
                 'layer_cost', 'first_nets_policy', 'engine_portfolio',
-                'deterministic', 'route_open_only'}
+                'deterministic', 'route_open_only', 'time_limit_s'}
     try:
         for _k in _cm.DEFAULTS:
             if _k not in _handled and _k in rt: cfg[_k] = rt[_k]
@@ -162,34 +179,71 @@ def main():
         _CLAMPS = {'max_passes': (1, 8), 'work': (100000, 500000000),
                    'finish_signal_cap': (0, 32), 'finish_pour_cap': (0, 32),
                    'long_finish_cap': (0, 32), 'ilp_repair_cap': (0, 8),
-                   'reroute_window_cap': (0, 16), 'reroute_margin': (0.5, 50.0)}
+                   'reroute_window_cap': (0, 16), 'reroute_margin': (0.5, 50.0),
+                   'time_limit_s': (0, 86400)}
         for _k, (_lo, _hi) in _CLAMPS.items():
             if _k in cfg:
                 try: cfg[_k] = max(_lo, min(_hi, type(_lo)(cfg[_k])))
                 except Exception: cfg.pop(_k, None)
-        write_status(cfg_effective={k: v for k, v in cfg.items() if k != 'api_key'})
+        # #61: the limit becomes ONE absolute deadline, computed
+        # once here and shared by every worker in the run -- the
+        # pipeline reads cfg['deadline_epoch']; subprocess workers
+        # inherit AIR_DEADLINE_EPOCH. It is set before
+        # cfg_effective is written, so the audited record carries
+        # it too.
+        _deadline = _deadline_epoch_for(cfg, time.time())
+        if _deadline is not None:
+            cfg['deadline_epoch'] = _deadline
+            os.environ['AIR_DEADLINE_EPOCH'] = repr(_deadline)
+        write_status(cfg_effective={k: v for k, v in cfg.items() if k != 'api_key'},
+                     **({'time_limit_s': cfg.get('time_limit_s'), 'deadline_epoch': _deadline} if _deadline is not None else {}))
         from pipeline import Pipeline
         import orchestrator
         def log(m): print('[job] ' + str(m), flush=True)
         pipe = Pipeline(cfg, os.path.join(jd, 'input.kicad_pcb'), log)
+        # #61: best-so-far checkpoints land on the job's result
+        # artifact from the first gated pass on -- a kill, cancel
+        # or server timeout at any later point leaves the best
+        # routing found so far as a complete, gate-checkable
+        # board instead of nothing.
+        pipe.best_so_far_path = os.path.join(jd, 'result.kicad_pcb')
+        if _deadline is not None:
+            log('Deadline: %ss limit -- absolute deadline epoch %.3f shared by every worker (#61)' % (cfg.get('time_limit_s'), _deadline))
         res = orchestrator.run_auto(cfg, pipe, log) if cfg['mode'] == 'auto' else orchestrator.run_llm(cfg, pipe, log)
         final = res.get('final_board')
         if final and os.path.exists(final):
-            import shutil; shutil.copy(final, os.path.join(jd, 'result.kicad_pcb'))
+            # #61: every artifact write is atomic -- the
+            # checkpoint hook has been landing best-so-far boards
+            # on this path all run; the final write replaces the
+            # last checkpoint the same way.
+            _atomic_copy(final, os.path.join(jd, 'result.kicad_pcb'))
             # v1.8.2 (#17): the result's project sidecars travel with it
             for _ext in ('.kicad_pro', '.kicad_dru'):
                 _sc = os.path.splitext(final)[0] + _ext
-                if os.path.isfile(_sc): shutil.copy(_sc, os.path.join(jd, 'result' + _ext))
+                if os.path.isfile(_sc): _atomic_copy(_sc, os.path.join(jd, 'result' + _ext))
             # v1.8.1 (#8): serve the WINNING pipeline's ledger -- after a
             # layer-law escalation two workdirs exist and the later one
             # is not necessarily the variant that was kept.
             _led = os.path.join(os.path.dirname(final), 'ledger.json')
-            if os.path.isfile(_led): shutil.copy(_led, os.path.join(jd, 'ledger.json'))
+            if os.path.isfile(_led): _atomic_copy(_led, os.path.join(jd, 'ledger.json'))
         gate = res.get('gate') or {}
-        write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'banned_layer_tracks_delta', 'tracks_by_layer')}, route=res.get('route'))  # (#196): the gate record carries the #175 delta -- selftest_status gates on it
+        _dl = {}
+        if _deadline is not None:
+            # #61: a result the deadline truncated is labelled
+            # non-deterministic (machine-speed dependent); a
+            # deadline that never bound changed nothing about
+            # the run and labels nothing.
+            _dl = {'deadline_epoch': _deadline, 'deadline_hit': bool(res.get('deadline_hit')),
+                   'nondeterministic': bool(res.get('deadline_hit'))}
+        write_status(status='done', gate={k: gate.get(k) for k in ('unconnected_total', 'pour_items', 'split_nets', 'split_signal_nets', 'split_pour_nets', 'pour_nets', 'violations_total', 'copper_violations', 'vias', 'wirelength_mm', 'banned_layer_tracks', 'banned_layer_tracks_delta', 'tracks_by_layer')}, route=res.get('route'), **_dl)  # (#196): the gate record carries the #175 delta -- selftest_status gates on it
     except Exception as e:
         import traceback; traceback.print_exc()
-        write_status(status='error', error=str(e)[:500])
+        _dl = {}
+        _deadline = locals().get('_deadline')
+        if _deadline is not None:
+            _hit = bool(getattr(locals().get('pipe'), 'deadline_hit', False))
+            _dl = {'deadline_epoch': _deadline, 'deadline_hit': _hit, 'nondeterministic': _hit}
+        write_status(status='error', error=str(e)[:500], **_dl)
 
 if __name__ == '__main__':
     main()
