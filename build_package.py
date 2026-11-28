@@ -98,7 +98,7 @@ def main():
     pkg_src = os.path.join(HERE, 'ai_router')
     files = ['__init__.py', 'ai_router_plugin.py', 'dialog.py', 'config.py', 'llm_client.py',
              'orchestrator.py', 'pipeline.py', 'worker.py', 'backend_client.py', 'icon.png',
-             'naming.py', 'ui_model.py', 'board_facts.py', 'engine_run.py', 'race_leg.py', 'dsn_law.py']  # v1.12 (#167/#168) + v1.12.2 (#170) + #66 race_leg + item-3 dsn_law: every ai_router/*.py ships in the zip (CI asserts it)
+             'naming.py', 'ui_model.py', 'board_facts.py', 'engine_run.py', 'race_leg.py', 'dsn_law.py', 'suggest.py']  # v1.12 (#167/#168) + v1.12.2 (#170) + #66 race_leg + item-3 dsn_law + Pre-Exam Polish suggest: every ai_router/*.py ships in the zip (CI asserts it)
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('metadata.json', json.dumps(METADATA, indent=2))
         z.writestr('plugins/__init__.py', PCM_ENTRYPOINT)
