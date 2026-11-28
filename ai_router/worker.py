@@ -3309,6 +3309,15 @@ def _item_closest(a, b):
     q = _seg_closest_pt(b[2][0], b[2][1], a[2][0], a[2][1], a[2][2], a[2][3])
     return (_item_gap(a, b), q, (b[2][0], b[2][1]))
 
+def _pad_key(net, x, y):
+    # Exact pad identity for the barrier model: (net, x, y) in
+    # integer nanometres. The mm floats everywhere in the worker
+    # derive from nm ints, so the round-trip is exact -- and no
+    # decimal rounding appears on either side of the dict. (A
+    # round-2 key against a round-3 query silently emptied the
+    # airwire set on real boards: #230.)
+    return (net, int(round(x * 1e6)), int(round(y * 1e6)))
+
 class _Barrier:
     # Obstacle model of one board state, built once per repair
     # round: components (union-find over touching same-net items),
@@ -3318,12 +3327,12 @@ class _Barrier:
     def __init__(self, b):
         conn = b.GetConnectivity(); conn.Build(b)
         items = []       # ('seg'|'pt', net, geom); edge items: net None
-        pad_item = {}    # (net, rx, ry) -> item index
+        pad_item = {}    # _pad_key(net, x, y) -> item index
         for fp in b.GetFootprints():
             for p in fp.Pads():
                 x, y = mm(p.GetPosition().x), mm(p.GetPosition().y)
                 r = max(mm(p.GetSize().x), mm(p.GetSize().y)) / 2
-                pad_item[(p.GetNetname(), round(x, 2), round(y, 2))] = len(items)
+                pad_item[_pad_key(p.GetNetname(), x, y)] = len(items)
                 items.append(('pt', p.GetNetname(), (x, y, r)))
         for t in b.GetTracks():
             if t.Type() == pcbnew.PCB_VIA_T:
@@ -3407,7 +3416,7 @@ class _Barrier:
             for (name, x, y, _layers, _p) in pads:
                 ci = cof.get(name)
                 if ci is None or ci in reps: continue
-                root = self.pad_comp.get((net, round(x, 3), round(y, 3)))
+                root = self.pad_comp.get(_pad_key(net, x, y))
                 if root is None: continue
                 reps[ci] = ((x, y), root)
             keys = sorted(reps)
@@ -3461,8 +3470,8 @@ def _severance_charge(model, net, A, Bp, simp, need):
     poly = []
     for (_l, x, y) in simp:
         if not poly or poly[-1] != (x, y): poly.append((x, y))
-    cA = model.pad_comp.get((net, round(A[1], 2), round(A[2], 2)))
-    cB = model.pad_comp.get((net, round(Bp[1], 2), round(Bp[2], 2)))
+    cA = model.pad_comp.get(_pad_key(net, A[1], A[2]))
+    cB = model.pad_comp.get(_pad_key(net, Bp[1], Bp[2]))
     served = None
     for w in model.airwires:
         if w['net'] == net and {w['c1'], w['c2']} == {cA, cB}: served = w; break

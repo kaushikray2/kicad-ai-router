@@ -66,10 +66,11 @@ def test_seg_seg_closest_exact_cases():
 
 def _fake_barrier():
     m = object.__new__(w._Barrier)
-    m.pad_comp = {('N', 0.0, 5.0): 1, ('N', 10.0, 5.0): 2,
-                  ('V', 5.0, 2.0): 3, ('V', 5.0, 8.0): 4,
-                  ('W', 20.0, 2.0): 5, ('W', 20.0, 8.0): 6,
-                  ('X', 0.0, 0.0): 1, ('X', 5.0, 8.0): 4}
+    # keyed exactly as the real model keys it: _pad_key (int nm)
+    m.pad_comp = {w._pad_key('N', 0.0, 5.0): 1, w._pad_key('N', 10.0, 5.0): 2,
+                  w._pad_key('V', 5.0, 2.0): 3, w._pad_key('V', 5.0, 8.0): 4,
+                  w._pad_key('W', 20.0, 2.0): 5, w._pad_key('W', 20.0, 8.0): 6,
+                  w._pad_key('X', 0.0, 0.0): 1, w._pad_key('X', 5.0, 8.0): 4}
     m.gates = {(1, 2): (0.1, (0.0, 0.0), (10.0, 0.0))}
     m.airwires = [
         {'net': 'N', 'p1': (0.0, 5.0), 'p2': (10.0, 5.0), 'c1': 1, 'c2': 2},   # the served connection
@@ -141,10 +142,45 @@ def test_barrier_model_on_synthetic_board():
     m2 = w._Barrier(b)
     assert {x['net'] for x in m2.airwires} == {'NB'}, m2.airwires
 
+def test_barrier_airwires_on_real_grid():
+    # #230 regression: pad_comp was keyed at round-2 while the
+    # airwire builder queried at round-3, so on any coordinate
+    # with a nonzero third decimal (0.635 / 1.27 mm grids, rotated
+    # parts) the representative lookup missed, the cluster was
+    # silently skipped, and the model had NO airwires -- severance
+    # could only ever read zero. Integer-mm synthetic boards hid
+    # it (round-2 == round-3 there). This board uses 0.635-grid
+    # and rotated-part coordinates throughout.
+    if pcbnew is None: print('SKIP: no pcbnew'); return
+    import math
+    b = pcbnew.BOARD(); b.SetCopperLayerCount(2)
+    na = pcbnew.NETINFO_ITEM(b, 'NA'); b.Add(na); ca = na.GetNetCode()
+    nb = pcbnew.NETINFO_ITEM(b, 'NB'); b.Add(nb); cb = nb.GetNetCode()
+    nc = pcbnew.NETINFO_ITEM(b, 'NC'); b.Add(nc); cc = nc.GetNetCode()
+    for (x1, y1, x2, y2) in ((0, 0, 40, 0), (40, 0, 40, 30), (40, 30, 0, 30), (0, 30, 0, 0)):
+        sh = pcbnew.PCB_SHAPE(b); sh.SetShape(pcbnew.SHAPE_T_SEGMENT)
+        sh.SetStart(pcbnew.VECTOR2I(nm(x1), nm(y1))); sh.SetEnd(pcbnew.VECTOR2I(nm(x2), nm(y2)))
+        sh.SetLayer(pcbnew.Edge_Cuts); b.Add(sh)
+    g = 0.635
+    _pad(b, 'U1', '1', ca, 3 * g, 5 * g); _pad(b, 'U1', '2', ca, 40 * g, 5 * g)
+    _pad(b, 'U2', '1', cb, 3 * g, 30 * g); _pad(b, 'U2', '2', cb, 40 * g, 30 * g)
+    # a 30-degree rotated pair: coordinates no decimal rounding
+    # grid survives (11.7320508..., 11.0) etc.
+    cx, cy, dx, dy = 12.0, 11.0, 2 * math.cos(math.radians(30)), 2 * math.sin(math.radians(30))
+    _pad(b, 'U3', '1', cc, cx - dx, cy - dy); _pad(b, 'U3', '2', cc, cx + dx, cy + dy)
+    m = w._Barrier(b)
+    assert {x['net'] for x in m.airwires} == {'NA', 'NB', 'NC'}, m.airwires
+    assert all(x['c1'] is not None and x['c2'] is not None for x in m.airwires)
+    # every pad of a split net resolves in pad_comp under the
+    # model's own keying (the #230 asymmetry made this fail)
+    for (net, x, y) in (('NA', 3 * g, 5 * g), ('NB', 40 * g, 30 * g), ('NC', cx + dx, cy + dy)):
+        assert w._pad_key(net, x, y) in m.pad_comp, (net, x, y)
+
 if __name__ == '__main__':
     test_segs_cross_proper_only()
     test_seg_seg_closest_exact_cases()
     test_severance_charge_loop_parity()
     test_severance_no_weld_no_severance()
     test_barrier_model_on_synthetic_board()
+    test_barrier_airwires_on_real_grid()
     print('severance scoring OK')
