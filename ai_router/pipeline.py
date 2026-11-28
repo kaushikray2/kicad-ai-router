@@ -858,6 +858,7 @@ class Pipeline:
         if raced:
             outcomes = self._race_portfolio(candidates, workers)
         else:
+            _tail_detail = None
             for eng in candidates:
                 oc = self._run_leg(eng)
                 outcomes.append(oc)
@@ -865,9 +866,17 @@ class Pipeline:
                 if oc['status'] == 'finished' and _portfolio_complete(oc['gate']):
                     break
                 if oc['status'] == 'not-run' and oc.get('detail') == 'deadline':
+                    _tail_detail = 'deadline'
                     break  # #61: later legs would refuse identically; the tail loop records them not-run
             for eng in candidates[len(outcomes):]:
                 oc = {'engine': eng, 'status': 'not-run'}
+                if _tail_detail:
+                    # #242: a deadline tail is not an
+                    # early-completion tail -- the legs inherit
+                    # the break's cause, so the log and the
+                    # ledger stop claiming an earlier candidate
+                    # completed.
+                    oc['detail'] = _tail_detail
                 outcomes.append(oc)
                 self._log_leg_outcome(oc)
         wi = _race_winner(outcomes)
@@ -921,6 +930,14 @@ class Pipeline:
                 e['error'] = oc.get('error')
             elif oc['status'] == 'no_board':
                 e['seconds'] = oc.get('seconds')
+            # #242: the outcome's detail (above all 'deadline')
+            # and its interrupted flag ride the ledger record
+            # -- before this, a raced outcome's detail was
+            # dropped here even though the outcome carried it.
+            if oc.get('detail'):
+                e['detail'] = oc['detail']
+            if oc.get('interrupted'):
+                e['interrupted'] = True
             results.append(e)
         _rec = {'engines': list(engines), 'results': results,
                 'winner': adopted}
@@ -1063,7 +1080,9 @@ class Pipeline:
         elif oc['status'] == 'out-raced':
             self.log('portfolio: %s out-raced -- terminated once the outcome was decided' % eng)
         elif oc['status'] == 'not-run':
-            if oc.get('detail') == 'deadline':
+            if oc.get('interrupted'):
+                self.log('portfolio: %s interrupted -- the run deadline passed mid-leg (#61)' % eng)
+            elif oc.get('detail') == 'deadline':
                 self.log('portfolio: %s not run -- the run deadline passed (#61)' % eng)
             else:
                 self.log('portfolio: %s not run -- an earlier candidate completed' % eng)
@@ -1133,8 +1152,15 @@ class Pipeline:
                             if decided:
                                 outcomes[j] = {'engine': heat[j], 'status': 'out-raced'}
                             elif _dl:
+                                # #242: this leg was IN FLIGHT
+                                # when the deadline killed it --
+                                # 'interrupted' keeps that
+                                # distinct from a leg that never
+                                # started (the tail above), which
+                                # reads identically otherwise.
                                 outcomes[j] = {'engine': heat[j], 'status': 'not-run',
-                                               'detail': 'deadline'}
+                                               'detail': 'deadline',
+                                               'interrupted': True}
                             else:
                                 outcomes[j] = {'engine': heat[j], 'status': 'failed',
                                                'error': 'leg watchdog: no result within %d s' % self._leg_watchdog_s()}
