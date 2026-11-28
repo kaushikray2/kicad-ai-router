@@ -78,6 +78,38 @@ def test_rf_chain_and_pi_refs():
     assert suggest.detect_rf_chains(_data({'RF_IN': [['U1', '5']]})) == []
 
 
+def test_crystal_ignores_caps_sharing_only_ground():
+    # Regression (STM32-RF measurement): the crystal's own GND pads
+    # made a VDD_PA decoupler (C7) and an RF shunt (C9) look like
+    # load caps. Only caps on the crystal's SIGNAL nets count.
+    nets = {'XTAL1': [['Y1', '1'], ['C5', '2']],
+            'XTAL2': [['Y1', '3'], ['C4', '2']],
+            'GND': [['Y1', '2'], ['Y1', '4'], ['C4', '1'], ['C5', '1'], ['C7', '1'], ['C9', '1']],
+            'VDD_PA': [['C7', '2'], ['U4', '1']],
+            'RF_MID': [['C9', '2'], ['L1', '1']]}
+    fps = {'Y1': {'value': '16MHz', 'name': ''}, 'U4': {'value': 'RF IC', 'name': ''},
+           'C4': {'value': '22pF', 'name': ''}, 'C5': {'value': '22pF', 'name': ''},
+           'C7': {'value': '4.7pF', 'name': ''}, 'C9': {'value': '1pF', 'name': ''}}
+    got = suggest.detect_crystals(_data(nets, fps))
+    assert len(got) == 1 and got[0]['caps'] == ['C4', 'C5'], got
+
+
+def test_rf_chain_needs_a_real_feed_path():
+    # Regression (STM32-RF measurement): the radio sat directly on
+    # both ANT nets, L2 was the PA feed choke to VDD_PA, and L3
+    # linked the two antenna nodes -- no antenna-to-radio chain.
+    nets = {'ANT1': [['U4', '1'], ['L2', '1'], ['L3', '2']],
+            'ANT2': [['U4', '2'], ['L3', '1'], ['L1', '1']],
+            'VDD_PA': [['L2', '2'], ['U4', '3'], ['C7', '2']],
+            'GND': [['C7', '1']]}
+    assert suggest.detect_rf_chains(_data(nets)) == []
+    # ...while a genuine connector -> series L -> radio-pin chain fires.
+    nets2 = {'ANT': [['J1', '1'], ['L1', '1']],
+             'RF_IN': [['L1', '2'], ['U1', '5']]}
+    got = suggest.detect_rf_chains(_data(nets2))
+    assert len(got) == 1 and got[0]['path_nets'] == ['ANT', 'RF_IN'], got
+
+
 def test_bus_group_needs_three_bits():
     nets = {'ADDR%d' % i: [['U1', str(i)]] for i in range(4)}
     nets['DQ0'] = [['U1', '9']]; nets['DQ1'] = [['U1', '10']]
@@ -106,6 +138,8 @@ if __name__ == '__main__':
     test_power_rail_never_invents_a_current()
     test_crystal_with_pf_load_caps()
     test_rf_chain_and_pi_refs()
+    test_crystal_ignores_caps_sharing_only_ground()
+    test_rf_chain_needs_a_real_feed_path()
     test_bus_group_needs_three_bits()
     test_hv_candidates_are_conservative_and_blank()
     test_aggregator_sorts_and_handles_empty()
