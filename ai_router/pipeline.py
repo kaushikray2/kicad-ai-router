@@ -1815,7 +1815,12 @@ class Pipeline:
                                   if v], default=None)
                     if clr_ov is not None:
                         req, col = clr_ov, 'explicit override'
-                    req_crp = crp_ov if crp_ov is not None else req
+                    # #236: the spec comment above is explicit
+                    # -- creepage never requires less than the
+                    # (possibly overridden) clearance -- so a
+                    # smaller creepage override is floored at
+                    # req, not substituted for it.
+                    req_crp = max(crp_ov, req) if crp_ov is not None else req
                     entry = {'layer': layer, 'column': col,
                              'conductor_column': cond_col,
                              'termination': term,
@@ -1969,6 +1974,15 @@ class Pipeline:
                 # a radius understated by the B2-vs-A6 difference.
                 req = _hv_worst_pair_req_mm(d, mk.hv_domains,
                                             terminations=True)
+                # #236: _eng_patch_pro_hv (the netclass path)
+                # additionally floors the requirement at the
+                # domain's Tier 1 overrides; #200's rule is
+                # that the paths can never disagree, so the
+                # materialise radius takes the same maximum
+                # (clearance AND creepage -- the stamped rect
+                # is a surface keepout, where creepage binds).
+                req = max(req, d.get('min_clearance_mm') or 0.0,
+                          d.get('min_creepage_mm') or 0.0)
                 if req <= 0:
                     continue
                 rects = []
