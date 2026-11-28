@@ -170,7 +170,7 @@ the direct-focus candidates and fall through to pads / the
 transient shape at the exact point. The five main-side round
 10 items (#223-#227, in the #62 bench harness and the #186
 skeleton cache signature) are recorded on main's plan.md.
-Suites after round 10: see the fix pass report.
+Round-10 closure pass LANDED 2026-11-27 (commits ad3b940..0fe2fba): #200 HV worst-pair requirement unified across the checker, materialise and netclass paths, and #214 LLM-mode engineered-epilogue parity, both fixed and closed; tol_pct wired through to GATE-13; P2.9 power-tree corrections; meander SI upgrade (arc-exact length, site-checked placement); IEC Tier 1 explicit overrides landed (Tier 2 pivoted at its kill gate -- no governing standard picked); live-fixture evidence added. Suites after the closure pass: pytest 417 passed; standalone 111 pass + 13 known not-standalone-runnable.
 
 ## Done
 
