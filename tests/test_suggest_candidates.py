@@ -127,6 +127,54 @@ def test_hv_candidates_are_conservative_and_blank():
     assert all(c['peak_v'] == '' for c in got)
 
 
+def test_hv_thousand_volt_names():
+    # #240: the voltage pattern anchored on 2-3 digits, so
+    # '1000V_DC' matched only its inner '000V' (0 < 60) and a
+    # 1 kV net was missed; '1500V' passed only by accident
+    # through the '500V' window.
+    nets = {'1000V_DC': [['J1', '1']], '2000V': [['J1', '2']],
+            '400V': [['J1', '3']], '59V': [['J1', '4']]}
+    names = sorted(c['net'] for c in suggest.detect_hv_candidates(_data(nets)))
+    assert names == ['1000V_DC', '2000V', '400V'], names
+
+
+def test_diff_pair_plus_minus_and_dp_dm():
+    # #240: USB naming in the wild is D+/D- and DP/DM as often
+    # as DP/DN; both spellings must pair (still >= 2 shared
+    # endpoints, as before).
+    nets = {'USB_D+': [['U1', '1'], ['J1', '1']],
+            'USB_D-': [['U1', '2'], ['J1', '2']],
+            'USB_DP': [['U2', '1'], ['J2', '1']],
+            'USB_DM': [['U2', '2'], ['J2', '2']]}
+    got = suggest.detect_diff_pairs(_data(nets))
+    pairs = sorted(tuple(c['nets']) for c in got)
+    assert pairs == [('USB_D+', 'USB_D-'), ('USB_DP', 'USB_DM')], pairs
+
+
+def test_bus_group_needs_a_shared_endpoint():
+    # #240: LED1..LED4 on four unrelated single-endpoint parts
+    # were flagged as a length-matched bus at 0.85. A group
+    # must share at least one endpoint ref between two or
+    # more of its nets (the ADDR fanout in
+    # test_bus_group_needs_three_bits shares U1 and stays).
+    nets = {'LED%d' % i: [['U%d' % i, '1']] for i in range(1, 5)}
+    assert suggest.detect_bus_groups(_data(nets)) == []
+    nets = {'DATA%d' % i: [['U1', str(i)], ['U2', str(i)]] for i in range(4)}
+    got = suggest.detect_bus_groups(_data(nets))
+    assert len(got) == 1 and got[0]['base'] == 'DATA', got
+
+
+def test_voltage_named_rails():
+    # #240: rails named by their voltage (3V3, 5V, 12V, 1V8)
+    # have no +/VCC/VDD head and were missed entirely.
+    nets = {n: [['U1', '1'], ['U2', '1'], ['U3', '1']]
+            for n in ('3V3', '5V', '12V', '1V8')}
+    nets['GND'] = [['U1', '2'], ['U2', '2'], ['U3', '2']]
+    got = suggest.detect_power_rails(_data(nets))
+    assert sorted(c['net'] for c in got) == ['12V', '1V8', '3V3', '5V'], got
+    assert all(c['loads'] == 'unknown' for c in got)
+
+
 def test_aggregator_sorts_and_handles_empty():
     assert suggest.suggest_candidates(None) == []
     assert suggest.suggest_candidates({'nets': {}, 'footprints': {}}) == []
@@ -142,5 +190,9 @@ if __name__ == '__main__':
     test_rf_chain_needs_a_real_feed_path()
     test_bus_group_needs_three_bits()
     test_hv_candidates_are_conservative_and_blank()
+    test_hv_thousand_volt_names()
+    test_diff_pair_plus_minus_and_dp_dm()
+    test_bus_group_needs_a_shared_endpoint()
+    test_voltage_named_rails()
     test_aggregator_sorts_and_handles_empty()
     print('suggest candidates OK')
