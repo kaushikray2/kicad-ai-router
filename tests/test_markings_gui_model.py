@@ -308,6 +308,36 @@ def test_hv_pairwise_rows_carry_required_spacing():
     assert row2['delta_v'] == 100.0 and abs(row2['required_mm'] - 0.60) < 1e-9, row2
 
 
+def test_hv_pairwise_rows_honour_tier1_overrides():
+    # #238: the preview must show what the checker enforces.
+    # A domain declaring Tier 1 overrides previewed the raw
+    # IPC-2221B table value (2.50 mm at 400 V) whatever was
+    # declared; under the checker's semantics (post-#236) the
+    # clearance override replaces the table value for the
+    # pair and the creepage override is floored at it.
+    m = mm.MarkingsEditorModel({}, copy.deepcopy(INDEX))
+    m.add_entry('hv_domains', mm.hv_entry(
+        {'name': 'HVPRI', 'nets': ['HV_A'], 'peak_v': 400,
+         'min_clearance_mm': 4.0, 'min_creepage_mm': 2.5}))
+    rows = mm.hv_pairwise_rows(m)
+    row = [r for r in rows if r['a'] == 'HVPRI' and 'Rest' in r['b']][0]
+    assert row['required_mm'] == 4.0, row
+    # the dialog's live extra carries the same fields: a
+    # creepage override above the clearance governs.
+    live = mm.hv_pairwise_rows(m, extra={'name': 'HVPRI', 'peak_v': 400.0,
+                                         'coating': 'uncoated', 'altitude_m': 0,
+                                         'nets': ['HV_A'],
+                                         'min_clearance_mm': 4.0,
+                                         'min_creepage_mm': 6.0})
+    row2 = [r for r in live if r['a'] == 'HVPRI' and 'Rest' in r['b']][0]
+    assert row2['required_mm'] == 6.0, row2
+    # no overrides anywhere: the table value, unchanged.
+    m2 = _full_model()
+    row3 = [r for r in mm.hv_pairwise_rows(m2)
+            if r['a'] == 'HVPRI' and 'Rest' in r['b']][0]
+    assert abs(row3['required_mm'] - 2.50) < 1e-9, row3
+
+
 def test_impedance_gap_must_be_positive():
     # #216: the model layer mirrors the validator -- a coplanar
     # gap of 0 or negative is refused at entry construction.
