@@ -1129,9 +1129,16 @@ class Pipeline:
             spec['nets'][net] = {'gnd_net': gnd, 'ceiling_mm': ceiling,
                                  'refs': refs, 'pi_refs': pi_refs}
             layer_z0 = {}
-            for lname, lw in (sized.get('per_layer') or {}).items():
-                if not lw.get('width_mm') or lname not in by_name:
-                    continue
+            # #237: every copper layer in the stackup, not only
+            # the layers the sizing pass solved widths for (the
+            # marking's candidate layers). GATE-13 skipped any
+            # segment on an unsolved layer, so a net detouring
+            # there at the primary width was never band-checked
+            # -- the same width is a different impedance as
+            # stripline. The model builder is shared with the
+            # solver (_eng_layer_model), so an unsolved layer's
+            # model cannot drift from the solved ones.
+            for lname in by_name:
                 lm = self._eng_layer_model(entry, by_name[lname],
                                             len(copper))
                 if lm.get('fn'):
