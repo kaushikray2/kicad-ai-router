@@ -139,10 +139,12 @@ def _cfg_int(cfg, key, default):
 # entity are refused after STREAK_LIMIT executions, however the
 # other parameters are dithered. The target entity is the call's
 # net/nets/ref/refs argument; on this toolset route's first_nets
-# is its target argument and is keyed the same way. Any executed
-# call whose payload is new information (progress) resets both
-# tiers. A refusal is handed back as a tool payload carrying an
-# explicit strategy-switch hint; the run itself continues.
+# is its target argument and is keyed the same way. Progress
+# (a payload carrying new information) resets the counters of
+# the call that made it -- its repeat key and its (tool,
+# target) streak key -- and no others (#239). A refusal is
+# handed back as a tool payload carrying an explicit
+# strategy-switch hint; the run itself continues.
 REPEAT_LIMIT = 2
 STREAK_LIMIT = 4
 
@@ -152,16 +154,45 @@ def _guard_call_key(name, args):
 
 
 def _guard_target_key(name, args):
+    # #239 (6b): the streak key carries the TOOL name. The
+    # refusal hint advises switching tools on the same target;
+    # keyed on the target alone, the advised switch was itself
+    # refused the moment one tool had tripped the streak.
     args = args or {}
     for k in ('net', 'ref'):
         v = args.get(k)
         if isinstance(v, str) and v:
-            return (k, v)
+            return (name, k, v)
     for k in ('nets', 'refs', 'first_nets'):
         v = args.get(k)
         if isinstance(v, (list, tuple)) and v:
-            return ('nets', tuple(sorted(str(x) for x in v)))
+            return (name, 'nets', tuple(sorted(str(x) for x in v)))
     return None
+
+
+# #239 (6a): the pipeline tools report failure as STATUS
+# dicts ({'status': 'reverted_faults'}, {'status': 'failed'},
+# {'status': 'no_board'}, ...) with no 'error' key -- the old
+# error-only test never counted a real routing failure, so
+# neither tier ever armed outside the exception path.
+_FAIL_STATUSES = frozenset(['failed', 'no_board', 'no_path',
+                             'reverted', 'reverted_faults', 'error'])
+
+
+def _payload_failed(parsed):
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get('error'):
+        return True
+    st = parsed.get('status')
+    if st in _FAIL_STATUSES:
+        return True
+    # A route-family 'done' that routed nothing made no
+    # progress against its target: count it as a failure.
+    if st in ('done', 'ok') and 'routed' in parsed \
+            and not parsed.get('routed'):
+        return True
+    return False
 
 
 class RepeatGuard(object):
@@ -187,7 +218,7 @@ class RepeatGuard(object):
                    'progress %d times' % (name, count))
         else:
             why = ('%s calls have failed %d times in a row against '
-                   'target %r' % (name, count, tk[1] if tk else None))
+                   'target %r' % (name, count, tk[-1] if tk else None))
         hint = ('STOP repeating this call. Switch strategy: use a '
                 'different tool for the target (finish_leg / '
                 'long_finish / ilp_repair), promote the failing net '
@@ -206,7 +237,7 @@ class RepeatGuard(object):
         failed = False
         try:
             parsed = json.loads(payload)
-            failed = isinstance(parsed, dict) and bool(parsed.get('error'))
+            failed = _payload_failed(parsed)
         except Exception:
             failed = False
         if failed:
@@ -218,9 +249,16 @@ class RepeatGuard(object):
             # Same call, same thing the model already saw: no progress.
             self._repeat[ck] = self._repeat.get(ck, 0) + 1
         else:
-            # Progress: new information. Both tiers reset.
-            self._repeat.clear()
-            self._streak.clear()
+            # Progress: new information from THIS call. Reset
+            # only this call's counters (#239 (6c)): the old
+            # global clear let one successful call anywhere --
+            # a board_summary between route attempts -- disarm
+            # the guard for every other target, so an
+            # alternating loop was never refused.
+            self._repeat.pop(ck, None)
+            tk = _guard_target_key(name, args)
+            if tk is not None:
+                self._streak.pop(tk, None)
         self._last_payload[ck] = payload
 
 
