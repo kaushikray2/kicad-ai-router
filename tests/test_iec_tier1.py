@@ -148,8 +148,20 @@ def test_override_governs_clearance(tmp_path):
     assert fc['required_mm'] == 1.5, fc
     assert fc['column'] == 'explicit override', fc
     assert fc['requirement_source'] == 'explicit override', fc
-    assert fc['creepage_required_mm'] == 1.0, fc
-    assert pair['violations'] == [], pair['violations']
+    # #236: creepage is FLOORED at the (overridden) clearance
+    # -- the declared 1.0 mm creepage override cannot require
+    # less than the 1.5 mm clearance beside it (the checker's
+    # own spec comment); this assertion pinned the pre-fix
+    # substitution and read 1.0 before #236.
+    assert fc['creepage_required_mm'] == 1.5, fc
+    # ...and the fixture's measured creepage path is exactly
+    # 1.5 mm, so the floored requirement (held with the
+    # checker's one-pitch margin) now flags a creepage
+    # violation where the pre-fix substitution reported none.
+    # The clearance override still governs its own comparison:
+    # no clearance violation at the 2.5 mm table value.
+    kinds = {(v['kind'], v['required_mm']) for v in pair['violations']}
+    assert kinds == {('creepage', 1.5)}, pair['violations']
     # rms reporting: HV is AC 400 peak -> 282.8 derived
     a = [x for x in rep['assumptions'] if x['domain'] == 'HV'][0]
     assert abs(a['rms_v'] - 400 / math.sqrt(2.0)) < 0.01, a
@@ -165,6 +177,58 @@ def test_override_governs_creepage_only(tmp_path):
     kinds = {(v['kind'], v['required_mm']) for v in pair['violations']}
     assert ('clearance', 2.5) in kinds, kinds
     assert ('creepage', 5.0) in kinds, kinds
+
+
+def test_creepage_never_below_clearance(tmp_path):
+    # #236 (5a): clearance override 4.0 with a SMALLER creepage
+    # override 2.5. The checker's own spec comment states
+    # creepage never requires less than the (possibly
+    # overridden) clearance in this single-table model --
+    # before the fix creepage_required_mm read 2.5, so a pair
+    # 3 mm apart passed a 4 mm requirement.
+    rep = _rep(tmp_path, {'min_clearance_mm': 4.0,
+                          'min_creepage_mm': 2.5})
+    pair = rep['pairs'][0]
+    fc = [e for e in pair['layers'] if e['layer'] == 'F.Cu'][0]
+    assert fc['required_mm'] == 4.0, fc
+    assert fc['creepage_required_mm'] == 4.0, fc
+
+
+def test_domain_setup_honours_tier1_overrides(tmp_path):
+    # #236 (5b): _domain_setup's materialise radius must take
+    # the same Tier 1 override maximum _eng_patch_pro_hv
+    # takes (#200: the paths can never disagree). A 5.0 mm
+    # override on a domain whose table requirement is smaller
+    # must set the rect radius; before the fix the override
+    # was ignored here.
+    import types
+    from ai_router import pipeline as pl
+    from ai_router.pipeline import Pipeline
+    board = str(tmp_path / 'iec.kicad_pcb')
+    _build(board, {})
+    pipe = Pipeline({'strip_existing': False,
+                     'tracemaker_path': '/nonexistent'},
+                    board, lambda m: None)
+    doms = [{'name': 'HV', 'nets': ['HV1'], 'peak_v': 400,
+             'ac': True, 'materialise': True,
+             'min_clearance_mm': 5.0},
+            {'name': 'LV', 'nets': ['LV1'], 'peak_v': 0}]
+    table = pl._hv_worst_pair_req_mm(doms[0], doms,
+                                     terminations=True)
+    assert 0 < table < 5.0, table   # fixture sanity
+    facts = {'layers': ['F.Cu'],
+             'nets': {'HV1': {'pads': [
+                 {'x': 15.0, 'y': 20.0, 'w': 2.0, 'h': 2.0,
+                  'layers': ['F.Cu']}]}}}
+    pipe._worker = lambda *a, **k: facts
+    mk = types.SimpleNamespace(hv_domains=doms, quiet=[])
+    out = pipe._domain_setup(mk)
+    assert out and out['entries'] == 1, out
+    entries = json.load(open(pipe._domains_path))
+    rect = entries[0]['rects'][0]['rect']
+    # pad half-diagonal term is max(w, h)/2 = 1.0; radius must
+    # be 1.0 + 5.0 (the override), not 1.0 + table.
+    assert rect == [9.0, 14.0, 21.0, 26.0], rect
 
 
 if __name__ == '__main__':
