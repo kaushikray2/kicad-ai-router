@@ -40,26 +40,37 @@ LAYERS = ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
 def test_route_flags_relax_deterministic():
     flags = er.route_flags({'deterministic': True}, 40000000, relax=True)
     assert flags == ['--work', '40000000', '--round-work', '20000000',
-                     '--rounds', '2', '--deterministic'], flags
+                     '--rounds', '50', '--deterministic'], flags
     flags = er.route_flags({'deterministic': True}, 20000000, relax=True)
     assert flags == ['--work', '20000000', '--round-work', '20000000',
-                     '--rounds', '1', '--deterministic'], flags
-    # an uneven budget splits into ceil rounds of the 20M quantum
+                     '--rounds', '50', '--deterministic'], flags
+    # the budget is floored at 50 rounds (the #52 sizing fix,
+    # Phase 2E item 3: the configured work number never bounded
+    # relax, and a small rounds budget binds and degrades the
+    # candidate -- probes in agent-runs/phase2e-ab/PROBE-ROUNDS.md)
     flags = er.route_flags({'deterministic': True}, 50000000, relax=True)
-    assert flags == ['--work', '50000000', '--round-work', '16666666',
-                     '--rounds', '3', '--deterministic'], flags
+    assert flags == ['--work', '50000000', '--round-work', '20000000',
+                     '--rounds', '50', '--deterministic'], flags
 
 
 def test_route_flags_other_shapes_unchanged():
     # non-relax deterministic: the pre-#184 line, exactly
     assert er.route_flags({'deterministic': True}, 40000000) == ['--work', '40000000', '--deterministic']
-    # relax without deterministic: --work + --time, as shipped and A/B-validated
-    assert er.route_flags({'deterministic': False}, 40000000, 1800, relax=True) == ['--work', '40000000', '--time', '1800']
-    assert er.route_flags({}, 40000000, 1800, relax=True) == ['--work', '40000000', '--time', '1800']
+    # AMENDED by #52 (Phase 2E item 3): this test used to pin the
+    # non-deterministic relax line at --work + --time -- the exact
+    # shape #52 reports as the defect (the engine budgets relax by
+    # rounds; --work does not limit it, --time does, so the
+    # default candidate's endpoint was the clock). Relax is now
+    # round-bounded in every mode, with --time kept as the
+    # backstop in default mode; test_relax_round_budget.py pins
+    # the new shapes. An unusable budget keeps the old line.
+    assert er.route_flags({'deterministic': False}, 40000000, 1800, relax=True) == ['--work', '40000000', '--round-work', '20000000', '--rounds', '50', '--time', '1800']
+    assert er.route_flags({}, 40000000, 1800, relax=True) == ['--work', '40000000', '--round-work', '20000000', '--rounds', '50', '--time', '1800']
+    assert er.route_flags({}, 0, 1800, relax=True) == ['--work', '0', '--time', '1800']
     # route_open_only still composes, ahead of the round budget
     flags = er.route_flags({'deterministic': True, 'route_open_only': True}, 40000000, relax=True)
     assert flags == ['--work', '40000000', '--route-open-only', '--round-work', '20000000',
-                     '--rounds', '2', '--deterministic'], flags
+                     '--rounds', '50', '--deterministic'], flags
 
 
 def _pipe(cfg_extra):
@@ -107,18 +118,25 @@ def test_variant_command_line_relax_deterministic():
     # banned In1.Cu rides between the fixed flags and the budget tail
     assert '--round-work' in tail and '--rounds' in tail, argv
     assert tail[tail.index('--round-work') + 1] == '20000000', argv
-    assert tail[tail.index('--rounds') + 1] == '2', argv
+    assert tail[tail.index('--rounds') + 1] == '50', argv
     assert '--deterministic' in tail and '--time' not in tail, argv
 
 
 def test_variant_command_line_relax_plain_unchanged():
+    # AMENDED by #52: was 'plain relax line unchanged' (no rounds,
+    # --time present) -- that line WAS the #52 defect. A plain
+    # (default-mode) relax variant now carries the same floored
+    # round budget as a deterministic one, with --time kept as
+    # the backstop limit (item-3 probes: with --time absent the
+    # engine caps the tournament itself at ~120 s).
     import json
     pipe, rec = _pipe({})
     outp = os.path.join(pipe.workdir, 'pf-tm-relax.kicad_pcb')
     pipe._route_variant('tm_relax', outp)
     argv = json.load(open(rec))
-    assert '--round-work' not in argv and '--rounds' not in argv, argv
-    assert argv[-2:] == ['--work', '40000000'] or '--time' in argv, argv
+    assert '--round-work' in argv and '--rounds' in argv, argv
+    assert argv[argv.index('--rounds') + 1] == '50', argv
+    assert argv[argv.index('--time') + 1] == '1800', argv
 
 
 if __name__ == '__main__':

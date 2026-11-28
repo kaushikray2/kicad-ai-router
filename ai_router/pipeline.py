@@ -242,6 +242,52 @@ def _accept_key(g):
 _PORTFOLIO_ENGINES = ('freerouting', 'krt', 'tm_relax', 'tm_global', 'tm_escape')
 
 
+# #45 tolerance (Phase 2E item 3): footprint POSITIONS compare
+# within 1 um, not exactly. An external engine whose file
+# format round-trips the board (Freerouting via Specctra
+# DSN/SES) shifts every footprint by unit-conversion noise --
+# 3-53 nm measured on STM32/juniper candidates -- which is not
+# a placement change; an exact compare made that leg unusable
+# on any board whose coordinates do not round-trip exactly.
+# 1 um is ~20x the observed noise and 1000x below any real
+# placement decision (KRT's decap moves are mm-scale and still
+# fail). Orientation, side, pad-nets, zones and the outline
+# stay exact.
+_FOOTPRINT_TOL_NM = 1000
+
+
+def _footprints_match(base_list, cand_list):
+    if len(base_list) != len(cand_list):
+        return False
+    cand = {e[0]: e for e in cand_list}
+    if len(cand) != len(cand_list):
+        return False
+    for e in base_list:
+        o = cand.get(e[0])
+        if o is None:
+            return False
+        if o[3] != e[3] or o[4] != e[4]:
+            return False
+        if abs(o[1] - e[1]) > _FOOTPRINT_TOL_NM or abs(o[2] - e[2]) > _FOOTPRINT_TOL_NM:
+            return False
+    return True
+
+
+def _design_diff(section, base_list, cand_list):
+    # #45: a compact, ledger-sized description of how a portfolio
+    # candidate's design fingerprint differs from the base's:
+    # per-section counts plus the first few entries present on
+    # one side only.
+    bs = {json.dumps(e, sort_keys=True) for e in base_list}
+    cs = {json.dumps(e, sort_keys=True) for e in cand_list}
+    parts = ['%s: base %d, candidate %d' % (section, len(base_list), len(cand_list))]
+    for label, items in (('base-only', sorted(bs - cs)),
+                         ('candidate-only', sorted(cs - bs))):
+        for it in items[:3]:
+            parts.append('%s %s' % (label, it[:120]))
+    return '; '.join(parts)
+
+
 def _portfolio_complete(g):
     # Phase 2E (#66): a portfolio candidate is COMPLETE when it
     # connected everything and added no faults -- the two zero
@@ -632,9 +678,10 @@ class Pipeline:
                     excluded_roo.append(eng)
                     self.log('portfolio: %s excluded -- route_open_only keeps existing copper; %s re-routes from scratch (#174)' % (eng, eng))
         # v1.12.2 (#176): deterministic mode excludes the same two
-        # engines for its own reason -- freerouting runs -mt 2
-        # (multithreaded, run-variant) and krt has no determinism
-        # contract, so neither may win a Reproducible run.
+        # engines for its own reason -- freerouting's optimisation
+        # passes are time-bounded (run-variant even at -mt 1, #46)
+        # and krt has no determinism contract, so neither may win
+        # a Reproducible run.
         if self.cfg.get('deterministic'):
             for eng in ('freerouting', 'krt'):
                 if eng in engines:
@@ -707,6 +754,17 @@ class Pipeline:
                           'copper': g.get('copper_violations'),
                           'banned': g.get('banned_layer_tracks'),
                           'seconds': oc.get('seconds')})
+                # #52: the leg's own run facts ride the record --
+                # for a tm_relax leg, the round budget it ran
+                # under, its seconds, and whether a bound ended
+                # it (time_limited): at the floored budget a leg
+                # reaches its natural stop well inside the time
+                # backstop, so a true here proves a bound -- not
+                # the tournament -- decided the endpoint.
+                _rt = oc.get('route') or {}
+                for _k in ('stopped_by', 'time_limited', 'rounds'):
+                    if _rt.get(_k) is not None:
+                        e[_k] = _rt[_k]
             elif oc['status'] == 'failed':
                 e['error'] = oc.get('error')
             elif oc['status'] == 'no_board':
@@ -741,6 +799,27 @@ class Pipeline:
             return wg
         return None
 
+    def _design_invariance_error(self, board):
+        # #45: compare a portfolio candidate's design fingerprint
+        # (footprint ref/pos/orientation/side, pad-net assignments,
+        # zone census, board outline) against the stripped base's.
+        # Returns None when the design is unchanged, else a short
+        # diff description. The base fingerprint is computed once
+        # per Pipeline; race children each compute their own from
+        # their byte-identical base copy.
+        base = getattr(self, '_base_design', None)
+        if base is None:
+            base = self._worker('design_fingerprint', '--board', self.base)
+            self._base_design = base
+        cand = self._worker('design_fingerprint', '--board', board)
+        diffs = []
+        for sec in ('footprints', 'pads', 'zones', 'edges'):
+            b, c = base.get(sec) or [], cand.get(sec) or []
+            differ = (not _footprints_match(b, c)) if sec == 'footprints' else (b != c)
+            if differ:
+                diffs.append(_design_diff(sec, b, c))
+        return '; '.join(diffs) if diffs else None
+
     def _run_leg(self, eng):
         # #66: one portfolio candidate, run from the base and gated.
         # Returns an outcome dict and never raises -- a failed leg
@@ -753,9 +832,17 @@ class Pipeline:
         outp = self._out('pf-' + re.sub(r'[^A-Za-z0-9]+', '-', eng))
         try:
             if eng == 'freerouting':
-                r = self._worker('freeroute', '--board', self.base, '--out', outp, timeout=3900)
+                # #46: the external engines receive the same layer
+                # law the TraceMaker legs run under (freerouting:
+                # banned layers exported as DSN power layers; krt:
+                # rule-area keepouts) -- until now they were told
+                # nothing and their banned-layer tracks counted as
+                # faults at the gate, so they lost by construction.
+                r = self._worker('freeroute', '--board', self.base, '--out', outp,
+                                 '--no-tracks-on', ','.join(self._banned_for(self.base)), timeout=3900)
             elif eng == 'krt':
-                r = self._worker('krt_route', '--board', self.base, '--out', outp, timeout=3900)
+                r = self._worker('krt_route', '--board', self.base, '--out', outp,
+                                 '--no-tracks-on', ','.join(self._banned_for(self.base)), timeout=3900)
             else:
                 r = self._route_variant(eng, outp)
         except Exception as e:
@@ -765,6 +852,22 @@ class Pipeline:
             return {'engine': eng, 'status': 'no_board', 'board': None,
                     'seconds': (r or {}).get('seconds'),
                     'detail': (r or {}).get('status')}
+        # #45: design-invariance gate -- a candidate that moved a
+        # part, changed the zone set or the board outline, or
+        # rewired a pad is not a routing of this design, whatever
+        # its gate numbers say, and never reaches selection. Every
+        # candidate is checked: the external engines are the known
+        # movers (KRT's decap step relocates capacitors, its chain
+        # pours its own planes), but the contract is one contract.
+        # Fail-closed: a check that cannot run fails the leg.
+        try:
+            _inv = self._design_invariance_error(outp)
+        except Exception as e:
+            _inv = 'invariance check failed: %s' % e
+        if _inv:
+            return {'engine': eng, 'status': 'failed', 'board': None,
+                    'error': 'design-invariance: %s' % _inv,
+                    'seconds': (r or {}).get('seconds')}
         try:
             g = self.tool_gate(outp)
         except Exception as e:
@@ -1025,8 +1128,16 @@ class Pipeline:
         _rec = {'engine': eng, 'board': outp,
                 'exit_code': _rj.get('exit_code', _rc),
                 'stopped_by': _rj.get('stopped_by'),
+                'time_limited': _rj.get('time_limited'),
                 'route_open_only': bool(_rj.get('route_open_only')),
                 'open_at_start': _rj.get('open_at_start')}
+        if eng == 'tm_relax':
+            # #52: record the round budget this leg ran under;
+            # seconds + time_limited ride alongside, so the
+            # ledger shows which bound ended the leg.
+            _rb = engine_run.relax_round_budget(self.cfg.get('work', 40000000))
+            if _rb:
+                _rec['rounds'] = {'round_work': _rb[0], 'rounds': _rb[1]}
         return {'status': 'routed', 'seconds': _rj.get('seconds'), 'route': _rec}
 
     def _drc_measure(self, board):

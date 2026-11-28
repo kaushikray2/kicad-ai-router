@@ -26,6 +26,14 @@ import sys, os, json, math, argparse, heapq
 import numpy as np
 import pcbnew
 
+try:
+    from . import dsn_law  # #46: DSN layer-law rewrite (pure text)
+except Exception:
+    # Script execution (sys.path[0] is this file's directory) and
+    # SourceFileLoader test loads (no package, no path entry).
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import dsn_law
+
 # v1.3.2 layer-law plumbing: the pipeline passes the run's banned
 # layers (--no-tracks-on, canonical names); Grid excludes them from
 # routable. Default when the flag is absent: In1.Cu only.
@@ -3373,12 +3381,41 @@ def _run_group(cmd, timeout, cwd=None):
         raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
     return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
-def cmd_freeroute(board_path, out_path, passes=50):
+def _copper_stack_index(board, layer_name):
+    # #46: a canonical copper layer's position in the stack -- the
+    # (index N) KiCad writes into the DSN layer blocks, in stack
+    # order: F.Cu is 0, InK.Cu is K, B.Cu is last. None for a name
+    # that is not a canonical copper layer.
+    if layer_name == 'F.Cu':
+        return 0
+    if layer_name == 'B.Cu':
+        return board.GetCopperLayerCount() - 1
+    if layer_name.startswith('In') and layer_name.endswith('.Cu'):
+        try:
+            return int(layer_name[2:-3])
+        except ValueError:
+            return None
+    return None
+
+
+def cmd_freeroute(board_path, out_path, passes=50, banned=None):
     # v1.9.5 (Phase 1.2): Freerouting 2.5.0 as a portfolio engine --
     # Specctra DSN out, the JVM distribution routes (the native CLI
     # build crashes on KiCad-exported DSNs: GraalVM serialization
     # config gap, verified 2026-11-23), SES back in. This routes; it
     # does not judge -- the gate census stays the layer-law backstop.
+    # #46: two fairness fixes. -mt 1: freerouting's maintainers flag
+    # multi-threaded optimisation as generating clearance
+    # violations (freerouting#445) and recommend a single thread,
+    # so part of this leg's fault count was a harness artefact.
+    # And the run's layer law now rides the DSN copy: KiCad's
+    # export conveys the board's STACKUP types, not the run's bans
+    # (a stackup-signal layer the run bans exported as routable,
+    # and its tracks then counted as gate faults -- the leg lost
+    # by construction). Banned layers are rewritten to Specctra's
+    # (type power) -- a plane, never routed -- and the rewrite is
+    # verified before the leg runs; an export that cannot convey
+    # the law fails the leg instead of running it unfairly.
     import shutil, subprocess, tempfile, time
     launcher = _freerouting_bin()
     if not launcher:
@@ -3390,30 +3427,120 @@ def cmd_freeroute(board_path, out_path, passes=50):
     if not pcbnew.ExportSpecctraDSN(b, dsn):
         shutil.rmtree(d, ignore_errors=True)
         return {'status': 'dsn_failed'}
+    law = None
+    if banned:
+        positions = {}
+        for name in banned:
+            idx = _copper_stack_index(b, name)
+            if idx is None:
+                shutil.rmtree(d, ignore_errors=True)
+                return {'status': 'dsn_failed',
+                        'detail': 'banned layer %s has no DSN stack position' % name}
+            positions[idx] = name
+        with open(dsn) as f:
+            text = f.read()
+        text, report = dsn_law.apply_power_layers(text, positions)
+        bad = dsn_law.unpowered_bans(text, positions)
+        if bad:
+            shutil.rmtree(d, ignore_errors=True)
+            return {'status': 'dsn_failed',
+                    'detail': 'DSN export does not convey the layer law: banned stack indices %s not power after rewrite' % bad}
+        with open(dsn, 'w') as f:
+            f.write(text)
+        law = {report[i]['layer']: report[i] for i in sorted(report)}
     try:
-        p = _run_group([launcher, '-de', dsn, '-do', ses, '-mp', str(int(passes)), '-mt', '2'], 2400)
+        p = _run_group([launcher, '-de', dsn, '-do', ses, '-mp', str(int(passes)), '-mt', '1'], 2400)
         tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
     except Exception as e:
         shutil.rmtree(d, ignore_errors=True)
-        return {'status': 'run_failed', 'detail': str(e)[:200]}
+        res = {'status': 'run_failed', 'detail': str(e)[:200]}
+        if law is not None: res['dsn_law'] = law
+        return res
     if not os.path.exists(ses):
         shutil.rmtree(d, ignore_errors=True)
-        return {'status': 'no_ses', 'detail': tail[-200:]}
+        res = {'status': 'no_ses', 'detail': tail[-200:]}
+        if law is not None: res['dsn_law'] = law
+        return res
     b2 = pcbnew.LoadBoard(board_path)
     if not pcbnew.ImportSpecctraSES(b2, ses):
         shutil.rmtree(d, ignore_errors=True)
-        return {'status': 'ses_failed'}
+        res = {'status': 'ses_failed'}
+        if law is not None: res['dsn_law'] = law
+        return res
     refill(b2)
     pcbnew.SaveBoard(out_path, b2)
     shutil.rmtree(d, ignore_errors=True)
-    return {'status': 'routed', 'seconds': round(time.time() - t0, 1)}
+    res = {'status': 'routed', 'seconds': round(time.time() - t0, 1)}
+    if law is not None:
+        res['dsn_law'] = law
+    return res
 
 
-def cmd_krt_route(board_path, out_path):
+LAW_ZONE_NAME = 'AI_ROUTER_LAW'
+
+
+def _stamp_law_zones(board_path, banned):
+    # #46: stamp one full-board rule area per banned layer onto
+    # the board file at board_path (KRT's input copy): tracks,
+    # vias and zone fills forbidden there, pads and footprints
+    # allowed (a banned layer still carries the parts soldered to
+    # it). Returns the layer names actually stamped.
+    b = pcbnew.LoadBoard(board_path)
+    bbox = b.GetBoardEdgesBoundingBox()
+    bbox.Inflate(1000000)  # 1 mm past the outline on every side
+    x0, y0 = bbox.GetLeft(), bbox.GetTop()
+    x1, y1 = bbox.GetRight(), bbox.GetBottom()
+    stamped = []
+    for name in banned:
+        lid = b.GetLayerID(name)
+        if lid < 0 or not pcbnew.IsCopperLayer(lid):
+            continue
+        z = pcbnew.ZONE(b)
+        z.SetLayer(lid)
+        z.SetIsRuleArea(True)
+        z.SetDoNotAllowTracks(True)
+        z.SetDoNotAllowVias(True)
+        z.SetDoNotAllowZoneFills(True)
+        z.SetDoNotAllowFootprints(False)
+        z.SetDoNotAllowPads(False)
+        z.SetZoneName(LAW_ZONE_NAME)
+        o = z.Outline()
+        o.NewOutline()
+        for (x, y) in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
+            o.Append(x, y)
+        b.Add(z)
+        stamped.append(name)
+    if stamped:
+        pcbnew.SaveBoard(board_path, b)
+    return stamped
+
+
+def _remove_law_zones(b):
+    # Remove every zone _stamp_law_zones wrote (matched by name).
+    for z in list(b.Zones()):
+        if z.GetZoneName() == LAW_ZONE_NAME:
+            b.Remove(z)
+
+
+def cmd_krt_route(board_path, out_path, banned=None):
     # v1.9.5 (Phase 1.2): KiCadRoutingTools as a portfolio engine --
     # autoroute.py orchestrates the grid_router binary plus its own
     # step chain and writes a routed board. Needs the KRT tree
     # (AI_ROUTER_KRT env or /opt/krt) and shapely in this python.
+    # #45/#46: the chain now runs under the same contract as every
+    # other candidate. --keep-placement: autoroute's decap step
+    # otherwise MOVES decoupling capacitors off the fanout copper.
+    # --board-rules: route to the board's own declared rules
+    # instead of stepping them toward KRT's fab floor -- the gate
+    # DRCs against the board's rules (sidecars), so floor-routed
+    # copper was faults by construction. The layer law rides as
+    # rule-area keepouts stamped on the input copy, one per banned
+    # layer (KRT's router honours rule areas -- its own
+    # add_rule_area.py exists to write them), and is removed from
+    # the output before refill so the candidate carries no
+    # scaffolding. What the flags cannot prevent (its own pours,
+    # any other design change) is caught by the pipeline's
+    # design-invariance gate (#45).
     import shutil, subprocess, tempfile, time
     krt = os.environ.get('AI_ROUTER_KRT') or '/opt/krt'
     auto = os.path.join(krt, 'py_router', 'autoroute.py')
@@ -3429,8 +3556,16 @@ def cmd_krt_route(board_path, out_path):
     dru = os.path.splitext(board_path)[0] + '.kicad_dru'
     if os.path.exists(dru):
         shutil.copy(dru, os.path.join(d, 'in.kicad_dru'))  # v1.9.6 (#40): cmd_freeroute parity
+    law_layers = []
+    if banned:
+        try:
+            law_layers = _stamp_law_zones(inp, banned)
+        except Exception as e:
+            shutil.rmtree(d, ignore_errors=True)
+            return {'status': 'run_failed', 'detail': 'law zones: %s' % str(e)[:160]}
     try:
-        p = _run_group([sys.executable, auto, inp, out_path], 3600, cwd=d)
+        p = _run_group([sys.executable, auto, inp, out_path,
+                        '--keep-placement', '--board-rules'], 3600, cwd=d)
         tail = ((p.stdout or '')[-300:] + (p.stderr or '')[-200:])
     except Exception as e:
         shutil.rmtree(d, ignore_errors=True)
@@ -3438,13 +3573,89 @@ def cmd_krt_route(board_path, out_path):
     if not os.path.exists(out_path):
         shutil.rmtree(d, ignore_errors=True)
         return {'status': 'no_output', 'detail': tail[-200:]}
+    if law_layers:
+        # Strip the scaffolding before anything else reads the
+        # board; a candidate still carrying law zones is
+        # contaminated, so a removal failure fails the leg rather
+        # than letting the zones through disguised as design.
+        try:
+            b3 = pcbnew.LoadBoard(out_path)
+            _remove_law_zones(b3)
+            pcbnew.SaveBoard(out_path, b3)
+        except Exception as e:
+            shutil.rmtree(d, ignore_errors=True)
+            return {'status': 'run_failed', 'detail': 'law zone removal: %s' % str(e)[:160]}
     refill_note = 'skipped'
     try:
         b2 = pcbnew.LoadBoard(out_path); refill(b2); pcbnew.SaveBoard(out_path, b2); refill_note = 'ok'
     except Exception as e:
         refill_note = 'failed: %s' % str(e)[:80]
     shutil.rmtree(d, ignore_errors=True)
-    return {'status': 'routed', 'seconds': round(time.time() - t0, 1), 'refill': refill_note}
+    res = {'status': 'routed', 'seconds': round(time.time() - t0, 1), 'refill': refill_note}
+    if banned is not None:
+        res['law_zones'] = law_layers
+    return res
+
+
+def cmd_design_fingerprint(board_path):
+    # #45: the design-invariance fingerprint a portfolio candidate
+    # is checked against -- everything that makes the board THIS
+    # design rather than another one: footprint placement
+    # (ref, position, orientation, side), pad-net assignments,
+    # the zone census (net, layers, rule-area keepout flags,
+    # outline geometry hash), and the board outline. Tracks and
+    # vias are deliberately absent: routing is what candidates
+    # are FOR. Zone FILLS are absent too (a refill is not a
+    # design change); outlines are hashed, so a pour whose
+    # boundary moved is a changed zone even at the same count.
+    import hashlib
+    b = pcbnew.LoadBoard(board_path)
+    fps, pads = [], []
+    for fp in b.GetFootprints():
+        pos = fp.GetPosition()
+        fps.append([str(fp.GetReference()), int(pos.x), int(pos.y),
+                    round(float(fp.GetOrientationDegrees()), 4),
+                    bool(fp.IsFlipped())])
+        for pad in fp.Pads():
+            pads.append([str(fp.GetReference()), str(pad.GetNumber()),
+                         str(pad.GetNetname())])
+    zones = []
+    for z in b.Zones():
+        layers = sorted(b.GetLayerName(l) for l in z.GetLayerSet().Seq())
+        o = z.Outline()
+        rings, holes = [], []
+        for oi in range(o.OutlineCount()):
+            ch = o.COutline(oi)
+            rings.append([[int(ch.GetPoint(i).x), int(ch.GetPoint(i).y)]
+                          for i in range(ch.PointCount())])
+            for hi in range(o.HoleCount(oi)):
+                ch = o.CHole(oi, hi)
+                holes.append([[int(ch.GetPoint(i).x), int(ch.GetPoint(i).y)]
+                              for i in range(ch.PointCount())])
+        zh = hashlib.sha256(json.dumps([rings, holes]).encode()).hexdigest()[:16]
+        zones.append([str(z.GetNetname()), layers, bool(z.GetIsRuleArea()),
+                      bool(z.GetDoNotAllowTracks()), bool(z.GetDoNotAllowVias()),
+                      bool(z.GetDoNotAllowZoneFills()), zh])
+    edges = []
+    edge_id = b.GetLayerID('Edge.Cuts')
+    for dr in b.GetDrawings():
+        if dr.GetLayer() != edge_id:
+            continue
+        e = [str(dr.Type())]
+        for getter in ('GetStart', 'GetEnd', 'GetCenter'):
+            try:
+                pt = getattr(dr, getter)()
+                e += [int(pt.x), int(pt.y)]
+            except Exception:
+                pass
+        try:
+            if dr.GetShape() in (pcbnew.S_CIRCLE, pcbnew.S_ARC):
+                e.append(int(dr.GetRadius()))
+        except Exception:
+            pass
+        edges.append(e)
+    return {'footprints': sorted(fps), 'pads': sorted(pads),
+            'zones': sorted(zones), 'edges': sorted(edges)}
 
 
 def _with_yield(fn, is_fail):
@@ -3470,6 +3681,16 @@ def _with_yield(fn, is_fail):
             res2 = dict(res2); res2['skeleton_yield'] = True
             return res2
     return res
+
+def _ban_arg(a):
+    # #46: the banned-layer list for the external-engine ops, from
+    # the --no-tracks-on flag the pipeline now passes them. None
+    # when the flag is absent (direct worker use keeps the old
+    # no-law behaviour); '' is an explicit empty ban set (#104).
+    if a.no_tracks_on is None:
+        return None
+    return [x.strip() for x in a.no_tracks_on.split(',') if x.strip()]
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -3525,8 +3746,9 @@ def main():
     elif a.cmd == 'lock_window': res = cmd_lock_window(a.board, a.out, a.net, margin=a.margin, fx=a.fx, fy=a.fy, tx=a.tx, ty=a.ty)
     elif a.cmd == 'restore_locks': res = cmd_restore_locks(a.board, a.out, a.locks)
     elif a.cmd == 'lock_all': res = cmd_lock_all(a.board, a.out)
-    elif a.cmd == 'freeroute': res = cmd_freeroute(a.board, a.out, passes=a.passes)
-    elif a.cmd == 'krt_route': res = cmd_krt_route(a.board, a.out)
+    elif a.cmd == 'freeroute': res = cmd_freeroute(a.board, a.out, passes=a.passes, banned=_ban_arg(a))
+    elif a.cmd == 'krt_route': res = cmd_krt_route(a.board, a.out, banned=_ban_arg(a))
+    elif a.cmd == 'design_fingerprint': res = cmd_design_fingerprint(a.board)
     elif a.cmd == 'prune': res = cmd_prune(a.board, a.out)
     elif a.cmd == 'refill': res = cmd_refill(a.board, a.out or a.board)
     else: res = {'status': 'error', 'detail': 'unknown cmd'}
