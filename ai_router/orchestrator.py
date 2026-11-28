@@ -275,7 +275,8 @@ def run_auto(cfg, pipe, log):
             # gate/summary/scorecard) before its first routing
             # tool raises DeadlinePassed. B's result, with its
             # checkpointed best-so-far, is the deliverable.
-            if res_b.get('deadline_hit') or pipe_b.deadline_passed():
+            _b_dl = getattr(pipe_b, 'deadline_passed', None)
+            if res_b.get('deadline_hit') or (_b_dl is not None and _b_dl()):
                 log('Layer-law policy: Variant B hit the shared deadline -- keeping B (no escalation past the deadline)')
                 return res_b
             if not _b_needs_escalation(res_b['gate']):
