@@ -98,8 +98,10 @@ def _nets_by_ref(data):
 # ----------------------------------------------------------------
 # Differential pairs: _P/_N (and _DP/_DN) nets sharing a stem and
 # >= 2 endpoint components -- two nets that merely share a name
-# shape but land on different parts are not a pair.
-_DIFF_SUFFIXES = (('_DP', '_DN'), ('_P', '_N'))
+# shape but land on different parts are not a pair. #240: the
+# USB spellings D+/D- and DP/DM pair too.
+_DIFF_SUFFIXES = (('_DP', '_DN'), ('_DP', '_DM'), ('_P', '_N'),
+                  ('+', '-'))
 
 
 def detect_diff_pairs(data):
@@ -133,6 +135,9 @@ def detect_diff_pairs(data):
 # loads UNKNOWN -- no current is ever suggested.
 _RAIL_HEAD = re.compile(r'^(\+|VCC|VDD|VBAT|VBUS|VIN|VSYS)')
 _RAIL_ANY = re.compile(r'(^|_)(VCC|VDD|VBAT|VBUS)(_|$)')
+# #240: rails named by their voltage -- 3V3, 5V, 12V, 1V8 --
+# carry no +/VCC/VDD head at all.
+_RAIL_VOLT = re.compile(r'^\d+V\d*(?:_|$)')
 
 
 def detect_power_rails(data):
@@ -144,6 +149,8 @@ def detect_power_rails(data):
             continue  # a rail feeds several loads; 1-2 endpoints is a stub
         if _RAIL_HEAD.match(name):
             conf = 0.90 if name.startswith('+') else 0.85
+        elif _RAIL_VOLT.match(name):
+            conf = 0.85
         elif _RAIL_ANY.search(name):
             conf = 0.80
         else:
@@ -296,6 +303,17 @@ def detect_bus_groups(data):
         if len(by_idx) < 3:
             continue
         nets = [by_idx[i] for i in sorted(by_idx)]
+        # #240: indexed lookalikes on unrelated parts are not
+        # a bus -- require at least one endpoint ref shared by
+        # two or more of the group's nets (a real bus fans out
+        # of, or into, at least one common device; LED1..LED4
+        # each sitting on a different part share nothing).
+        counts = {}
+        for n in nets:
+            for r in _refs_of(data['nets'][n]):
+                counts[r] = counts.get(r, 0) + 1
+        if not any(c >= 2 for c in counts.values()):
+            continue
         out.append({'kind': 'bus_length_group',
                     'label': 'Bus group %s (%d nets)' % (base, len(nets)),
                     'base': base,
@@ -310,7 +328,10 @@ def detect_bus_groups(data):
 # peak_v is always left blank -- the detector never invents a
 # voltage; the user confirms and fills it in.
 _HV_TOKEN = re.compile(r'(^|_)HV(_|$)|MAINS|(^|_)AC_[LN](_|$)')
-_VOLT_IN_NAME = re.compile(r'(\d{2,3})\s?V(?![0-9])')
+# #240: 2-4 digits anchored at a non-digit boundary -- the
+# old 2-3 digit window matched only the inner '000V' of
+# '1000V_DC' (0 < 60) and missed kilovolt-class nets.
+_VOLT_IN_NAME = re.compile(r'(?<![0-9])(\d{2,4})\s?V(?![0-9])')
 
 
 def detect_hv_candidates(data):
