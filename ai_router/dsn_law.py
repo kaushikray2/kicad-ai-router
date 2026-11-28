@@ -46,7 +46,7 @@ and verification still passes.
 import re
 
 _LAYER_BLOCK = re.compile(
-    r'\(layer\s+(?P<name>\S+)\s*\(type\s+(?P<type>signal|power)\)'
+    r'\(layer\s+(?P<name>"[^"]+"|\S+)\s*\(type\s+(?P<type>signal|power|mixed|jumper)\)'
     r'\s*\(property\s*\(index\s+(?P<index>\d+)\)')
 
 
@@ -54,7 +54,13 @@ def layer_blocks(dsn_text):
     """{stack_index: (dsn_layer_name, type)} for every DSN layer."""
     out = {}
     for m in _LAYER_BLOCK.finditer(dsn_text):
-        out[int(m.group('index'))] = (m.group('name'), m.group('type'))
+        # #232: KiCad quotes a layer name containing a space
+        # ((layer "GND Plane" ...)); the name is reported
+        # unquoted so callers compare like with like.
+        name = m.group('name')
+        if name.startswith('"') and name.endswith('"'):
+            name = name[1:-1]
+        out[int(m.group('index'))] = (name, m.group('type'))
     return out
 
 
@@ -81,9 +87,13 @@ def apply_power_layers(dsn_text, banned_positions):
 
     def _sub(m):
         idx = int(m.group('index'))
-        if idx in banned_positions and m.group('type') == 'signal':
+        # #232: signal is what KiCad emits for routable copper;
+        # mixed/jumper are accepted defensively -- a banned
+        # layer of any routable type is rewritten to power.
+        if idx in banned_positions and m.group('type') != 'power':
             report[idx]['after'] = 'power'
-            return m.group(0).replace('(type signal)', '(type power)', 1)
+            return m.group(0).replace('(type %s)' % m.group('type'),
+                                      '(type power)', 1)
         return m.group(0)
 
     return _LAYER_BLOCK.sub(_sub, dsn_text), report
