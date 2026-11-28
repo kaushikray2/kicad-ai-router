@@ -3606,10 +3606,13 @@ def cmd_ilp_repair(board_path, out_path, nets):
         return m
 
     def _note_sev(cs):
+        # 'evaluated' counts every candidate the barrier actually
+        # scored (it carries the severance keys), charged or not --
+        # a zero charge is a measurement, not an absence of one.
         for c in cs:
-            if c.get('severed') or c.get('xings'):
+            if 'severed' in c:
                 sev['evaluated'] += 1
-                sev['severed'] += len(c.get('severed') or [])
+                sev['severed'] += len(c['severed'])
                 sev['crossings'] += c.get('xings') or 0
 
     def _gather(barrier):
