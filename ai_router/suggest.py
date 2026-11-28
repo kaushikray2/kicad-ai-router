@@ -83,6 +83,10 @@ def _refs_of(endpoints):
     return set(r for r, _pin in endpoints)
 
 
+def _is_ground_net(name):
+    return 'GND' in (name or '')
+
+
 def _nets_by_ref(data):
     out = {}
     for net, eps in data['nets'].items():
@@ -187,7 +191,14 @@ def detect_crystals(data):
     for ref, fp in sorted(data['footprints'].items()):
         if not _is_crystal(ref, fp):
             continue
-        xtal_nets = by_ref.get(ref, set())
+        # Signal nets only: a crystal's ground pads (case / shield)
+        # otherwise make every GND-shunted pF cap on the board a
+        # false 'load cap' -- the STM32-RF measurement's C7/C9 were
+        # exactly that (a VDD_PA decoupler and an RF shunt).
+        xtal_nets = set(n for n in by_ref.get(ref, set())
+                        if not _is_ground_net(n))
+        if not xtal_nets:
+            continue
         caps = []
         for cref, cfp in sorted(data['footprints'].items()):
             if not cref.startswith('C'):
@@ -233,15 +244,19 @@ def detect_rf_chains(data):
     for ref, nets in by_ref.items():
         if ref.startswith('U'):
             ic_nets |= nets
+    def _radio_net(n):
+        return n in ic_nets and not (_RAIL_HEAD.match(n) or _RAIL_ANY.search(n))
     out = []
     for ant in sorted(n for n in data['nets'] if _ANT_NET.search(n)):
+        if ant in ic_nets:
+            continue  # the radio sits on the antenna net itself: no chain
         path_refs, path_nets = None, None
         for ref1, n1 in links.get(ant, []):
-            if n1 in ic_nets:
+            if _radio_net(n1):
                 path_refs, path_nets = [ref1], [ant, n1]
                 break
             for ref2, n2 in links.get(n1, []):
-                if n2 in ic_nets and n2 != ant:
+                if _radio_net(n2) and n2 != ant:
                     path_refs, path_nets = [ref1, ref2], [ant, n1, n2]
                     break
             if path_refs:
