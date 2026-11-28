@@ -221,6 +221,33 @@ Tests can be run through:
 - The status page
 - `POST /api/selftest/run`
 
+#### Time limits and best-so-far results
+
+Backend routing runs are not all-or-nothing. While a job runs,
+the result artifact (`result.kicad_pcb` in the job's run
+directory, served at `GET /api/runs/<id>/result`) is rewritten
+whenever a finished pass or portfolio variant beats the best
+gate key seen so far, and every write is atomic (written beside
+the target, then renamed over it), so the file is always a
+complete, gate-checkable board. Killing a job, cancelling it,
+or losing the runner at any point leaves the best routing found
+so far as the artifact instead of nothing.
+
+A run can also be time-boxed with the routing setting
+`time_limit_s` (seconds, `0` = no limit -- the default; settable
+in the backend's `config.json` routing section, via
+`POST /api/config`, or as a per-job override). At job start the
+limit is converted once into a single absolute deadline -- one
+point in time, shared by every worker in the run (the pipeline,
+its worker subprocesses and the portfolio race legs all compare
+against the same instant). When the deadline passes, no new
+work starts: the run finishes with the best board so far. A
+result the deadline actually truncated is labelled in the job
+status (`deadline_hit` / `nondeterministic`) -- how much routing
+got done by then depends on machine speed. A deadline that
+never binds changes nothing and labels nothing, and
+deadline-free runs keep the usual determinism contract.
+
 ---
 
 ## Repository layout
