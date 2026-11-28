@@ -40,7 +40,7 @@ record carries rounds + seconds + time_limited per finished
 leg, so a run proves from its own ledger which bound ended
 each leg -- at the floored budget, neither: the natural stop.
 Run: python3 tests/test_relax_round_budget.py"""
-import json, os, stat, sys, tempfile
+import contextlib, json, os, stat, sys, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ai_router'))
 import engine_run as er
 import pipeline as pl
@@ -93,7 +93,6 @@ def _pipe():
     # worker answers the design-fingerprint op, the gate is stubbed.
     d = tempfile.mkdtemp()
     rec = os.path.join(d, 'argv.json')
-    tm = os.path.join(d, 'faketm')
     body = ('#!/usr/bin/env python3\n'
             'import json, sys\n'
             'a = sys.argv[1:]\n'
@@ -103,7 +102,20 @@ def _pipe():
             'if "--json" in a:\n'
             '    json.dump({"exit_code": 3, "seconds": 12.5, "time_limited": False}, open(a[a.index("--json") + 1], "w"))\n'
             'sys.exit(3)\n') % rec
-    open(tm, 'w').write(body); os.chmod(tm, stat.S_IRWXU)
+    if os.name == 'nt':
+        # #233: Windows cannot exec a shebang script (WinError
+        # 193). The interpreter opens the script named by its
+        # first argument relative to the cwd, so the stub body
+        # lives in a file named 'route' in this temp dir, the
+        # engine path is sys.executable itself, and the tests
+        # that exec the engine run under _stub_cwd. The shebang
+        # line is a comment to the interpreter; the body is
+        # byte-identical to the POSIX stub.
+        open(os.path.join(d, 'route'), 'w').write(body)
+        tm = sys.executable
+    else:
+        tm = os.path.join(d, 'faketm')
+        open(tm, 'w').write(body); os.chmod(tm, stat.S_IRWXU)
     pipe = object.__new__(pl.Pipeline)
     pipe.workdir = d; pipe.pass_no = 0; pipe._oseq = 0; pipe.ledger = []
     pipe.board_path = os.path.join(d, 'input.kicad_pcb')
@@ -127,9 +139,27 @@ def _pipe():
     return pipe, rec
 
 
+@contextlib.contextmanager
+def _stub_cwd(d):
+    # #233: on Windows the fake engine is found by the
+    # interpreter as ./route -- run the exec'ing tests with
+    # the stub's temp dir as cwd (saved and restored). A
+    # no-op everywhere else.
+    if os.name != 'nt':
+        yield
+        return
+    old = os.getcwd()
+    os.chdir(d)
+    try:
+        yield
+    finally:
+        os.chdir(old)
+
+
 def test_leg_record_carries_rounds_and_time_limited():
     pipe, rec = _pipe()
-    oc = pipe._run_leg('tm_relax')
+    with _stub_cwd(os.path.dirname(rec)):
+        oc = pipe._run_leg('tm_relax')
     assert oc['status'] == 'finished', oc
     rt = oc['route']
     assert rt['rounds'] == {'round_work': 20000000, 'rounds': 50}, rt
@@ -141,7 +171,8 @@ def test_leg_record_carries_rounds_and_time_limited():
 
 def test_portfolio_record_carries_leg_run_facts():
     pipe, _rec = _pipe()
-    g = pipe.tool_portfolio(['tm_relax'])
+    with _stub_cwd(os.path.dirname(_rec)):
+        g = pipe.tool_portfolio(['tm_relax'])
     assert g is not None
     recs = [e for e in pipe.ledger if e['step'] == 'portfolio']
     assert len(recs) == 1, pipe.ledger
