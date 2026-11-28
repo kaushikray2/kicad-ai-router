@@ -5097,11 +5097,27 @@ def cmd_meander(board_path, net, add_mm):
                 if _mx_seg_seg(a, bq, (x1, y1), (x2, y2)) < need - 1e-9:
                     return False
             for (x, y, r, nn) in via:
-                need = w / 2.0 + r + (clr if nn != net else 0.0)
+                if nn == net:
+                    # #235: a same-net via is the net's own
+                    # copper -- it cannot obstruct its own
+                    # meander (tracks already exempt same-net
+                    # overlap below; length is re-measured by
+                    # the caller's gate).
+                    continue
+                need = w / 2.0 + r + clr
                 if _mx_pt_seg(x, y, a[0], a[1], bq[0], bq[1]) < need - 1e-9:
                     return False
             for (x, y, r, nn) in pad:
-                need = w / 2.0 + r + (clr if nn != net else 0.0)
+                if nn == net:
+                    # #235: same-net pads -- above all the
+                    # candidate segment's own endpoint pads,
+                    # which its legs start as little as
+                    # 0.075*L from -- are not obstacles; the
+                    # old need = w/2 + r from the pad centre
+                    # rejected legal meanders on short
+                    # pad-to-pad segments in empty space.
+                    continue
+                need = w / 2.0 + r + clr
                 if _mx_pt_seg(x, y, a[0], a[1], bq[0], bq[1]) < need - 1e-9:
                     return False
             for ring in fills:
