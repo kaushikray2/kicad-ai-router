@@ -87,9 +87,57 @@ def test_dsn_unverifiable_ban_is_reported():
     assert dsn_law.unpowered_bans(_DSN, {3: 'B.Cu'}) == [3]
 
 
+_DSN_QUOTED = """(pcb /tmp/board.dsn
+  (structure
+    (layer F.Cu
+      (type signal)
+      (property
+        (index 0)
+      )
+    )
+    (layer "GND Plane"
+      (type signal)
+      (property
+        (index 1)
+      )
+    )
+    (layer In2.Cu
+      (type mixed)
+      (property
+        (index 2)
+      )
+    )
+  )
+)"""
+
+
+def test_dsn_quoted_layer_name_parses():
+    # #232: KiCad quotes a DSN layer name containing a space.
+    # The block must parse (name returned unquoted) -- before
+    # the fix the \S+ name pattern skipped it, the banned
+    # layer's ban was unverifiable and the leg failed.
+    blocks = dsn_law.layer_blocks(_DSN_QUOTED)
+    assert blocks[1] == ('GND Plane', 'signal'), blocks
+    text, report = dsn_law.apply_power_layers(_DSN_QUOTED, {1: 'In1.Cu'})
+    assert report[1]['dsn_name'] == 'GND Plane' and report[1]['after'] == 'power', report
+    assert dsn_law.layer_blocks(text)[1] == ('GND Plane', 'power')
+    assert dsn_law.unpowered_bans(text, {1: 'In1.Cu'}) == []
+
+
+def test_dsn_mixed_layer_rewrites_to_power():
+    # Defensive: KiCad's exporter normalises a mixed layer to
+    # signal, but a banned mixed layer in any DSN is routable
+    # copper and must still be rewritten to power.
+    text, report = dsn_law.apply_power_layers(_DSN_QUOTED, {2: 'In2.Cu'})
+    assert report[2]['before'] == 'mixed' and report[2]['after'] == 'power', report
+    assert dsn_law.layer_blocks(text)[2] == ('In2.Cu', 'power')
+
+
 if __name__ == '__main__':
     test_dsn_blocks_parse()
     test_dsn_rewrite_signal_layer_to_power()
     test_dsn_rewrite_already_power_is_noop()
     test_dsn_unverifiable_ban_is_reported()
+    test_dsn_quoted_layer_name_parses()
+    test_dsn_mixed_layer_rewrites_to_power()
     print('dsn law OK')
