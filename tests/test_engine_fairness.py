@@ -209,7 +209,7 @@ LAYERS = ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
 _GATE = {'unconnected_total': 0, 'copper_violations': 0,
          'banned_layer_tracks': 0, 'split_nets': [], 'classes': {}}
 _FP_OK = {'footprints': [['U1', 0, 0, 0.0, False]], 'pads': [], 'zones': [], 'edges': []}
-_FP_MOVED = {'footprints': [['U1', 500, 0, 0.0, False]], 'pads': [], 'zones': [], 'edges': []}
+_FP_MOVED = {'footprints': [['U1', 5000, 0, 0.0, False]], 'pads': [], 'zones': [], 'edges': []}  # 5 um: a real move, above the 1 um format-noise tolerance
 
 
 def _pipe(fp_by_board):
@@ -260,11 +260,29 @@ def test_leg_rejects_a_moved_part_before_gating():
     assert gated == [], 'a design-changed candidate must never reach the gate'
 
 
+def test_footprint_tolerance_bounds():
+    # item-3 tolerance: sub-um format noise passes, a real move
+    # fails, orientation/side changes fail (pipeline._footprints_match)
+    import pipeline as pl
+    base = [['U1', 1000000, 2000000, 90.0, False], ['U2', 5000000, 6000000, 0.0, True]]
+    assert pl._footprints_match(base, [list(e) for e in base])
+    noisy = [['U1', 1000053, 1999950, 90.0, False], ['U2', 4999960, 6000040, 0.0, True]]
+    assert pl._footprints_match(base, noisy)
+    moved = [['U1', 1005000, 2000000, 90.0, False], ['U2', 5000000, 6000000, 0.0, True]]
+    assert not pl._footprints_match(base, moved)
+    turned = [['U1', 1000000, 2000000, 180.0, False], ['U2', 5000000, 6000000, 0.0, True]]
+    assert not pl._footprints_match(base, turned)
+    flipped = [['U1', 1000000, 2000000, 90.0, True], ['U2', 5000000, 6000000, 0.0, True]]
+    assert not pl._footprints_match(base, flipped)
+    assert not pl._footprints_match(base, base[:1])
+
+
 if __name__ == '__main__':
     test_copper_stack_index()
     test_freeroute_mt1_and_dsn_law()
     test_krt_flags_and_law_zones()
     test_fingerprint_detects_design_changes()
+    test_footprint_tolerance_bounds()
     test_law_zone_roundtrip_is_invisible()
     test_leg_gets_the_layer_law()
     test_leg_rejects_a_moved_part_before_gating()

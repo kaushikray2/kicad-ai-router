@@ -242,6 +242,37 @@ def _accept_key(g):
 _PORTFOLIO_ENGINES = ('freerouting', 'krt', 'tm_relax', 'tm_global', 'tm_escape')
 
 
+# #45 tolerance (Phase 2E item 3): footprint POSITIONS compare
+# within 1 um, not exactly. An external engine whose file
+# format round-trips the board (Freerouting via Specctra
+# DSN/SES) shifts every footprint by unit-conversion noise --
+# 3-53 nm measured on STM32/juniper candidates -- which is not
+# a placement change; an exact compare made that leg unusable
+# on any board whose coordinates do not round-trip exactly.
+# 1 um is ~20x the observed noise and 1000x below any real
+# placement decision (KRT's decap moves are mm-scale and still
+# fail). Orientation, side, pad-nets, zones and the outline
+# stay exact.
+_FOOTPRINT_TOL_NM = 1000
+
+
+def _footprints_match(base_list, cand_list):
+    if len(base_list) != len(cand_list):
+        return False
+    cand = {e[0]: e for e in cand_list}
+    if len(cand) != len(cand_list):
+        return False
+    for e in base_list:
+        o = cand.get(e[0])
+        if o is None:
+            return False
+        if o[3] != e[3] or o[4] != e[4]:
+            return False
+        if abs(o[1] - e[1]) > _FOOTPRINT_TOL_NM or abs(o[2] - e[2]) > _FOOTPRINT_TOL_NM:
+            return False
+    return True
+
+
 def _design_diff(section, base_list, cand_list):
     # #45: a compact, ledger-sized description of how a portfolio
     # candidate's design fingerprint differs from the base's:
@@ -784,7 +815,8 @@ class Pipeline:
         diffs = []
         for sec in ('footprints', 'pads', 'zones', 'edges'):
             b, c = base.get(sec) or [], cand.get(sec) or []
-            if b != c:
+            differ = (not _footprints_match(b, c)) if sec == 'footprints' else (b != c)
+            if differ:
                 diffs.append(_design_diff(sec, b, c))
         return '; '.join(diffs) if diffs else None
 
