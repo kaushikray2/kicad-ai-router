@@ -948,11 +948,37 @@ definition comes from it.
    The default `engine_portfolio` is unchanged ('tm_relax');
    the owner ruled 2026-11-27 that it stays 'tm_relax' only
    (the trio remains opt-in via config).
-3. **Fair engine A/B — #45, #46, #52.** The queued slot, now here:
-   KRT design-invariance gate + `--keep-placement`; Freerouting
-   `-mt 1` and power-type DSN layer export; tm_relax bounded by
-   rounds, on #66's deterministic selection. Report faults /
-   wirelength / vias alongside unconnected.
+3. **Fair engine A/B — #45, #46, #52. DONE (2026-11-27;
+   #45/#46/#52 closed with evidence).** Landed: KRT
+   `--keep-placement --board-rules` + banned-layer keepouts and
+   a design-invariance gate on every portfolio candidate
+   (footprints/pads/zones/outline; 1 um position tolerance for
+   Specctra round-trip noise, zones exact); Freerouting `-mt 1`
+   with banned layers exported as DSN power type and verified
+   per leg; tm_relax bounded by rounds (50 x 20M floor, `--time`
+   kept as backstop -- probes showed `--work` never bounded
+   relax and a hidden ~120 s engine cap binds without `--time`),
+   rounds/seconds/time_limited recorded per leg. Bench (harness
+   runs ab4/ab5 + ab5-nomad-fr-ml350; tables in
+   agent-runs/phase2e-ab/RESULTS-AB4.md): the trio's winner key
+   was never worse than relax-only (juniper strictly better;
+   Nomad's escape win did not survive the playbook -- every
+   Nomad arm delivered (0,0,13)); racing changed no outcome on
+   any board and bought ~0-9% wall only where no leg completes,
+   losing where one completes fast, so the shipped default
+   stays 'tm_relax' (the #66 owner ruling stands). KRT was
+   rejected by the invariance gate on 5/5 boards (pours added
+   or rewritten); Freerouting, fairly gated, completes small
+   boards at 4-40x the TM legs' copper faults and was never
+   selected. #52 repeats: candidate byte-identical 5/5 on one
+   machine, deliveries (0,0,13) x3; cross-machine (ML350) the
+   engine tournament picked a different winner
+   (time_limited=False throughout) and Nomad delivered
+   (2,1,13) -- the residual variance is engine scheduling
+   sensitivity (TraceMaker #16/#17), not the plugin bound.
+   Flagged for the owner on #52: deterministic mode's
+   engine-internal ~120 s tournament cap on Nomad-class boards
+   (changing it trades against #184).
 4. **#64 — severance penalty in finisher candidate scoring**
    and **#65 — regret-order sequencing for multi-net repair.** Implemented against the finisher and judged
    on this block's A/B battery, per their acceptance criteria: keep
