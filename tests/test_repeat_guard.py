@@ -23,7 +23,7 @@ stuck LLM tool loops must stop EXECUTING the stuck call within
 identical failing/no-progress call; streak tier: STREAK_LIMIT = 4
 executions against one target however the parameters dither),
 the refusal must carry an explicit strategy-switch hint, and
-progress must reset both tiers. Run:
+progress resets only the progressing call's own counters. Run:
 python3 tests/test_repeat_guard.py"""
 import json, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ai_router'))
@@ -112,14 +112,73 @@ def test_dithered_same_target_loop_stops_executing():
     assert json.loads(refusals[0])['repeat_guard']['tier'] == 'streak'
 
 
-def test_progress_resets_both_tiers():
+def test_progress_resets_only_its_own_counters():
+    # #239 (6c): an unrelated successful call no longer resets
+    # the guard (the pre-fix test_progress_resets_both_tiers
+    # pinned the global clear: a gate call re-armed a stuck
+    # finish_leg loop, and alternating one cheap success with
+    # failing calls was never refused).
     script = ([_call('finish_leg', {'net': 'X'})] * 2      # repeat count reaches 2
-              + [_call('gate', {})]                        # progress: resets
-              + [_call('finish_leg', {'net': 'X'})] * 3)   # executes again, then refused
+              + [_call('gate', {})]                        # unrelated progress: NO reset
+              + [_call('finish_leg', {'net': 'X'})] * 3)   # refused at once
     pipe, client = _run(script)
     ran = [e for e in pipe.executions if e[0] == 'finish_leg']
-    assert len(ran) == 2 + REPEAT_LIMIT, ran  # the post-gate calls really ran
+    assert len(ran) == REPEAT_LIMIT, ran
     assert any('RepeatGuard refused' in p for p in client.tool_payloads)
+
+
+def test_status_dict_failures_count():
+    # #239 (6a): the pipeline tools report failure as status
+    # dicts with no 'error' key -- those payloads must arm the
+    # guard exactly like error payloads do.
+    for payload in ({'status': 'reverted_faults'},
+                    {'status': 'failed'}, {'status': 'no_board'},
+                    {'status': 'no_path'}, {'status': 'reverted'},
+                    {'status': 'done', 'routed': []}):
+        g = RepeatGuard()
+        for _ in range(REPEAT_LIMIT):
+            g.record('route', {'first_nets': ['A']}, json.dumps(payload))
+        assert g.check('route', {'first_nets': ['A']}) is not None, payload
+    # a route that actually routed something is progress
+    g = RepeatGuard()
+    for _ in range(REPEAT_LIMIT):
+        g.record('route', {'first_nets': ['A']},
+                 json.dumps({'status': 'done', 'routed': ['A']}))
+    assert g.check('route', {'first_nets': ['A']}) is None
+
+
+def test_streak_is_per_tool():
+    # #239 (6b): the streak key carries the tool name, so the
+    # refusal hint's own advice -- switch tools on the same
+    # target -- is followable instead of instantly refused.
+    g = RepeatGuard()
+    for i in range(STREAK_LIMIT):
+        g.record('finish_leg', {'net': 'X', 'work': i},
+                 json.dumps({'status': 'failed'}))
+    assert g.check('finish_leg', {'net': 'X', 'work': 99}) is not None
+    assert g.check('long_finish', {'net': 'X'}) is None
+    assert g.check('ilp_repair', {'net': 'X'}) is None
+
+
+def test_same_call_progress_rearms_and_others_do_not():
+    # #239 (6c) at guard level: progress on the SAME call pops
+    # its counters; progress anywhere else leaves them armed.
+    g = RepeatGuard()
+    for i in range(STREAK_LIMIT - 1):
+        g.record('finish_leg', {'net': 'X', 'work': i},
+                 json.dumps({'status': 'failed'}))
+    g.record('gate', {}, json.dumps({'unconnected_total': 3}))  # unrelated
+    g.record('finish_leg', {'net': 'X', 'work': 99},
+             json.dumps({'status': 'failed'}))
+    assert g.check('finish_leg', {'net': 'X', 'work': 100}) is not None
+    g2 = RepeatGuard()
+    for i in range(STREAK_LIMIT):
+        g2.record('finish_leg', {'net': 'X', 'work': i},
+                  json.dumps({'status': 'failed'}))
+    assert g2.check('finish_leg', {'net': 'X', 'work': 42}) is not None
+    g2.record('finish_leg', {'net': 'X', 'work': 42},
+              json.dumps({'status': 'done', 'routed': ['X']}))
+    assert g2.check('finish_leg', {'net': 'X', 'work': 43}) is None
 
 
 def test_refusal_does_not_wedge_other_tools():
@@ -151,7 +210,10 @@ if __name__ == '__main__':
     test_limits_are_the_plans()
     test_identical_failing_loop_stops_executing()
     test_dithered_same_target_loop_stops_executing()
-    test_progress_resets_both_tiers()
+    test_progress_resets_only_its_own_counters()
+    test_status_dict_failures_count()
+    test_streak_is_per_tool()
+    test_same_call_progress_rearms_and_others_do_not()
     test_refusal_does_not_wedge_other_tools()
     test_changing_successful_calls_never_refused()
     test_guard_canonicalises_args_and_net_lists()
