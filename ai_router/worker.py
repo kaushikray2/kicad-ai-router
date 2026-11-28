@@ -4772,6 +4772,46 @@ def cmd_audit_zones(board_path, spec):
 # #69 meander geometry (module-level so the construction is
 # unit-testable without pcbnew boards where possible).
 
+def _mx_outline_segments(dr):
+    """Edge.Cuts drawing -> centreline segments ((x1, y1),
+    (x2, y2)) in mm for cmd_meander's outline chaining (#234).
+    Rects resolve to their four corners; circles and arcs are
+    tessellated with exact endpoints so chains still join;
+    anything else falls back to start/end (a plain segment's
+    centreline)."""
+    sh = dr.GetShape()
+    if sh == pcbnew.SHAPE_T_RECT:
+        x1, y1 = mm(dr.GetStart().x), mm(dr.GetStart().y)
+        x2, y2 = mm(dr.GetEnd().x), mm(dr.GetEnd().y)
+        return [((x1, y1), (x2, y1)), ((x2, y1), (x2, y2)),
+                ((x2, y2), (x1, y2)), ((x1, y2), (x1, y1))]
+    if sh == pcbnew.SHAPE_T_CIRCLE:
+        cx, cy = mm(dr.GetCenter().x), mm(dr.GetCenter().y)
+        r = mm(dr.GetRadius())
+        n = 48
+        pts = [(cx + r * math.cos(2 * math.pi * i / n),
+                cy + r * math.sin(2 * math.pi * i / n))
+               for i in range(n)]
+        return [(pts[i], pts[(i + 1) % n]) for i in range(n)]
+    if sh == pcbnew.SHAPE_T_ARC:
+        cx, cy = mm(dr.GetCenter().x), mm(dr.GetCenter().y)
+        sx, sy = mm(dr.GetStart().x), mm(dr.GetStart().y)
+        ex, ey = mm(dr.GetEnd().x), mm(dr.GetEnd().y)
+        r = math.hypot(sx - cx, sy - cy)
+        a0 = math.atan2(sy - cy, sx - cx)
+        a1 = math.atan2(ey - cy, ex - cx)
+        while a1 <= a0:
+            a1 += 2 * math.pi
+        n = max(4, int((a1 - a0) / (math.pi / 16)) + 1)
+        pts = [(cx + r * math.cos(a0 + (a1 - a0) * i / n),
+                cy + r * math.sin(a0 + (a1 - a0) * i / n))
+               for i in range(n + 1)]
+        pts[0] = (sx, sy); pts[-1] = (ex, ey)
+        return [(pts[i], pts[i + 1]) for i in range(n)]
+    return [((mm(dr.GetStart().x), mm(dr.GetStart().y)),
+             (mm(dr.GetEnd().x), mm(dr.GetEnd().y)))]
+
+
 def _mx_pt_seg(px, py, ax, ay, bx, by):
     dx, dy = bx - ax, by - ay
     L2 = dx * dx + dy * dy
@@ -4950,11 +4990,19 @@ def cmd_meander(board_path, net, add_mm):
     for dr in b.GetDrawings():
         if dr.GetLayer() != pcbnew.Edge_Cuts:
             continue
+        # #234: a board outline drawn as one RECT/circle/arc
+        # shape (the common KiCad way) must contribute its
+        # CENTRELINE edges -- GetStart/GetEnd alone is not a
+        # rect's outline, and _edge_shape_segments returns the
+        # shape's stroke polygon, which cannot chain.
         try:
-            outline.append(((mm(dr.GetStart().x), mm(dr.GetStart().y)),
-                            (mm(dr.GetEnd().x), mm(dr.GetEnd().y))))
+            outline.extend(_mx_outline_segments(dr))
         except Exception:
             pass
+    try:
+        edge_clr = mm(b.GetDesignSettings().m_CopperEdgeClearance)
+    except Exception:
+        edge_clr = 0.0
     outline_loop = None
     if outline:
         # chain the segments into the largest closed loop
@@ -4964,7 +5012,12 @@ def cmd_meander(board_path, net, add_mm):
             a0, b0 = segs_left.pop(0)
             loop = [a0, b0]
             grew = True
-            while grew and len(loop) > 2 and \
+            # #234: a chain STARTS with exactly 2 points and
+            # only grows inside this loop -- the old
+            # `len(loop) > 2` guard made the loop unreachable,
+            # outline_loop was always None, and the outline
+            # check in site_ok never ran.
+            while grew and len(loop) >= 2 and \
                     math.hypot(loop[-1][0] - loop[0][0],
                                loop[-1][1] - loop[0][1]) > 1e-6:
                 grew = False
@@ -5072,8 +5125,15 @@ def cmd_meander(board_path, net, add_mm):
                 if not _mx_in_poly(mid[0], mid[1], outline_loop):
                     return False
                 for i in range(len(outline_loop)):
-                    if _mx_segs_cross(a, bq, outline_loop[i],
-                                      outline_loop[(i + 1) % len(outline_loop)]):
+                    o_edge = (outline_loop[i],
+                              outline_loop[(i + 1) % len(outline_loop)])
+                    if _mx_segs_cross(a, bq, o_edge[0], o_edge[1]):
+                        return False
+                    # #234: containment alone lets a lobe hug
+                    # the edge -- hold the board's copper-edge
+                    # clearance plus the track half-width.
+                    o_d = _mx_seg_seg(a, bq, o_edge[0], o_edge[1])
+                    if o_d < edge_clr + w / 2.0 - 1e-9:
                         return False
         return True
 
