@@ -107,6 +107,55 @@ def _transition_facts():
                   return_vias=[{'nearest_mm': 0.5, 'within': 1}])
 
 
+def _stub_stackup():
+    diel = {'thickness_mm': 0.2, 'er': 4.5, 'loss_tangent': 0.02}
+    return [
+        {'name': 'F.Cu', 'class': 'surface_top', 'thickness_mm': 0.035,
+         'diel_below': dict(diel), 'pour_nets': []},
+        {'name': 'In1.Cu', 'class': 'inner', 'thickness_mm': 0.035,
+         'diel_above': dict(diel), 'diel_below': dict(diel),
+         'pour_nets': ['GND']},
+        {'name': 'In2.Cu', 'class': 'inner', 'thickness_mm': 0.035,
+         'diel_above': dict(diel), 'diel_below': dict(diel),
+         'pour_nets': []},
+        {'name': 'B.Cu', 'class': 'surface_bottom', 'thickness_mm': 0.035,
+         'diel_above': dict(diel), 'pour_nets': []}]
+
+
+def test_gate13_ctx_covers_unsolved_layers():
+    # #237: the sizing pass solved only F.Cu for this entry
+    # (per_layer has no In2.Cu) and _eng_rf_spec built layer_z0
+    # from per_layer alone -- a segment routed onto In2.Cu at
+    # the primary width was never band-checked. The ctx must
+    # carry a Z0 model for every copper layer in the stackup.
+    from ai_router.pipeline import Pipeline
+    pipe = object.__new__(Pipeline)
+    entry = {'net': 'RF', 'z0_ohm': 50.0, 'tol_pct': 10.0,
+             'freq_hz': 2.44e9, 'layers': ['F.Cu']}
+    pipe._eng = {'entries': {'RF': entry},
+                 'nets': {'RF': {
+                     'width_mm': W50, 'primary_layer': 'F.Cu',
+                     'per_layer': {'F.Cu': {'width_mm': W50,
+                                            'eps_eff': 3.3,
+                                            'loss_db_per_mm': 0.01}}}}}
+    su = {'copper': _stub_stackup(),
+          'nets': {'RF': {'track_layers': {'F.Cu': 1, 'In2.Cu': 1},
+                          'length_mm': 10.0}}}
+    pipe._worker = lambda *a, **k: su
+    spec, ctxs = pipe._eng_rf_spec('unused.kicad_pcb')
+    ctx = ctxs['RF']
+    assert 'In2.Cu' in ctx['layer_z0'], sorted(ctx['layer_z0'])
+    # end to end: W50 on In2.Cu is stripline ~30.7 ohm, far
+    # outside 50 +/-10% -- GATE-13 must fail it, naming the layer.
+    facts = _facts(segments=[_seg(0, 0, 10, 0, W50, 'In2.Cu')],
+                   pads=[{'ref': 'U1', 'num': '1', 'x': 0, 'y': 0,
+                          'layers': ['In2.Cu'], 'thru': False}])
+    out = rfcheck.evaluate_net({}, ctx, facts)
+    band = [f for f in out if f['rule'] == 'GATE-13']
+    assert len(band) == 1, out
+    assert 'In2.Cu' in band[0]['detail'], band[0]
+
+
 def test_gate13_layer_transition_band():
     out = rfcheck.evaluate_net({}, _transition_ctx(), _transition_facts())
     # same width on both layers: the geometric width check passes
