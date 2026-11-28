@@ -1515,6 +1515,25 @@ changes an exam rule or an exit/kill gate.
   indexed bus length groups (>= 3 bits), and conservative
   HV name/isolation candidates (blank `peak_v`). Exit:
   >= 90% precision on 5 real boards.
+- **Status (2026-11-27, branch preexam-polish):** both items
+  above LANDED on this branch. RepeatGuard: `orchestrator.RepeatGuard`
+  wired into `run_llm` (repeat tier REPEAT_LIMIT = 2, streak tier
+  STREAK_LIMIT = 4, strategy-switch hint, progress resets both
+  tiers); exit met -- unit tests show an identical stuck loop
+  stops executing after 2 calls and a parameter-dithered
+  same-target loop after 4 (inside the <= 6 bound). Suggest
+  detector: landed as `ai_router/suggest.py` (pure detectors +
+  pcbnew loader, shipped in the PCM zip); the modal-checklist
+  wiring into `markings_dialog.py` follows the engineered-nets
+  merge, since those files live on that line. Exit met -- 9
+  candidates over 5 real boards (hbridge, mapone, Nomad fixture,
+  STM32-RF, juniper twig; fixtures/train only), 9 true positives,
+  100% precision, after two measurement-driven fixes (crystal
+  GND-pad pollution; RF feed-choke / radio-on-the-antenna-net).
+  The differential-pair, bus-group and HV detectors produced no
+  candidates on those boards -- unit-tested only, no precision
+  evidence yet. Full record: zorinbox
+  agent-runs/preexam-polish/measure/RESULTS-SUGGEST.md.
 - **Two-phase silkscreen- & inner-pour-safe GND stitching**
   (`worker.cmd_stitch`; optional pre-exam or Phase 3).
   Exclude foreign inner-layer pours and `F.SilkS`/`B.SilkS`
