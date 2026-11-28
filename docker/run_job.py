@@ -242,6 +242,11 @@ def main():
         _deadline = locals().get('_deadline')
         if _deadline is not None:
             _hit = bool(getattr(locals().get('pipe'), 'deadline_hit', False))
+            # #241: in the layer-law variant path the OUTER pipe
+            # never ran -- the deadline-bound work happened on
+            # the variant Pipeline objects -- so derive the hit
+            # from the deadline itself as well.
+            _hit = _hit or (time.time() >= _deadline)
             _dl = {'deadline_epoch': _deadline, 'deadline_hit': _hit, 'nondeterministic': _hit}
         write_status(status='error', error=str(e)[:500], **_dl)
 

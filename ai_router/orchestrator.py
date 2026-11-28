@@ -269,6 +269,15 @@ def run_auto(cfg, pipe, log):
             _shared_best = getattr(pipe, '_best_state', None)  # #61: ... and its best-key state, so neither variant can overwrite the other's better board with a worse one
             if _shared_best is not None: pipe_b._best_state = _shared_best
             res_b = _run_auto_once(cfg_b, pipe_b, log)
+            # #241: a deadline-bound B must not escalate -- the
+            # shared deadline has passed, so Variant A could
+            # only burn its setup (sleep, a new Pipeline,
+            # gate/summary/scorecard) before its first routing
+            # tool raises DeadlinePassed. B's result, with its
+            # checkpointed best-so-far, is the deliverable.
+            if res_b.get('deadline_hit') or pipe_b.deadline_passed():
+                log('Layer-law policy: Variant B hit the shared deadline -- keeping B (no escalation past the deadline)')
+                return res_b
             if not _b_needs_escalation(res_b['gate']):
                 log('Layer-law policy: B left no split nets -- keeping B')
                 return res_b
@@ -282,7 +291,13 @@ def run_auto(cfg, pipe, log):
             res_a = _run_auto_once(cfg2, pipe_a, log)
             ka, kb = _final_key(res_a['gate']), _final_key(res_b['gate'])
             log('Layer-law policy: A key %s vs B key %s -- keeping %s' % (ka, kb, 'A' if ka < kb else 'B'))
-            return res_a if ka < kb else res_b
+            keep = res_a if ka < kb else res_b
+            # #241: the kept result carries the RUN's deadline
+            # label -- if either variant was deadline-bound,
+            # the delivered result was too.
+            keep['deadline_hit'] = bool(res_a.get('deadline_hit')
+                                        or res_b.get('deadline_hit'))
+            return keep
     return _run_auto_once(cfg, pipe, log)
 
 def _run_auto_once(cfg, pipe, log):
