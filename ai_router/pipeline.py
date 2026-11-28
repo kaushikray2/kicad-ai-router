@@ -259,17 +259,33 @@ _FOOTPRINT_TOL_NM = 1000
 def _footprints_match(base_list, cand_list):
     if len(base_list) != len(cand_list):
         return False
-    cand = {e[0]: e for e in cand_list}
-    if len(cand) != len(cand_list):
-        return False
+    # #231: refs are NOT unique -- unannotated parts (REF**),
+    # mounting holes, fiducials and graphics footprints share a
+    # ref, so a dict keyed by ref collapses them and the old
+    # code rejected every candidate on such boards. Match as a
+    # multiset instead: group candidates by ref and pair each
+    # base entry with a distinct candidate of the same ref,
+    # same orientation/side, closest first within tolerance.
+    by_ref = {}
+    for e in cand_list:
+        by_ref.setdefault(e[0], []).append(e)
     for e in base_list:
-        o = cand.get(e[0])
-        if o is None:
+        group = by_ref.get(e[0])
+        if not group:
             return False
-        if o[3] != e[3] or o[4] != e[4]:
+        best_i, best_d = None, None
+        for i, o in enumerate(group):
+            if o[3] != e[3] or o[4] != e[4]:
+                continue
+            dx, dy = abs(o[1] - e[1]), abs(o[2] - e[2])
+            if dx > _FOOTPRINT_TOL_NM or dy > _FOOTPRINT_TOL_NM:
+                continue
+            d = dx + dy
+            if best_d is None or d < best_d:
+                best_i, best_d = i, d
+        if best_i is None:
             return False
-        if abs(o[1] - e[1]) > _FOOTPRINT_TOL_NM or abs(o[2] - e[2]) > _FOOTPRINT_TOL_NM:
-            return False
+        group.pop(best_i)
     return True
 
 
