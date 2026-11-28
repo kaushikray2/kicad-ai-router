@@ -748,11 +748,18 @@ def hv_pairwise_rows(model, extra=None):
         doms.append({'name': e.get('name'), 'peak_v': e.get('peak_v') or 0.0,
                      'coating': e.get('coating') or 'uncoated',
                      'altitude_m': e.get('altitude_m') or 0,
+                     # #238: Tier 1 overrides ride along -- the
+                     # preview must show what the checker will
+                     # enforce, not the raw table value.
+                     'min_clearance_mm': e.get('min_clearance_mm'),
+                     'min_creepage_mm': e.get('min_creepage_mm'),
                      'nets': len(e.get('nets') or []), 'implicit': False})
     if extra is not None:
         ex = {'name': extra.get('name'), 'peak_v': extra.get('peak_v') or 0.0,
               'coating': extra.get('coating') or 'uncoated',
               'altitude_m': extra.get('altitude_m') or 0,
+              'min_clearance_mm': extra.get('min_clearance_mm'),
+              'min_creepage_mm': extra.get('min_creepage_mm'),
               'nets': len(extra.get('nets') or []), 'implicit': False}
         for i, d in enumerate(doms):
             if d['name'] == ex['name']:
@@ -762,6 +769,7 @@ def hv_pairwise_rows(model, extra=None):
             doms.append(ex)
     doms.append({'name': 'Rest of board / unmarked nets', 'peak_v': 0.0,
                  'coating': 'uncoated', 'altitude_m': 0,
+                 'min_clearance_mm': None, 'min_creepage_mm': None,
                  'nets': None, 'implicit': True})
     rows = []
     for i in range(len(doms)):
@@ -770,6 +778,20 @@ def hv_pairwise_rows(model, extra=None):
             cols = {hvdomains.column_for(True, doms[i]['coating'], doms[i]['altitude_m']),
                     hvdomains.column_for(True, doms[j]['coating'], doms[j]['altitude_m'])}
             req = max(hvdomains.required_spacing_mm(dv, c) for c in cols)
+            # #238: mirror the checker's override semantics
+            # (#236): either side's declared clearance override
+            # replaces the table value for the pair; either
+            # side's creepage override then applies floored at
+            # that clearance. No overrides -> the table value,
+            # exactly as before.
+            clr_ov = [d['min_clearance_mm'] for d in (doms[i], doms[j])
+                      if d.get('min_clearance_mm')]
+            if clr_ov:
+                req = max(clr_ov)
+            crp_ov = [d['min_creepage_mm'] for d in (doms[i], doms[j])
+                      if d.get('min_creepage_mm')]
+            if crp_ov:
+                req = max(req, max(crp_ov))
             rows.append({'a': doms[i]['name'], 'b': doms[j]['name'],
                          'delta_v': dv, 'required_mm': req})
     return rows

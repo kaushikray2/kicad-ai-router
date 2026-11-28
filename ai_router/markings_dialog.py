@@ -789,6 +789,12 @@ class HVForm(_FormBase):
                          'peak_v': float(fd['peak_v']) if fd.get('peak_v') not in (None, '') else 0.0,
                          'coating': fd.get('coating') or 'uncoated',
                          'altitude_m': float(fd['altitude_m']) if fd.get('altitude_m') not in (None, '') else 0,
+                         # #238: the form's Tier 1 overrides are
+                         # already in form_dict -- forward them
+                         # so the live preview matches the
+                         # checker, as it does for peak/coating.
+                         'min_clearance_mm': fd.get('min_clearance_mm'),
+                         'min_creepage_mm': fd.get('min_creepage_mm'),
                          'nets': fd.get('nets') or []}
         except Exception:
             extra = None
