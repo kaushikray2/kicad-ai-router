@@ -130,6 +130,100 @@ def _cfg_int(cfg, key, default):
         return default
 
 
+# Pre-Exam Polish (plan.md Section C): two-tier target-keyed
+# RepeatGuard for run_llm. Tier 1 (repeat): an identical call
+# (same tool, same canonicalised args) that keeps failing -- or
+# keeps returning the exact payload the model already saw, i.e.
+# no progress -- is refused after REPEAT_LIMIT executions.
+# Tier 2 (streak): consecutive failures against the same target
+# entity are refused after STREAK_LIMIT executions, however the
+# other parameters are dithered. The target entity is the call's
+# net/nets/ref/refs argument; on this toolset route's first_nets
+# is its target argument and is keyed the same way. Any executed
+# call whose payload is new information (progress) resets both
+# tiers. A refusal is handed back as a tool payload carrying an
+# explicit strategy-switch hint; the run itself continues.
+REPEAT_LIMIT = 2
+STREAK_LIMIT = 4
+
+
+def _guard_call_key(name, args):
+    return (name, json.dumps(args or {}, sort_keys=True, default=str))
+
+
+def _guard_target_key(name, args):
+    args = args or {}
+    for k in ('net', 'ref'):
+        v = args.get(k)
+        if isinstance(v, str) and v:
+            return (k, v)
+    for k in ('nets', 'refs', 'first_nets'):
+        v = args.get(k)
+        if isinstance(v, (list, tuple)) and v:
+            return ('nets', tuple(sorted(str(x) for x in v)))
+    return None
+
+
+class RepeatGuard(object):
+    def __init__(self):
+        self._repeat = {}        # call key -> consecutive fail/no-progress count
+        self._streak = {}        # target key -> consecutive failure count
+        self._last_payload = {}  # call key -> last payload the model saw
+
+    def check(self, name, args):
+        """Refusal payload dict if this call must not execute, else None."""
+        ck = _guard_call_key(name, args)
+        if self._repeat.get(ck, 0) >= REPEAT_LIMIT:
+            return self._refusal(name, args, 'repeat', self._repeat[ck])
+        tk = _guard_target_key(name, args)
+        if tk is not None and self._streak.get(tk, 0) >= STREAK_LIMIT:
+            return self._refusal(name, args, 'streak', self._streak[tk])
+        return None
+
+    def _refusal(self, name, args, tier, count):
+        tk = _guard_target_key(name, args)
+        if tier == 'repeat':
+            why = ('this exact %s call has already failed or made no '
+                   'progress %d times' % (name, count))
+        else:
+            why = ('%s calls have failed %d times in a row against '
+                   'target %r' % (name, count, tk[1] if tk else None))
+        hint = ('STOP repeating this call. Switch strategy: use a '
+                'different tool for the target (finish_leg / '
+                'long_finish / ilp_repair), promote the failing net '
+                'into first_nets and re-route from the clean base, '
+                'or call done and report the target as '
+                'congestion-bound.')
+        return {'error': 'RepeatGuard refused the call: %s.' % why,
+                'strategy_switch_hint': hint,
+                'repeat_guard': {'tier': tier, 'tool': name,
+                                 'target': list(tk) if tk else None,
+                                 'count': count}}
+
+    def record(self, name, args, payload):
+        """Feed back the payload of an EXECUTED call."""
+        ck = _guard_call_key(name, args)
+        failed = False
+        try:
+            parsed = json.loads(payload)
+            failed = isinstance(parsed, dict) and bool(parsed.get('error'))
+        except Exception:
+            failed = False
+        if failed:
+            self._repeat[ck] = self._repeat.get(ck, 0) + 1
+            tk = _guard_target_key(name, args)
+            if tk is not None:
+                self._streak[tk] = self._streak.get(tk, 0) + 1
+        elif payload == self._last_payload.get(ck):
+            # Same call, same thing the model already saw: no progress.
+            self._repeat[ck] = self._repeat.get(ck, 0) + 1
+        else:
+            # Progress: new information. Both tiers reset.
+            self._repeat.clear()
+            self._streak.clear()
+        self._last_payload[ck] = payload
+
+
 def _route_info(pipe):
     # v1.12.2 (#170): the last engine pass's structured contract,
     # carried into the run result (the backend writes it into the
@@ -144,6 +238,7 @@ def run_llm(cfg, pipe, log):
                 {'role': 'user', 'content': 'Route this board. Board file: %s. Begin.' % pipe.board_path}]
     max_calls = _cfg_int(cfg, 'max_tool_calls', 48)
     calls_made = 0
+    guard = RepeatGuard()
     while calls_made < max_calls:
         try:
             resp = client.chat(messages, TOOLS)
@@ -168,11 +263,17 @@ def run_llm(cfg, pipe, log):
                 log('LLM done: ' + str(args.get('note', ''))[:300])
                 finished = True
                 break
-            try:
-                result = _dispatch(pipe, name, args)
-                payload = _trim(result)
-            except Exception as e:
-                payload = json.dumps({'error': str(e)[:400]})
+            refusal = guard.check(name, args)
+            if refusal is not None:
+                log('RepeatGuard: refused %s (%s tier)' % (name, refusal['repeat_guard']['tier']))
+                payload = _trim(refusal)
+            else:
+                try:
+                    result = _dispatch(pipe, name, args)
+                    payload = _trim(result)
+                except Exception as e:
+                    payload = json.dumps({'error': str(e)[:400]})
+                guard.record(name, args, payload)
             messages.append({'role': 'tool', 'tool_call_id': call['id'] or 'x', 'content': payload})
         if finished: break
     final = pipe.finalize()
